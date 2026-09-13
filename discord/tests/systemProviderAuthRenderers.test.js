@@ -1,0 +1,286 @@
+const assert = require("node:assert/strict");
+const test = require("node:test");
+
+const {
+    createShadowPortalAuth,
+    createShadowSessionToken,
+    verifyShadowSessionToken
+} = require("../systemProvider/auth");
+const { buildShadowPortalViewData } = require("../systemProvider/renderers");
+const { renderShadowDashboardPage } = require("../systemProvider/dashboardHtml");
+
+function createResponse() {
+    return {
+        statusCode: 200,
+        sent: "",
+        cookies: [],
+        headers: {},
+        cookie(name, value, options) {
+            this.cookies.push({ name, value, options });
+        },
+        clearCookie(name, options) {
+            this.cookies.push({ name, value: "", options: { ...options, cleared: true } });
+        },
+        setHeader(name, value) {
+            this.headers[String(name).toLowerCase()] = String(value);
+        },
+        status(code) {
+            this.statusCode = code;
+            return this;
+        },
+        send(html) {
+            this.sent = html;
+            return this;
+        }
+    };
+}
+
+function createAuth(overrides = {}) {
+    return createShadowPortalAuth({
+        cookieName: "shadow_cookie",
+        ttlMs: 60_000,
+        getPin: () => "protected-pin-2468",
+        getCookieSecret: () => "unit-secret-that-is-long-enough-x",
+        getSessionVersion: () => 1,
+        shadowCss: ".login-wrap{}",
+        ...overrides
+    });
+}
+
+test("protected portal auth accepts configured PIN and issues a strict versioned session cookie", () => { // NOSONAR -- node:test assertions are not recognized by Sonar S2699.
+    const auth = createAuth();
+    const req = { ip: "127.0.0.1", headers: {} };
+    const res = createResponse();
+
+    assert.equal(auth.authorize(req, res, {}, "protected-pin-2468"), true);
+    assert.equal(res.cookies.length, 1);
+    assert.equal(res.cookies[0].name, "shadow_cookie");
+    assert.equal(res.cookies[0].options.httpOnly, true);
+    assert.equal(res.cookies[0].options.sameSite, "strict");
+    assert.equal(res.cookies[0].options.path, "/api/v1/telemetry/snapshot");
+    assert.equal(verifyShadowSessionToken(res.cookies[0].value, {
+        ttlMs: 60_000,
+        getCookieSecret: () => "unit-secret-that-is-long-enough-x",
+        getSessionVersion: () => 1
+    }), true);
+    assert.equal(res.headers["cache-control"], "no-store, private");
+    assert.equal(res.headers["referrer-policy"], "no-referrer");
+});
+
+test("protected portal fails closed when PIN or signing secret is unavailable", () => { // NOSONAR -- node:test assertions are not recognized by Sonar S2699.
+    for (const auth of [
+        createAuth({ getPin: () => "" }),
+        createAuth({ getCookieSecret: () => "" })
+    ]) {
+        const res = createResponse();
+        assert.equal(auth.authorize({ ip: "127.0.0.2", headers: {} }, res, {}, "anything"), false);
+        assert.equal(res.statusCode, 503);
+        assert.equal(res.cookies.length, 0);
+        assert.match(res.sent, /ยังไม่พร้อมใช้งาน/);
+    }
+});
+
+test("protected portal fails closed when its configured signing secret is too short", () => { // NOSONAR -- node:test assertions are not recognized by Sonar S2699.
+    const auth = createAuth({ getCookieSecret: () => "x".repeat(31) });
+    const res = createResponse();
+    assert.equal(auth.authorize({ ip: "127.0.0.2", headers: {} }, res, {}, "protected-pin-2468"), false);
+    assert.equal(res.statusCode, 503);
+});
+
+test("main dashboard PIN is not accepted as an automatic protected recovery credential", () => { // NOSONAR -- node:test assertions are not recognized by Sonar S2699.
+    const oldDashboardPin = process.env.DASHBOARD_PIN;
+    process.env.DASHBOARD_PIN = "main-dashboard-owner-pin";
+    try {
+        const auth = createAuth();
+        const res = createResponse();
+        assert.equal(auth.authorize(
+            { ip: "127.0.0.3", headers: {} },
+            res,
+            {},
+            "main-dashboard-owner-pin"
+        ), false);
+        assert.equal(res.statusCode, 401);
+        assert.equal(res.cookies.length, 0);
+    } finally {
+        if (oldDashboardPin === undefined) delete process.env.DASHBOARD_PIN;
+        else process.env.DASHBOARD_PIN = oldDashboardPin;
+    }
+});
+
+test("break-glass credential is accepted only while explicitly enabled", () => { // NOSONAR -- node:test assertions are not recognized by Sonar S2699.
+    let enabled = false;
+    const auth = createAuth({
+        getRecoveryPin: () => "temporary-break-glass-pin",
+        isBreakGlassEnabled: () => enabled
+    });
+
+    const denied = createResponse();
+    assert.equal(auth.authorize({ ip: "127.0.0.4", headers: {} }, denied, {}, "temporary-break-glass-pin"), false);
+    enabled = true;
+    const accepted = createResponse();
+    assert.equal(auth.authorize({ ip: "127.0.0.4", headers: {} }, accepted, {}, "temporary-break-glass-pin"), true);
+});
+
+test("changing the protected session version immediately revokes older cookies", () => { // NOSONAR -- node:test assertions are not recognized by Sonar S2699.
+    let version = 1;
+    const token = createShadowSessionToken({
+        getCookieSecret: () => "unit-secret-that-is-long-enough-x",
+        getSessionVersion: () => version
+    });
+    const verify = () => verifyShadowSessionToken(token, {
+        ttlMs: 60_000,
+        getCookieSecret: () => "unit-secret-that-is-long-enough-x",
+        getSessionVersion: () => version
+    });
+    assert.equal(verify(), true);
+    version = 2;
+    assert.equal(verify(), false);
+});
+
+test("protected portal auth accepts a valid cookie session without another PIN", () => { // NOSONAR -- node:test assertions are not recognized by Sonar S2699.
+    const auth = createAuth();
+    const token = createShadowSessionToken({
+        getCookieSecret: () => "unit-secret-that-is-long-enough-x",
+        getSessionVersion: () => 1
+    });
+    const req = { ip: "127.0.0.1", headers: { cookie: `shadow_cookie=${encodeURIComponent(token)}` } };
+    const res = createResponse();
+
+    assert.equal(auth.authorize(req, res, {}, undefined), true);
+    assert.equal(res.sent, "");
+});
+
+test("failed PIN attempts are rate-limited and brute-force state remains bounded", () => { // NOSONAR -- node:test assertions are not recognized by Sonar S2699.
+    const auth = createAuth({ maxAttempts: 2, maxBruteKeys: 3, bruteTtlMs: 60_000 });
+
+    for (let index = 0; index < 5; index++) {
+        const req = { ip: `10.0.0.${index}`, headers: {} };
+        auth.authorize(req, createResponse(), {}, "bad-protected-pin");
+    }
+    assert.ok(auth.bruteGuard.size <= 3);
+
+    const lockedReq = { ip: "192.0.2.10", headers: {} };
+    assert.equal(auth.authorize(lockedReq, createResponse(), {}, "bad-one"), false);
+    assert.equal(auth.authorize(lockedReq, createResponse(), {}, "bad-two"), false);
+    const blocked = createResponse();
+    assert.equal(auth.authorize(lockedReq, blocked, {}, "bad-three"), false);
+    assert.equal(blocked.statusCode, 429);
+});
+
+test("PIN throttling is keyed by IP instead of an unverified main-session cookie", () => { // NOSONAR -- node:test assertions are not recognized by Sonar S2699.
+    const auth = createAuth({ maxAttempts: 3, maxBruteKeys: 10 });
+    const ip = "198.51.100.10";
+
+    for (let index = 0; index < 3; index += 1) {
+        const response = createResponse();
+        const request = { ip, headers: { cookie: `__da_session=attacker-${index}` } };
+        assert.equal(auth.authorize(request, response, {}, "wrong-pin"), false);
+        assert.equal(response.statusCode, index === 2 ? 429 : 401);
+    }
+
+    assert.equal(auth.bruteGuard.size, 1);
+    const blocked = createResponse();
+    assert.equal(auth.authorize({ ip, headers: { cookie: "__da_session=another-value" } }, blocked, {}, "wrong-pin"), false);
+    assert.equal(blocked.statusCode, 429);
+});
+
+test("brute-force capacity preserves active locks and fails closed when every record is locked", () => { // NOSONAR -- node:test assertions are not recognized by Sonar S2699.
+    const auth = createAuth({ maxAttempts: 1, maxBruteKeys: 1, lockoutMs: 60_000 });
+    const lockedRequest = { ip: "203.0.113.20", headers: {} };
+    const pressureRequest = { ip: "203.0.113.21", headers: {} };
+
+    const first = createResponse();
+    assert.equal(auth.authorize(lockedRequest, first, {}, "wrong-pin"), false);
+    assert.equal(first.statusCode, 429);
+
+    const underPressure = createResponse();
+    assert.equal(auth.authorize(pressureRequest, underPressure, {}, "wrong-pin"), false);
+    assert.equal(underPressure.statusCode, 429);
+    assert.equal(auth.bruteGuard.size, 1);
+
+    const stillLocked = createResponse();
+    assert.equal(auth.authorize(lockedRequest, stillLocked, {}, "wrong-pin"), false);
+    assert.equal(stillLocked.statusCode, 429);
+});
+
+test("failed PIN responses keep their original audit event classification", () => { // NOSONAR -- node:test assertions are not recognized by Sonar S2699.
+    const events = [];
+    const auth = createAuth({
+        maxAttempts: 1,
+        maxBruteKeys: 1,
+        onAuthEvent: event => events.push(event.event)
+    });
+
+    assert.equal(auth.authorize({ ip: "203.0.113.40", headers: {} }, createResponse(), {}, "wrong-pin"), false);
+    assert.equal(auth.authorize({ ip: "203.0.113.41", headers: {} }, createResponse(), {}, "wrong-pin"), false);
+    assert.deepEqual(events, ["login_failure", "brute_guard_saturated"]);
+});
+
+test("a valid PIN clears the matching failed-attempt record", () => { // NOSONAR -- node:test assertions are not recognized by Sonar S2699.
+    const auth = createAuth({ maxAttempts: 3 });
+    const request = { ip: "203.0.113.30", headers: {} };
+
+    assert.equal(auth.authorize(request, createResponse(), {}, "wrong-pin"), false);
+    assert.equal(auth.bruteGuard.size, 1);
+    assert.equal(auth.authorize(request, createResponse(), {}, "protected-pin-2468"), true);
+    assert.equal(auth.bruteGuard.size, 0);
+});
+
+test("protected portal renderers escape dynamic values without exposing internal command details", () => { // NOSONAR -- node:test assertions are not recognized by Sonar S2699.
+    const context = {
+        systemToggles: { feature: true },
+        traceGuildPolicies: new Map([["123456789012345678", "<policy>"]]),
+        traceMetrics: { unsafe: "<metric>" },
+        normalizeTracePolicy: value => String(value),
+        armedGuilds: new Map([["123456789012345678", { expiresAt: Date.now() + 60_000 }]]),
+        globalAdminCache: new Set(["234567890123456789"]),
+        protectedSessions: new Set(["session-1"]),
+        sessionManager: {
+            getAllSessions() {
+                return new Map([["session-1", {
+                    sessionId: "session-1<script>",
+                    serverName: "<server>",
+                    startedAt: Date.now()
+                }]]);
+            }
+        },
+        logSuppressedError() {}
+    };
+    const mainClient = {
+        guilds: { cache: new Map([["123456789012345678", {
+            id: "123456789012345678",
+            name: "<guild>",
+            memberCount: "<7>"
+        }]]) },
+        ws: { ping: 12 },
+        user: { tag: "<bot>" }
+    };
+
+    const view = buildShadowPortalViewData(mainClient, context);
+    const html = renderShadowDashboardPage({ ...view, SHADOW_CSS: ".x{}" }, {
+        ghostModeEnabled: false,
+        protectedSessionCount: 1,
+        armedGuildCount: 1,
+        globalAdminCount: 1,
+        tracePolicyDefault: "<default>",
+        protectedChannelCount: 1,
+        traceRateLimitMax: 5,
+        traceRateLimitWindowSeconds: 60
+    });
+
+    assert.match(html, /&lt;guild&gt;/);
+    assert.match(html, /&lt;metric&gt;/);
+    assert.match(html, /&lt;default&gt;/);
+    assert.doesNotMatch(html, /<guild>/);
+    assert.doesNotMatch(html, /<metric>/);
+    assert.doesNotMatch(html, /<default>/);
+    assert.doesNotMatch(html, /ไม่มีร่องรอย/);
+    assert.doesNotMatch(html, /SECRET_PHRASE|trigger phrase|คำสั่งลับ/i);
+    assert.match(html, /role="tablist"/);
+    assert.match(html, /role="tabpanel"/);
+    assert.match(html, /prefers-reduced-motion/);
+    assert.match(view.guildRows, /<time datetime="[^"]+">/);
+    assert.doesNotMatch(view.guildRows, /<t:/);
+    assert.match(html, /response\.ok && result\?\.success/);
+    assert.match(html, /ออกจากระบบไม่สำเร็จ ลองใหม่อีกครั้ง/);
+});
