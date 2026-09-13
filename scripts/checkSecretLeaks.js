@@ -8,7 +8,8 @@ const SKIPPED_PREFIXES = [
     "discord/tests/",
     "verification-tests/",
     "coverage/",
-    "node_modules/"
+    "node_modules/",
+    ".agents/"
 ];
 
 const PATTERNS = [
