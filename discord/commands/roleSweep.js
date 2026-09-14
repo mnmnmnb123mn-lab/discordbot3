@@ -250,14 +250,14 @@ function buildConfirmationRow(disabled = false) {
 /** Builds the rich embed preview with server icon thumbnail and exempted roles in Modern Enterprise style. */
 function buildPreviewEmbed(guild, stats, exceptRoleIds = [], actorId = null, targetRoleId = null) {
     const embed = new EmbedBuilder()
-        .setColor(config.system?.themeColors?.warning || 0xFEE75C)
-        .setTitle("🧹 ตรวจสอบข้อมูลก่อนกวาดยศ (Role Sweep Preview)");
+        .setColor(config.system?.themeColors?.primary || 0x5865F2)
+        .setTitle("🧹 Role Sweep · ตรวจสอบข้อมูลก่อนกวาดยศ");
 
     if (targetRoleId) {
         embed.setDescription(
-            `⚠️ **โปรดตรวจสอบรายละเอียดก่อนดำเนินการ:**\n` +
-            `ระบบจะถอดยศเป้าหมาย **<@&${targetRoleId}>** ออกจากสมาชิกทุกคนที่ถือยศนี้ (ไม่กระทบยศอื่น)\n` +
-            `*การดำเนินการนี้ไม่สามารถย้อนกลับได้ (No Undo)*`
+            `### ⚠️ โปรดตรวจสอบรายละเอียดก่อนยืนยัน\n` +
+            `> ระบบจะถอดยศเป้าหมาย **<@&${targetRoleId}>** ออกจากสมาชิกทุกคนที่ถือยศนี้\n` +
+            `> *การดำเนินการนี้เป็นการเปลี่ยนแปลงระดับเซิร์ฟเวอร์แบบถาวร (No Undo)*`
         );
         embed.addFields(
             {
@@ -274,9 +274,9 @@ function buildPreviewEmbed(guild, stats, exceptRoleIds = [], actorId = null, tar
         );
     } else {
         embed.setDescription(
-            `⚠️ **โปรดตรวจสอบรายละเอียดก่อนดำเนินการ:**\n` +
-            `ระบบจะถอดยศของสมาชิกทุกคนที่บอทมีสิทธิ์จัดการ (ยกเว้นยศที่ระบุไว้)\n` +
-            `*การดำเนินการนี้ไม่สามารถย้อนกลับได้ (No Undo)*`
+            `### ⚠️ โปรดตรวจสอบรายละเอียดก่อนยืนยัน\n` +
+            `> ระบบจะกวาดยศของสมาชิกทุกคนที่บอทมีสิทธิ์จัดการ (ยกเว้นยศที่ระบุไว้)\n` +
+            `> *การดำเนินการนี้เป็นการเปลี่ยนแปลงระดับเซิร์ฟเวอร์แบบถาวร (No Undo)*`
         );
         embed.addFields(
             {
@@ -310,7 +310,7 @@ function buildPreviewEmbed(guild, stats, exceptRoleIds = [], actorId = null, tar
             inline: false
         }
     )
-    .setFooter({ text: "Phomueangtai Personal Multi-Tool • Role Sweep" })
+    .setFooter({ text: "Phomueangtai Personal Multi-Tool • Role Sweep System" })
     .setTimestamp();
 
     const iconUrl = guild?.iconURL?.({ forceStatic: false, size: 256 }) || guild?.iconURL?.();
@@ -322,16 +322,16 @@ function buildPreviewEmbed(guild, stats, exceptRoleIds = [], actorId = null, tar
 function buildSummaryEmbed(guild, { changedMembers, removedAssignments, failedAssignments, cancelled, exceptRoleIds = [], actorId = null, targetRoleId = null }) {
     const isSuccess = !cancelled && failedAssignments === 0;
     let color = config.system?.themeColors?.error || 0xED4245;
-    let title = "🧹 สรุปผลการกวาดยศ (มีบางรายการไม่สำเร็จ)";
+    let title = "⚠️ Role Sweep · เสร็จสิ้น (มีบางรายการไม่สำเร็จ)";
     let statusBanner = "⚠️ **กวาดยศเสร็จสิ้น (มีบางรายการไม่สำเร็จ)**";
 
     if (cancelled) {
         color = config.system?.themeColors?.warning || 0xFEE75C;
-        title = "⚠️ สรุปผลการกวาดยศ (ยกเลิก / Cancelled)";
+        title = "🛑 Role Sweep · ยกเลิกแล้ว (Cancelled)";
         statusBanner = "🛑 **หยุดงานกวาดยศแล้ว ไม่มีการเปลี่ยนแปลงยศเพิ่มเติม**";
     } else if (isSuccess) {
         color = config.system?.themeColors?.success || 0x57F287;
-        title = "🧹 สรุปผลการกวาดยศเสร็จสมบูรณ์ (Role Sweep Summary)";
+        title = "✅ Role Sweep · กวาดยศเสร็จสมบูรณ์";
         statusBanner = "✅ **กวาดยศเสร็จสมบูรณ์**";
     }
 
@@ -380,8 +380,11 @@ function buildSummaryEmbed(guild, { changedMembers, removedAssignments, failedAs
 function buildCancelEmbed(guild, actorId = null) {
     const embed = new EmbedBuilder()
         .setColor(config.system?.themeColors?.warning || 0xFEE75C)
-        .setTitle("❌ ยกเลิกการกวาดยศแล้ว (Role Sweep Cancelled)")
-        .setDescription("> งานกวาดยศถูกยกเลิกเรียบร้อยแล้ว ไม่มีการเปลี่ยนแปลงยศใด ๆ ในเซิร์ฟเวอร์")
+        .setTitle("🛑 Role Sweep · ยกเลิกการกวาดยศแล้ว")
+        .setDescription(
+            `### 🛑 งานกวาดยศถูกยกเลิกเรียบร้อยแล้ว\n` +
+            `> ไม่มีการเปลี่ยนแปลงหรือถอดยศใด ๆ ในเซิร์ฟเวอร์`
+        )
         .setFooter({ text: "Phomueangtai Personal Multi-Tool • Role Sweep Cancelled" })
         .setTimestamp();
 
@@ -402,10 +405,11 @@ function buildCancelEmbed(guild, actorId = null) {
 function buildExpiredEmbed(guild) {
     const embed = new EmbedBuilder()
         .setColor(config.system?.themeColors?.error || 0xED4245)
-        .setTitle("⌛ หมดเวลายืนยันการกวาดยศ (Role Sweep Expired)")
+        .setTitle("⌛ Role Sweep · หมดเวลายืนยัน")
         .setDescription(
-            `> ⚠️ คำขอกวาดยศหมดเวลาแล้ว (เกิน 60 วินาที)\n` +
-            `> ระบบยกเลิกงานโดยอัตโนมัติเพื่อความปลอดภัย และไม่มีการเปลี่ยนแปลงยศใด ๆ`
+            `### ⌛ หมดเวลาการยืนยันคำขอกวาดยศ\n` +
+            `> คำขอนี้เกินกำหนดเวลา 60 วินาที ระบบได้ยกเลิกงานอัตโนมัติเพื่อความปลอดภัย\n` +
+            `> ไม่มีการเปลี่ยนแปลงยศใด ๆ ในเซิร์ฟเวอร์`
         )
         .setFooter({ text: "Phomueangtai Personal Multi-Tool • Role Sweep Expired" })
         .setTimestamp();
@@ -628,7 +632,12 @@ async function executeSweep(pending, messageOrInteraction) {
         try {
             members = await fetchAllMembers(pending.guild);
         } catch {
-            return await deliverSweepResult(messageOrInteraction, `> ❌ ดึงรายชื่อสมาชิกใหม่ไม่สำเร็จ จึงไม่ถอดยศใด ๆ`);
+            try {
+                await new Promise(resolve => setTimeout(resolve, 100));
+                members = await fetchAllMembers(pending.guild);
+            } catch {
+                return await deliverSweepResult(messageOrInteraction, `> ❌ ดึงรายชื่อสมาชิกใหม่ไม่สำเร็จ จึงไม่ถอดยศใด ๆ`);
+            }
         }
         const scan = scanGuildRoles(pending.guild, members, pending.actorId, pending.exceptRoleIds, pending.targetRoleId);
         if (scan.fingerprint !== pending.fingerprint) {

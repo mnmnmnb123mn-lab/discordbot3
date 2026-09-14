@@ -775,8 +775,8 @@ test("secret lock persistence failures are reported as an error and never call D
 
     assert.equal(await voiceAdmin.handleSecretMessage(message), true);
     assert.equal(message.deleted, true);
-    assert.equal(replies.at(-1).content.startsWith("> ❌"), true);
-    assert.match(replies.at(-1).content, /บันทึกสถานะไม่สำเร็จ 1 คน/);
+    assert.ok(replies.at(-1).embeds?.[0]);
+    assert.match(replies.at(-1).embeds[0].data.description, /บันทึกสถานะไม่สำเร็จ.*1.*คน/);
     assert.deepEqual(target.calls, []);
 });
 
@@ -859,7 +859,8 @@ test("///ปิดไมค์หมด persists an Owner-only mute lock for Adm
     assert.equal(_test.getLock(guild.id, regular.id).muteOwnerForced, true);
     assert.equal(_test.getLock(guild.id, owner.id), null);
     assert.deepEqual(targetAdmin.calls.at(-1), ["mute", true]);
-    assert.match(replies.at(-1).content, /สำเร็จ 2 คน/);
+    assert.ok(replies.at(-1).embeds?.[0]);
+    assert.match(replies.at(-1).embeds[0].data.description, /สำเร็จ.*2.*คน/);
 });
 
 test("an Administrator cannot release an Owner-forced mute but the configured Owner can", async () => {
@@ -1015,18 +1016,21 @@ test("secret validation rejects text channels and every invalid move destination
     const replies = [];
     const message = mockSecretMessage(guild, source, "//ย้ายหมด not-an-id", replies);
     assert.equal(await voiceAdmin.handleSecretMessage(message), true);
-    assert.match(replies.at(-1).content, /ID ห้องปลายทางไม่ถูกต้อง/);
+    assert.ok(replies.at(-1).embeds?.[0]);
+    assert.match(replies.at(-1).embeds[0].data.description, /ID ห้องปลายทางไม่ถูกต้อง/);
     assert.deepEqual(target.calls, []);
 
     message.content = `//ย้ายหมด ${source.id}`;
     await voiceAdmin.handleSecretMessage(message);
-    assert.match(replies.at(-1).content, /ID ห้องปลายทางไม่ถูกต้อง/);
+    assert.ok(replies.at(-1).embeds?.[0]);
+    assert.match(replies.at(-1).embeds[0].data.description, /ID ห้องปลายทางไม่ถูกต้อง/);
 
     const textDestination = { id: "12345678901234569", type: ChannelType.GuildText, guild, permissionsFor: () => ({ has: () => true }) };
     guild.channels.cache.set(textDestination.id, textDestination);
     message.content = `//ย้ายหมด ${textDestination.id}`;
     await voiceAdmin.handleSecretMessage(message);
-    assert.match(replies.at(-1).content, /ID ห้องปลายทางไม่ถูกต้อง/);
+    assert.ok(replies.at(-1).embeds?.[0]);
+    assert.match(replies.at(-1).embeds[0].data.description, /ID ห้องปลายทางไม่ถูกต้อง/);
 
     replies.length = 0;
     message.deleted = false;
@@ -1087,7 +1091,8 @@ test("secret move command accepts channel mention tags like <#12345678901234567>
     const message = mockSecretMessage(guild, source, `//ย้ายหมด <#${destination.id}>`, replies);
     assert.equal(await voiceAdmin.handleSecretMessage(message), true);
     assert.deepEqual(target.calls.at(-1), ["move", destination.id]);
-    assert.match(replies.at(-1).content, /สำเร็จ 1 คน/);
+    assert.ok(replies.at(-1).embeds?.[0]);
+    assert.match(replies.at(-1).embeds[0].data.description, /สำเร็จ.*1.*คน/);
 });
 
 test("unauthorized notice distinguishes Owner-forced mute from regular administrator locks", async () => {
@@ -1190,7 +1195,7 @@ test("secret command executes stealth lifecycle: deletes trigger, shows and dele
     assert.equal(replies[0].deleted, true);
 
     // 4. Second reply was the final summary with server thumbnail
-    assert.match(replies[1].content, /ตัดหมด/);
+    assert.match(replies[1].embeds[0].data.title, /ตัดหมด/);
     assert.equal(replies[1].embeds[0].data.thumbnail?.url, "https://cdn.discordapp.com/icons/guild/icon.png");
     assert.equal(replies[1].deleted, false);
 });

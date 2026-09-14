@@ -412,20 +412,22 @@ async function sendVideoProgress(token, questId, timestamp, signal) {
 async function sendGameHeartbeat(token, quest, terminal, signal) {
     const baseline = quest.progressSecs;
     const perform = async () => {
-        try {
-            return await discordFetch(token, `/quests/${quest.id}/heartbeat`, {
-                method: 'POST',
-                body: JSON.stringify({ stream_key: `call:${quest.id}:1`, terminal }),
-                signal
-            });
-        } catch (error) {
-            if (error?.status !== 400 || !quest.applicationId) throw error;
-            return discordFetch(token, `/quests/${quest.id}/heartbeat`, {
-                method: 'POST',
-                body: JSON.stringify({ application_id: quest.applicationId, terminal }),
-                signal
-            });
+        if (quest.applicationId) {
+            try {
+                return await discordFetch(token, `/quests/${quest.id}/heartbeat`, {
+                    method: 'POST',
+                    body: JSON.stringify({ application_id: quest.applicationId, terminal }),
+                    signal
+                });
+            } catch (error) {
+                if (error?.status !== 400) throw error;
+            }
         }
+        return discordFetch(token, `/quests/${quest.id}/heartbeat`, {
+            method: 'POST',
+            body: JSON.stringify({ stream_key: `call:${quest.id}:1`, terminal }),
+            signal
+        });
     };
     return verifiedQuestMutation({
         token,
@@ -608,6 +610,29 @@ async function runGameQuest(
     });
 }
 
+async function fetchUserStatus(token, signal) {
+    try {
+        const settings = await discordFetch(token, '/users/@me/settings', { signal });
+        return settings?.status || null;
+    } catch {
+        return null;
+    }
+}
+
+async function restoreUserStatus(token, status, signal) {
+    if (!status || !['online', 'idle', 'dnd', 'invisible'].includes(status)) return false;
+    try {
+        await discordFetch(token, '/users/@me/settings', {
+            method: 'PATCH',
+            body: JSON.stringify({ status }),
+            signal
+        });
+        return true;
+    } catch {
+        return false;
+    }
+}
+
 module.exports = {
     fetchMe,
     fetchQuests,
@@ -622,6 +647,8 @@ module.exports = {
     isGameEvent,
     isSupportedEvent,
     isRunnableQuest,
+    fetchUserStatus,
+    restoreUserStatus,
     DiscordApiError,
     QuestCompatibilityError,
     isFatalAuthError

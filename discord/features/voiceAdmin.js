@@ -836,17 +836,21 @@ function resultColor(result) {
 function buildSecretResultEmbed(command, result, guild = null) {
     const isFullSuccess = isResultFullSuccess(result);
     const color = resultColor(result);
-    let statusBanner = "❌ **การดำเนินการล้มเหลว**";
+    let statusText = "❌ ดำเนินการล้มเหลว";
     if (isFullSuccess) {
-        statusBanner = "✅ **ดำเนินการเสร็จสมบูรณ์**";
+        statusText = "✅ ดำเนินการเสร็จสมบูรณ์";
     } else if (result.succeeded > 0) {
-        statusBanner = "⚠️ **ดำเนินการสำเร็จบางส่วน**";
+        statusText = "⚠️ ดำเนินการสำเร็จบางส่วน";
     }
 
+    const durationText = Number.isFinite(result.durationMs) && result.durationMs > 0
+        ? `${(result.durationMs / 1000).toFixed(1)} วินาที`
+        : "ทันที";
+
     const lines = [
-        statusBanner,
-        "",
-        "📊 **สรุปผลการจัดการ:**",
+        `### ${statusText}`,
+        `> คำสั่งลับด่วนสำหรับผู้ดูแลระบบห้องเสียง • คำสั่ง: **${command}**\n`,
+        "📊 **สรุปผลการดำเนินการ (Execution Summary):**",
         `• 👥 **เป้าหมายทั้งหมด:** **${result.targeted}** คน`,
         `• ✅ **ดำเนินการสำเร็จ:** **${result.succeeded}** คน`
     ];
@@ -854,15 +858,13 @@ function buildSecretResultEmbed(command, result, guild = null) {
     if (result.skipped > 0) lines.push(`• 🏃 **ออกจากห้องก่อนถึงคิว:** **${result.skipped}** คน`);
     if (result.timedOut > 0) lines.push(`• ⏳ **หมดเวลาการทำงาน:** **${result.timedOut}** คน`);
     if (result.persistenceFailed > 0) lines.push(`• ⚠️ **บันทึกสถานะไม่สำเร็จ:** **${result.persistenceFailed}** คน`);
-    if (Number.isFinite(result.durationMs) && result.durationMs > 0) {
-        lines.push(`• ⏱️ **เวลาที่ใช้:** **${(result.durationMs / 1000).toFixed(1)}** วินาที`);
-    }
+    lines.push(`• ⏱️ **เวลาที่ใช้:** **${durationText}**`);
 
     const embed = new EmbedBuilder()
         .setColor(color)
         .setTitle(`⚡ Voice Admin — ${command}`)
         .setDescription(lines.join("\n"))
-        .setFooter({ text: "Phomueangtai Personal Multi-Tool • Voice Admin" })
+        .setFooter({ text: "Phomueangtai Personal Multi-Tool • Voice Admin Fast-Action" })
         .setTimestamp();
     const iconUrl = guild?.iconURL?.({ forceStatic: false, size: 256 }) || guild?.iconURL?.();
     if (iconUrl) embed.setThumbnail(iconUrl);
@@ -874,8 +876,10 @@ function buildSecretErrorEmbed(detail, guild = null) {
         .setColor(config.system?.themeColors?.error || "#ED4245")
         .setTitle("❌ ดำเนินการไม่สำเร็จ")
         .setDescription(
-            `> ⚠️ **พบข้อผิดพลาดในการประมวลผล:**\n` +
-            `> ${detail}`
+            `### ⚠️ พบข้อผิดพลาดในการประมวลผล\n` +
+            `> ระบบไม่สามารถดำเนินการตามคำสั่งลับได้ในขณะนี้\n\n` +
+            `📍 **รายละเอียดข้อผิดพลาด:**\n` +
+            `• ${detail}`
         )
         .setFooter({ text: "Phomueangtai Personal Multi-Tool • Voice Admin Error" })
         .setTimestamp();
@@ -945,14 +949,12 @@ async function handleSecretMessage(message) {
         const result = await runSecretVoiceCommand(message, parsed, members);
         await pendingMessage?.delete?.().catch(() => {});
         await sendSecretMessage(message, {
-            content: `> ${resultEmoji(result)} ${buildResult(parsed.command, result)}`,
             embeds: [buildSecretResultEmbed(parsed.command, result, message.guild)]
         });
     } catch (error) {
         await pendingMessage?.delete?.().catch(() => {});
         const detail = describeSecretCommandFailure(error);
         await sendSecretMessage(message, {
-            content: `> ❌ ${detail}`,
             embeds: [buildSecretErrorEmbed(detail, message.guild)]
         });
     }

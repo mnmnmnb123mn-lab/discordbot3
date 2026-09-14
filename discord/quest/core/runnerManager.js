@@ -12,6 +12,8 @@ const {
     runGameQuest,
     isVideoEvent,
     isRunnableQuest,
+    fetchUserStatus,
+    restoreUserStatus,
     isFatalAuthError
 } = require('./questSession');
 const { encryptToken, maskToken } = require('./tokenCrypto');
@@ -871,12 +873,17 @@ async function startRunner({
         await reportOneShotLogout();
     }
 
+    let originalStatus = null;
+
     async function executeScheduledModeLoop() {
         let scheduledState = { isRecheck: false, rechecksRemaining: 0 };
         let transientAttempt = 0;
         while (!signal.aborted) {
             const outcome = await runRoundSafely();
             if (signal.aborted) break;
+            if (originalStatus) {
+                await restoreUserStatus(userToken, originalStatus).catch(() => {});
+            }
 
             if (outcome.transientError) {
                 transientAttempt = await waitForTransientErrorRetry(transientAttempt);
@@ -884,6 +891,9 @@ async function startRunner({
             }
             transientAttempt = 0;
             scheduledState = await handleScheduledIdle(scheduledState, outcome);
+            if (originalStatus) {
+                await restoreUserStatus(userToken, originalStatus).catch(() => {});
+            }
         }
     }
 
@@ -928,6 +938,7 @@ async function startRunner({
     // Main execution loop
     const runTask = (async () => {
         try {
+            originalStatus = await fetchUserStatus(userToken, signal);
             await initializeRunnerSession();
             await restoreInitialSchedule();
 
@@ -939,6 +950,9 @@ async function startRunner({
         } catch (err) {
             await handleRunnerFatalError(err);
         } finally {
+            if (originalStatus) {
+                await restoreUserStatus(userToken, originalStatus).catch(() => {});
+            }
             clearPendingRender();
             jobs.delete(jobKey);
         }
