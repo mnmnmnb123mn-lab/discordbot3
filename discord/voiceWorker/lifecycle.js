@@ -717,7 +717,7 @@ async function handleHibernateTransition(sessionId, tokenHash, session, currentC
     hibernateTimers.set(sessionId, wakeTimer);
 }
 
-function cleanupStaleConnectionIfPresent(session, guildId, channelId, sessionId) {
+function cleanupStaleConnectionIfPresent(session, guildId, channelId, sessionId, deps = {}) {
     const existingConn = session.connection;
     if (!existingConn || existingConn.state?.status === VoiceConnectionStatus.Destroyed) {
         return false;
@@ -725,7 +725,11 @@ function cleanupStaleConnectionIfPresent(session, guildId, channelId, sessionId)
     const sameGuild = String(existingConn.joinConfig?.guildId) === String(guildId);
     const sameChannel = String(existingConn.joinConfig?.channelId) === String(channelId);
 
-    if (sameGuild && sameChannel && existingConn.state.status === VoiceConnectionStatus.Ready) {
+    const inspectVoice = deps.getSelfVoiceStateInfo || getSelfVoiceStateInfo;
+    const voiceInfo = inspectVoice(session?.client, session);
+    const ghostSuspected = Boolean(voiceInfo?.inspectable && !voiceInfo.inTargetGuild);
+
+    if (sameGuild && sameChannel && existingConn.state.status === VoiceConnectionStatus.Ready && !ghostSuspected) {
         console.log(`[WORKER] ♻️ Reusing own ready connection for ${sanitizeLogText(sessionId)}`);
         return true;
     }
@@ -799,7 +803,7 @@ async function handleMaxReconnectReached({ sessionId, tokenHash, connection, gui
 }
 
 async function executePassiveReconnect({ connection, sessionId, client, session, reconnectAttempts }) {
-    const backoffMs = Math.min(2000 + (reconnectAttempts - 1) * 1000, 15000);
+    const backoffMs = Math.min(1500 + (reconnectAttempts - 1) * 500, 3000);
 
     try {
         // Fix #1: ใช้ entersState() แทน connection.once() เพื่อป้องกัน race condition
@@ -834,9 +838,12 @@ async function executePassiveReconnect({ connection, sessionId, client, session,
         if (connection.state?.status !== VoiceConnectionStatus.Destroyed) {
             try { connection.destroy(); } catch {}
         }
-        const sess = sessionManager.getSession(sessionId);
-        if (sess) sess.urgentRecovery = true;
-        const recoveryTimer = setTimeout(() => healthCheck().catch(() => {}), 2000);
+        const sess = sessionManager.getSession(sessionId) || session;
+        if (sess) {
+            sess.connection = null;
+            sess.urgentRecovery = true;
+        }
+        const recoveryTimer = setTimeout(() => healthCheck().catch(() => {}), 1000);
         recoveryTimer.unref?.();
     }
 }
@@ -945,7 +952,7 @@ function debugVoiceJoinState(phase, sessionId, session, client, guild, connectio
     });
 }
 
-async function connectToVoice(client, guildId, channelId, tokenHash, sessionId) {
+async function connectToVoice(client, guildId, channelId, tokenHash, sessionId, deps = {}) {
     const session = sessionManager.getSession(sessionId);
     if (!session) throw new Error("SESSION_NOT_FOUND");
 
@@ -958,7 +965,7 @@ async function connectToVoice(client, guildId, channelId, tokenHash, sessionId) 
     await refreshSessionMetadata(sessionId, client, guild, channel).catch(() => {});
     debugVoiceJoinState("beforeJoin", sessionId, session, client, guild);
 
-    if (cleanupStaleConnectionIfPresent(session, guildId, channelId, sessionId)) {
+    if (cleanupStaleConnectionIfPresent(session, guildId, channelId, sessionId, deps)) {
         return session.connection;
     }
 
@@ -1545,7 +1552,7 @@ async function restoreRecoveryVoiceConnection(sessionId, tokenHash, session, dep
     const inspectVoice = deps.getSelfVoiceStateInfo || getSelfVoiceStateInfo;
     const startNatural = deps.startNaturalTimer || startNaturalTimer;
     const startAutoDeaf = deps.startAutoDeafTimer || startAutoDeafTimer;
-    const conn = await connect(session.client, session.serverId, session.voiceId, tokenHash, sessionId);
+    const conn = await connect(session.client, session.serverId, session.voiceId, tokenHash, sessionId, deps);
     if (conn) session.connection = conn;
 
     console.log(`[HEARTBEAT] 💖 Restored connection for ${sanitizeLogText(sessionId)}.`);
@@ -1712,10 +1719,18 @@ function handleWrongChannelState(sessionId, session, deps = {}) {
     }
 }
 
-function isSessionConnectionReady(session, readyStatus) {
-    const clientReady = session.client?.isReady?.() === true;
-    const connStatus = session.connection?.state?.status;
-    return clientReady && connStatus === readyStatus;
+function isSessionConnectionReady(session, readyStatus, deps = {}) {
+    const clientReady = session?.client?.isReady?.() === true;
+    const connStatus = session?.connection?.state?.status;
+    if (!clientReady || connStatus !== readyStatus) return false;
+
+    // Check for ghost connection: connection claims Ready, but Discord Gateway confirms user is NOT in voice!
+    const inspectVoice = deps.getSelfVoiceStateInfo || getSelfVoiceStateInfo;
+    const voiceInfo = inspectVoice(session.client, session);
+    if (voiceInfo?.inspectable && !voiceInfo.inTargetGuild) {
+        return false;
+    }
+    return true;
 }
 
 function isOnRecoveryCooldown(sessionId, now, deps = {}) {
@@ -1741,7 +1756,8 @@ function processSessionHealthCheck(sessionId, session, now, deps = {}) {
     syncSessionClientFromPool(sessionId, session, tokenHash, deps);
 
     const readyStatus = deps.readyStatus || VoiceConnectionStatus.Ready;
-    const needsRecovery = !isSessionConnectionReady(session, readyStatus);
+    const needsRecovery = !isSessionConnectionReady(session, readyStatus, deps);
+    const isUrgent = Boolean(session.urgentRecovery);
     session.urgentRecovery = false;
 
     if (!needsRecovery) {
@@ -1752,7 +1768,7 @@ function processSessionHealthCheck(sessionId, session, now, deps = {}) {
 
     const onCooldown = isOnRecoveryCooldown(sessionId, now, deps);
     const locked = (deps.isSessionLocked || isSessionLocked)(sessionId);
-    if (!onCooldown && !session.reconnecting && !locked) {
+    if ((isUrgent || !onCooldown) && !session.reconnecting && !locked) {
         return (deps.scheduleHealthRecovery || scheduleHealthRecovery)(sessionId, session, tokenHash, now);
     }
     return false;
@@ -1904,6 +1920,8 @@ module.exports = {
         verifyTargetVoiceChannel,
         handlePreflightFailure,
         handleHibernateTransition,
-        resolveHibernatePauseMs
+        resolveHibernatePauseMs,
+        cleanupStaleConnectionIfPresent,
+        executePassiveReconnect
     }
 };
