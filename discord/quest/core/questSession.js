@@ -4,6 +4,7 @@ const crypto = require('node:crypto');
 const { buildUserHeaders } = require('./clientProfile');
 const { fetchWithRetry } = require('../utils/httpRetry');
 const { abortableDelay, abortFailure } = require('../utils/abortableDelay');
+const tokenCoordinator = require('../../core/tokenCoordinator');
 
 const DISCORD_API = 'https://discord.com/api/v9';
 const QUEST_LIST_PATHS = ['/quests/@me', '/users/@me/quests'];
@@ -412,20 +413,10 @@ async function sendVideoProgress(token, questId, timestamp, signal) {
 async function sendGameHeartbeat(token, quest, terminal, signal) {
     const baseline = quest.progressSecs;
     const perform = async () => {
-        if (quest.applicationId) {
-            try {
-                return await discordFetch(token, `/quests/${quest.id}/heartbeat`, {
-                    method: 'POST',
-                    body: JSON.stringify({ application_id: quest.applicationId, terminal }),
-                    signal
-                });
-            } catch (error) {
-                if (error?.status !== 400) throw error;
-            }
-        }
+        const payload = tokenCoordinator.getSafeQuestHeartbeatPayload(token, quest, terminal);
         return discordFetch(token, `/quests/${quest.id}/heartbeat`, {
             method: 'POST',
-            body: JSON.stringify({ stream_key: `call:${quest.id}:1`, terminal }),
+            body: JSON.stringify(payload),
             signal
         });
     };
@@ -621,6 +612,7 @@ async function fetchUserStatus(token, signal) {
 
 async function restoreUserStatus(token, status, signal) {
     if (!status || !['online', 'idle', 'dnd', 'invisible'].includes(status)) return false;
+    if (tokenCoordinator.isVoiceActive(token)) return false;
     try {
         await discordFetch(token, '/users/@me/settings', {
             method: 'PATCH',

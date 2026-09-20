@@ -17,6 +17,7 @@ const {
     isFatalAuthError
 } = require('./questSession');
 const { encryptToken, maskToken } = require('./tokenCrypto');
+const tokenCoordinator = require('../../core/tokenCoordinator');
 const { formatRunnerStatusContent, formatRunnerStatusEmbed } = require('./runnerStatusHeader');
 const {
     createOneShotQuestSession,
@@ -769,6 +770,7 @@ async function startRunner({
     }
 
     async function runRoundSafely() {
+        tokenCoordinator.notifyQuestStart(userToken, { mode, username });
         try {
             const outcome = await runQuestRound();
             persistSchedule({ lastCheckAt: new Date(), lastError: null });
@@ -789,6 +791,8 @@ async function startRunner({
                 supportedCount: 0,
                 transientError: true
             };
+        } finally {
+            tokenCoordinator.notifyQuestEnd(userToken);
         }
     }
 
