@@ -38,6 +38,7 @@ private/
 *secret*.json
 *credential*.json
 *credentials*.json
+!.agents/**
 
 # -------------------------
 # Dependencies
