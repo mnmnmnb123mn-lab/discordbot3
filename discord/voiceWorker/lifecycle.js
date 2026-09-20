@@ -893,6 +893,10 @@ function setupVoiceConnectionListeners({ connection, client, guild, guildId, tok
     let lastVoiceReadyAt = 0;
     const VOICE_READY_THROTTLE_MS = 10000;
 
+    connection.on("error", (error) => {
+        console.warn(`[WORKER] ⚠️ VoiceConnection socket error for ${sanitizeLogText(sessionId)}: ${error?.message || error}`);
+    });
+
     connection.on(VoiceConnectionStatus.Ready, () => {
         sessionManager.touchSession(sessionId);
         const now = Date.now();
@@ -1922,6 +1926,7 @@ module.exports = {
         handleHibernateTransition,
         resolveHibernatePauseMs,
         cleanupStaleConnectionIfPresent,
-        executePassiveReconnect
+        executePassiveReconnect,
+        setupVoiceConnectionListeners
     }
 };

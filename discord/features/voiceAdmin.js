@@ -265,8 +265,13 @@ async function writeLock(guildId, userId, type, actorId, expectedVersion = undef
         throw makeError("VOICE_ADMIN_PERSISTENCE_FAILED", "write_lock", error);
     }
     if (!operationWasAcknowledged(result, { allowUpsert: write.upsert })) {
+        try {
+            result = await VoiceAdminLock.updateOne(write.filter, write.update, write.databaseOptions);
+        } catch {}
+    }
+    if (!operationWasAcknowledged(result, { allowUpsert: write.upsert })) {
         if (expectedVersion !== undefined) throw makeError("VOICE_ADMIN_LOCK_CONFLICT", "write_lock");
-        await reportPersistenceFailure("write_lock", { guildId, userId, type });
+        await reportPersistenceFailure("write_lock", { guildId, userId, type, code: "unacknowledged_write" });
         throw makeError("VOICE_ADMIN_PERSISTENCE_FAILED", "write_lock");
     }
     if (isRetiredTarget(guildId, userId)) {

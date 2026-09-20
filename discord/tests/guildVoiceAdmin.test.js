@@ -831,6 +831,22 @@ test("persistence exceptions and version conflicts fail closed without changing 
     assert.equal(_test.getLock("g", "u"), null);
 });
 
+test("writeLock retries transient unacknowledged write and succeeds if retry acknowledges", async () => {
+    let callCount = 0;
+    VoiceAdminLock.updateOne = async () => {
+        callCount++;
+        if (callCount === 1) {
+            return { acknowledged: false };
+        }
+        return { acknowledged: true, upsertedCount: 1 };
+    };
+    const result = await _test.writeLock("g-retry", "u-retry", "mute", "owner");
+    assert.equal(callCount, 2);
+    assert.equal(result.lock.muteLocked, true);
+    _test.reset();
+});
+
+
 test("temporary Administrator lock is not persisted, while a failed unlock restores its version", async () => {
     const admin = member("admin", true);
     const target = member("target", false, { failMute: true });
