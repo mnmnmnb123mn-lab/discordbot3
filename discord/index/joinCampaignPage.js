@@ -1,0 +1,236 @@
+const { createViewHelpers } = require("./viewHelpers");
+const { BASE_CSS } = require("./viewStyles");
+
+const {
+    navBar,
+    shell,
+    toastScript
+} = createViewHelpers(BASE_CSS);
+
+function buildJoinCampaignPage() {
+    return shell("ดึงสมาชิกเข้าเซิร์ฟเวอร์", `
+<link rel="stylesheet" href="/verification-assets/css/dashboard.css">
+<link rel="stylesheet" href="/verification-assets/css/workspace.css">
+<script>document.body.classList.add('verification-campaign-host')</script>
+<div class="verification-campaign-page">
+<div class="container">
+<p class="eyebrow">VERIFICATION OPERATIONS</p>
+<h1 class="page-title gradient-text">ดึงสมาชิกที่เคยอนุญาต</h1>
+<p class="page-sub">ตรวจจำนวนก่อน แล้วจึงเพิ่มผู้ใช้ที่มีสิทธิ์ <code>guilds.join</code> เข้าเซิร์ฟเวอร์เป้าหมายอย่างควบคุมได้</p>
+${navBar("/join-campaign")}
+
+<div class="card">
+    <h3>🎯 เลือกเซิร์ฟเวอร์เป้าหมาย</h3>
+    <p style="color:var(--text3);font-size:0.86em;margin-bottom:14px;">
+        ระบบใช้เฉพาะ Token ที่มีสิทธิ์ <code>guilds.join</code> และต่ออายุ Token เมื่อจำเป็น
+        การทำงานนี้จะไม่เพิ่มหรือซิงก์ยศให้อัตโนมัติ
+    </p>
+    <label for="targetGuild">เซิร์ฟเวอร์ที่จะเพิ่มสมาชิก</label>
+    <select id="targetGuild" style="margin-bottom:12px;"></select>
+    <div class="action-row">
+        <button id="btnDryRun" type="button" class="btn btn-primary" onclick="dryRun()">🔎 1. ตรวจจำนวนก่อน</button>
+        <button id="btnStartCampaign" type="button" class="btn btn-success" onclick="startCampaign()">▶️ 2. เริ่มเพิ่มสมาชิก</button>
+        <button id="btnStopCampaign" type="button" class="btn btn-danger" onclick="stopCampaign()">⏹ หยุดงานปัจจุบัน</button>
+    </div>
+</div>
+
+<div class="grid">
+    <div class="stat"><div class="val" id="usableUsers">0</div><div class="lbl">ใช้ได้จริง</div></div>
+    <div class="stat"><div class="val" id="joinedUsers">0</div><div class="lbl">ดึงเข้าสำเร็จ</div></div>
+    <div class="stat"><div class="val" id="alreadyUsers">0</div><div class="lbl">อยู่แล้ว</div></div>
+    <div class="stat"><div class="val" id="failedUsers">0</div><div class="lbl">ไม่สำเร็จ</div></div>
+</div>
+
+<div class="card">
+    <h3>📊 สถานะงาน</h3>
+    <p id="campaignFreshness" role="status" aria-live="polite" style="color:var(--text3);font-size:0.82em;margin:-4px 0 12px;">กำลังโหลดสถานะ...</p>
+    <div class="mini-grid" style="grid-template-columns:repeat(auto-fit,minmax(140px,1fr));">
+        <div class="mini-stat"><span>สถานะ</span><b id="campaignStatus" role="status" aria-live="polite">ยังไม่มีงาน</b></div>
+        <div class="mini-stat"><span>Records</span><b id="scannedRecords">0</b></div>
+        <div class="mini-stat"><span>Users</span><b id="uniqueUsers">0</b></div>
+        <div class="mini-stat"><span>Refresh แล้ว</span><b id="refreshedUsers">0</b></div>
+        <div class="mini-stat"><span>ขาด scope</span><b id="missingScope">0</b></div>
+        <div class="mini-stat"><span>Rate limit</span><b id="rateLimited">0</b></div>
+        <div class="mini-stat"><span>บันทึกสถานะไม่สำเร็จ</span><b id="persistenceFailed">0</b></div>
+    </div>
+    <div class="terminal" id="campaignLog" style="height:240px;margin-top:14px;"></div>
+</div>
+</div>
+</div>
+
+${toastScript()}
+<script>
+function esc(v){
+    return String(v==null?'':v)
+        .replace(/&/g,'&amp;')
+        .replace(/</g,'&lt;')
+        .replace(/>/g,'&gt;')
+        .replace(/"/g,'&quot;')
+        .replace(/'/g,'&#39;');
+}
+async function api(path, options){
+    const res=await fetch(path, options||{});
+    const data=await res.json().catch(()=>({success:false,error:'Invalid JSON'}));
+    if(!res.ok || data.success===false){
+        throw new Error(data.error || ('HTTP '+res.status));
+    }
+    return data;
+}
+function selectedGuildId(){
+    return document.getElementById('targetGuild').value;
+}
+function setText(id,value){
+    const el=document.getElementById(id);
+    if(el) el.textContent=String(value ?? 0);
+}
+function renderSummary(summary){
+    if(!summary){
+        setText('campaignStatus','ยังไม่มีงาน');
+        return;
+    }
+    const statusLabels={idle:'ยังไม่มีงาน',running:'กำลังทำงาน',completed:'เสร็จแล้ว',stopping:'กำลังหยุด',stopped:'หยุดแล้ว',failed:'เกิดข้อผิดพลาด'};
+    setText('campaignStatus',statusLabels[summary.status] || summary.status || '-');
+    setText('usableUsers',summary.usableUsers || 0);
+    setText('joinedUsers',summary.joined || 0);
+    setText('alreadyUsers',summary.alreadyMember || 0);
+    setText('failedUsers',summary.failed || 0);
+    setText('scannedRecords',summary.scannedRecords || 0);
+    setText('uniqueUsers',summary.uniqueUsers || 0);
+    setText('refreshedUsers',summary.refreshed || 0);
+    setText('missingScope',summary.missingScope || 0);
+    setText('rateLimited',summary.rateLimited || 0);
+    setText('persistenceFailed',summary.persistenceFailed || 0);
+
+    const lines=[
+        'รหัสงาน: '+(summary.campaignId || '-'),
+        'เซิร์ฟเวอร์: '+(summary.targetGuildName || summary.targetGuildId || '-'),
+        'ตรวจทั้งหมด: '+(summary.scannedRecords || 0)+' records / '+(summary.uniqueUsers || 0)+' users',
+        'ใช้ได้จริง: '+(summary.usableUsers || 0),
+        'สำเร็จ: '+(summary.joined || 0),
+        'อยู่แล้ว: '+(summary.alreadyMember || 0),
+        'ไม่สำเร็จ: '+(summary.failed || 0),
+        'refresh แล้ว: '+(summary.refreshed || 0),
+        'refresh ไม่สำเร็จ: '+(summary.refreshFailed || 0),
+        'บันทึกสถานะ refresh ไม่สำเร็จ: '+(summary.persistenceFailed || 0),
+        'สถานะ refresh เปลี่ยนระหว่างงาน: '+(summary.refreshStateConflicts || 0),
+        'ขาด guilds.join: '+(summary.missingScope || 0),
+        'บอทขาดสิทธิ์: '+(summary.botMissingPermission || 0),
+        'token ใช้ไม่ได้: '+(summary.tokenInvalid || 0),
+        'rate limit: '+(summary.rateLimited || 0)
+    ];
+    if(summary.errors && summary.errors.length){
+        lines.push('', 'ตัวอย่างไม่สำเร็จ:');
+        summary.errors.slice(0,8).forEach(item=>{
+            lines.push('- '+(item.userId || '-')+' : '+(item.reason || '-')+(item.detail?' ('+item.detail+')':''));
+        });
+    }
+    document.getElementById('campaignLog').innerHTML=lines.map(esc).join('<br>');
+}
+async function loadTargets(){
+    const data=await api('/api/join-campaign/targets');
+    const select=document.getElementById('targetGuild');
+    if(!data.enabled){
+        select.innerHTML='<option value="">ระบบถูกปิดด้วย JOIN_CAMPAIGN_ENABLED=false</option>';
+        return;
+    }
+    if(!data.allowlistConfigured){
+        select.innerHTML='<option value="">ยังไม่ได้ตั้งค่า JOIN_CAMPAIGN_ALLOWED_GUILDS</option>';
+        return;
+    }
+    if(!data.targets || !data.targets.length){
+        select.innerHTML='<option value="">ไม่พบเซิร์ฟเวอร์ที่อยู่ใน Allow-list</option>';
+        return;
+    }
+    select.innerHTML=data.targets.map(g=>'<option value="'+esc(g.id)+'">'+esc(g.name)+' ('+esc(g.id)+')</option>').join('');
+}
+function setFreshness(message, isError){
+    const el=document.getElementById('campaignFreshness');
+    if(!el) return;
+    el.textContent=message;
+    el.style.color=isError?'var(--yellow2)':'var(--text3)';
+}
+async function refreshStatus(){
+    try{
+        const data=await api('/api/join-campaign/status');
+        const status=data.status || {};
+        renderSummary(status.active || status.last);
+        setFreshness('อัปเดตล่าสุด: '+new Date().toLocaleTimeString('th-TH'),false);
+    }catch(e){
+        setFreshness('⚠️ โหลดสถานะไม่ได้ — ข้อมูลด้านล่างอาจเก่า',true);
+    }
+}
+async function dryRun(){
+    const guildId=selectedGuildId();
+    if(!guildId) return showToast('กรุณาเลือกเซิร์ฟเวอร์','err');
+    const button=document.getElementById('btnDryRun');
+    setDashboardButtonBusy(button,true,'กำลังตรวจ...');
+    try{
+        showToast('กำลังตรวจจำนวน...');
+        const data=await api('/api/join-campaign/dry-run',{
+            method:'POST',
+            headers:{'Content-Type':'application/json'},
+            body:JSON.stringify({guildId})
+        });
+        renderSummary(data.summary);
+        showToast('ตรวจจำนวนเสร็จแล้ว');
+    }catch(e){showToast(e.message,'err');}
+    finally{setDashboardButtonBusy(button,false);}
+}
+async function startCampaign(){
+    const guildId=selectedGuildId();
+    if(!guildId) return showToast('กรุณาเลือกเซิร์ฟเวอร์','err');
+    const select=document.getElementById('targetGuild');
+    const guildName=select.options[select.selectedIndex]?.textContent || guildId;
+    const button=document.getElementById('btnStartCampaign');
+    setDashboardButtonBusy(button,true,'กำลังเตรียมงาน...');
+    try{
+        showToast('กำลังตรวจคนที่ดึงได้...');
+        const preview=await api('/api/join-campaign/dry-run',{
+            method:'POST',
+            headers:{'Content-Type':'application/json'},
+            body:JSON.stringify({guildId})
+        });
+        renderSummary(preview.summary);
+        if(selectedGuildId() !== guildId){
+            return showToast('เซิร์ฟเวอร์เปลี่ยนระหว่างการตรวจ กรุณาลองใหม่','err');
+        }
+        const usable=preview.summary?.usableUsers || 0;
+        const confirmed=window.confirm(
+            'ยืนยันดึงผู้ใช้เข้าเซิร์ฟเวอร์นี้?\n\n'+
+            guildName+'\n'+
+            'ผู้ใช้ที่พร้อมดึง: '+usable+' คน\n\n'+
+            'กด OK เพื่อเริ่มดึงทันที'
+        );
+        if(!confirmed) return showToast('ยกเลิกแล้ว');
+        if(selectedGuildId() !== guildId){
+            return showToast('เซิร์ฟเวอร์เปลี่ยน กรุณาตรวจใหม่','err');
+        }
+        const data=await api('/api/join-campaign/start',{
+            method:'POST',
+            headers:{'Content-Type':'application/json'},
+            body:JSON.stringify({guildId})
+        });
+        renderSummary(data.campaign);
+        showToast('เริ่มงานแล้ว ระบบจะดึงอัตโนมัติจนจบ');
+    }catch(e){showToast(e.message,'err');}
+    finally{setDashboardButtonBusy(button,false);}
+}
+async function stopCampaign(){
+    if(!window.confirm('ยืนยันว่าต้องการหยุดงานที่กำลังทำอยู่?')) return;
+    const button=document.getElementById('btnStopCampaign');
+    setDashboardButtonBusy(button,true,'กำลังส่งคำสั่งหยุด...');
+    try{
+        await api('/api/join-campaign/stop',{method:'POST'});
+        showToast('ส่งคำสั่งหยุดแล้ว');
+        refreshStatus();
+    }catch(e){showToast(e.message,'err');}
+    finally{setDashboardButtonBusy(button,false);}
+}
+loadTargets().then(refreshStatus).catch(e=>showToast(e.message,'err'));
+dashboardInterval(refreshStatus,3000);
+</script>`);
+}
+
+module.exports = {
+    buildJoinCampaignPage
+};

@@ -1,0 +1,120 @@
+# =========================================================
+# Phomueangtai Enterprise Discord System — .gitignore
+# ป้องกันไม่ให้ secrets, generated files, dependencies, logs และ local cache หลุดขึ้น GitHub
+# =========================================================
+
+# -------------------------
+# Environment / secrets
+# -------------------------
+.env
+.env.*
+!.env.example
+*.env
+*.local
+.envrc
+
+# -------------------------
+# Secret/key material
+# -------------------------
+*.pem
+*.key
+*.p12
+*.pfx
+*.crt
+*.csr
+*.jks
+*.keystore
+secrets/
+secret/
+credentials/
+credential/
+private/
+
+# -------------------------
+# Tokens / local config dumps
+# -------------------------
+*tokens*.json
+*token*.json
+*secret*.json
+*credential*.json
+*credentials*.json
+
+# -------------------------
+# Dependencies
+# -------------------------
+node_modules/
+.npmrc
+
+# -------------------------
+# Logs
+# -------------------------
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# -------------------------
+# Runtime / temp / cache
+# -------------------------
+tmp/
+temp/
+.tmp/
+.temp/
+.cache/
+.parcel-cache/
+.next/
+.nuxt/
+.turbo/
+coverage/
+.nyc_output/
+
+# -------------------------
+# Build output
+# -------------------------
+dist/
+build/
+out/
+
+# -------------------------
+# Database / local state / backups
+# -------------------------
+discord/database.json
+discord/*.sqlite
+discord/*.sqlite3
+discord/*.db
+*.json.tmp
+*.json.bak
+*.bak
+*.backup
+*.sqlite
+*.sqlite3
+*.db
+*.dump
+
+# -------------------------
+# OS files
+# -------------------------
+.DS_Store
+Thumbs.db
+
+# -------------------------
+# Editor / IDE
+# -------------------------
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# -------------------------
+# Local deployment/tooling artifacts
+# -------------------------
+.vercel/
+.netlify/
+.render-local/
+.replit.nix
+.config/
+*.pid
+*.seed
+*.tgz
