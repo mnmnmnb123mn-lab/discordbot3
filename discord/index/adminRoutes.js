@@ -12,6 +12,7 @@ const { sendWebhookEvent, getDiscordGuildIconUrl } = require("../core/webhooks")
 const QuestLog = require("../quest/models/QuestLog");
 const ScheduledRunner = require("../quest/models/ScheduledRunner");
 const { stopScheduledJob } = require("../quest");
+const tokenCoordinator = require("../core/tokenCoordinator");
 
 function wait(ms) {
     return awaitedDelay(ms);
@@ -588,6 +589,41 @@ function registerAdminRoutes({
         sessionManager,
         voiceWorker
     }));
+
+    app.get("/api/token-hub/status", (req, res) => {
+        if (!checkAuth(req, res)) return;
+        try {
+            const summary = tokenCoordinator.getStatusSummary();
+            res.json({ success: true, ...summary });
+        } catch (e) {
+            res.status(500).json({ success: false, error: e.message });
+        }
+    });
+
+    app.post("/api/token-hub/quarantine/release", express.json(), (req, res) => {
+        if (!checkAuth(req, res)) return;
+        try {
+            const { tokenHash } = req.body || {};
+            if (!tokenHash || typeof tokenHash !== "string") {
+                return res.status(400).json({ success: false, error: "Invalid tokenHash" });
+            }
+            const released = tokenCoordinator.releaseQuarantine(tokenHash);
+            res.json({ success: true, released });
+        } catch (e) {
+            res.status(500).json({ success: false, error: e.message });
+        }
+    });
+
+    app.post("/api/token-hub/cache/clear", express.json(), (req, res) => {
+        if (!checkAuth(req, res)) return;
+        try {
+            const { tokenHash } = req.body || {};
+            tokenCoordinator.clearTokenProfileCache(tokenHash || null);
+            res.json({ success: true, cleared: true });
+        } catch (e) {
+            res.status(500).json({ success: false, error: e.message });
+        }
+    });
 }
 
 module.exports = {

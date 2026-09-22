@@ -12,9 +12,16 @@ const crypto = require('node:crypto');
  * 3. Token checking and validation workflows
  */
 class TokenCoordinator {
-    constructor() {
-        this.tokenStates = new Map(); // tokenHash -> { voice: null, quest: null, lastActivity: number }
+    constructor(options = {}) {
+        this.tokenStates = new Map(); // tokenHash -> { voice: null, quest: null, quarantine: null, rateLimiter: { tokens, lastRefill }, lastActivity: number }
         this.tokenLocks = new Map();  // tokenHash -> Promise (FIFO mutex queue)
+        this.subsystems = new Map();  // name -> { onTokenQuarantined, onTokenActive }
+        this.profileCache = new Map(); // tokenHash -> { profile, cachedAt, expiresAt }
+        this.rateLimitConfig = {
+            capacity: Number.isFinite(options.capacity) ? options.capacity : 4,
+            refillRatePerSec: Number.isFinite(options.refillRatePerSec) ? options.refillRatePerSec : 2
+        };
+        this.startTime = Date.now();
     }
 
     /**
@@ -36,6 +43,11 @@ class TokenCoordinator {
             state = {
                 voice: null,
                 quest: null,
+                quarantine: null,
+                rateLimiter: {
+                    tokens: this.rateLimitConfig.capacity,
+                    lastRefill: Date.now()
+                },
                 lastActivity: Date.now()
             };
             this.tokenStates.set(tokenHash, state);
@@ -74,7 +86,7 @@ class TokenCoordinator {
         if (state) {
             state.voice = null;
             state.lastActivity = Date.now();
-            if (!state.quest) {
+            if (!state.quest && !state.quarantine) {
                 this.tokenStates.delete(hash);
             }
         }
@@ -131,7 +143,7 @@ class TokenCoordinator {
         if (state) {
             state.quest = null;
             state.lastActivity = Date.now();
-            if (!state.voice) {
+            if (!state.voice && !state.quarantine) {
                 this.tokenStates.delete(hash);
             }
         }
@@ -222,11 +234,320 @@ class TokenCoordinator {
     }
 
     /**
+     * Register a subsystem with the coordinator to receive lifecycle events
+     * @param {{ name: string, onTokenQuarantined?: (tokenHash: string, reason: string, state: object) => void, onTokenActive?: (tokenHash: string, state: object) => void }} config
+     */
+    registerSubsystem(config) {
+        if (!config?.name || typeof config.name !== 'string') {
+            throw new TypeError('registerSubsystem requires a valid string name');
+        }
+        this.subsystems.set(config.name, {
+            onTokenQuarantined: typeof config.onTokenQuarantined === 'function' ? config.onTokenQuarantined : null,
+            onTokenActive: typeof config.onTokenActive === 'function' ? config.onTokenActive : null
+        });
+    }
+
+    /**
+     * Unregister a subsystem
+     * @param {string} name
+     * @returns {boolean}
+     */
+    unregisterSubsystem(name) {
+        if (!name) return false;
+        return this.subsystems.delete(String(name));
+    }
+
+    /**
+     * Acquire a rate limit slot for a token using adaptive leaky bucket
+     * @param {string} tokenHash
+     * @param {{ maxWaitMs?: number }} [options]
+     */
+    async _acquireRateLimitSlot(tokenHash, options = {}) {
+        if (!tokenHash) return;
+        const maxWaitMs = options.maxWaitMs ?? 15000;
+        const state = this._getOrCreateState(tokenHash);
+        const limiter = state.rateLimiter;
+        const now = Date.now();
+
+        // Refill tokens
+        const elapsedSec = (now - limiter.lastRefill) / 1000;
+        limiter.tokens = Math.min(
+            this.rateLimitConfig.capacity,
+            limiter.tokens + (elapsedSec * this.rateLimitConfig.refillRatePerSec)
+        );
+        limiter.lastRefill = now;
+
+        if (limiter.tokens >= 1) {
+            limiter.tokens -= 1;
+            return;
+        }
+
+        // Calculate needed wait time to refill 1 token
+        const needed = 1 - limiter.tokens;
+        const waitMs = Math.ceil((needed / this.rateLimitConfig.refillRatePerSec) * 1000);
+        if (waitMs > maxWaitMs) {
+            const err = new Error(`RATE_LIMIT_TIMEOUT: Token rate limit capacity exhausted (wait ${waitMs}ms > max ${maxWaitMs}ms)`);
+            err.code = 'RATE_LIMIT_TIMEOUT';
+            throw err;
+        }
+
+        // Micro-jitter to prevent thundering herd
+        const jitter = Math.floor(Math.random() * 8) + 2;
+        await new Promise((resolve) => setTimeout(resolve, waitMs + jitter));
+
+        limiter.tokens = Math.max(0, limiter.tokens - 1);
+        limiter.lastRefill = Date.now();
+    }
+
+    /**
+     * Execute an operation safely with token rate limiting, quarantine guard,
+     * and automatic 401 detection.
+     *
+     * @param {string} token
+     * @param {string} subsystem
+     * @param {() => Promise<any>} operation
+     * @param {{ maxWaitMs?: number }} [options]
+     * @returns {Promise<any>}
+     */
+    async executeWithToken(token, subsystem, operation, options = {}) {
+        if (typeof operation !== 'function') {
+            throw new TypeError('executeWithToken requires operation to be a function');
+        }
+        const hash = this.hashToken(token);
+        if (!hash) {
+            return operation();
+        }
+
+        if (this.isQuarantined(hash)) {
+            const details = this.getQuarantineDetails(hash);
+            const err = new Error(`TOKEN_QUARANTINED: Token is quarantined (${details?.reason || 'Invalid/Revoked'})`);
+            err.code = 'TOKEN_QUARANTINED';
+            err.quarantine = details;
+            throw err;
+        }
+
+        await this._acquireRateLimitSlot(hash, options);
+
+        try {
+            const result = await operation();
+            const state = this._getOrCreateState(hash);
+            state.lastActivity = Date.now();
+            return result;
+        } catch (err) {
+            const status = err?.status || err?.statusCode || err?.response?.status;
+            const msg = String(err?.message || '');
+            const is401 = status === 401 ||
+                msg.includes('401') ||
+                msg.toLowerCase().includes('unauthorized') ||
+                msg.toLowerCase().includes('invalid token') ||
+                err?.code === 'TOKEN_INVALID';
+
+            if (is401) {
+                this.quarantineToken(hash, `Detected by ${subsystem || 'unknown'}: ${msg || '401 Unauthorized'}`);
+            }
+            throw err;
+        }
+    }
+
+    /**
+     * Quarantine a token across the entire system
+     * @param {string} token
+     * @param {string} [reason]
+     * @returns {boolean}
+     */
+    quarantineToken(token, reason = 'Token Invalid or Revoked') {
+        const hash = this.hashToken(token);
+        if (!hash) return false;
+
+        const state = this._getOrCreateState(hash);
+        const now = Date.now();
+        state.quarantine = {
+            quarantinedAt: now,
+            reason: String(reason)
+        };
+        state.lastActivity = now;
+
+        // Invalidate cached profile
+        this.profileCache.delete(hash);
+
+        // Notify registered subsystems to gracefully clean up
+        for (const [subName, sub] of this.subsystems.entries()) {
+            if (typeof sub?.onTokenQuarantined === 'function') {
+                try {
+                    sub.onTokenQuarantined(hash, reason, state);
+                } catch {
+                    // Safe swallow to avoid cascade
+                }
+            }
+        }
+
+        // Send unified webhook notification if webhooks module is accessible
+        try {
+            const { sendAlertWebhook, WEBHOOK_SEVERITIES } = require('./webhooks');
+            if (typeof sendAlertWebhook === 'function') {
+                sendAlertWebhook({
+                    title: '🚨 Token Quarantined (โทเคนถูกกักกัน)',
+                    description: `ตรวจพบโทเคนหมดอายุหรือไม่ถูกต้อง ระบบได้ทำการกักกัน (Quarantine) และหยุดการทำงานของเซสชันที่เกี่ยวข้องอย่างปลอดภัย\n\n**Token Hash:** \`${hash.slice(0, 16)}...\`\n**เหตุผล:** ${reason}`,
+                    severity: WEBHOOK_SEVERITIES?.ERROR || 'ERROR',
+                    category: 'SECURITY'
+                }).catch(() => {});
+            }
+        } catch {
+            // Webhooks module not available in isolated unit tests
+        }
+
+        return true;
+    }
+
+    /**
+     * Release a token from quarantine
+     * @param {string} token
+     * @returns {boolean}
+     */
+    releaseQuarantine(token) {
+        const hash = this.hashToken(token);
+        if (!hash) return false;
+
+        const state = this.tokenStates.get(hash);
+        if (state) {
+            state.quarantine = null;
+            state.lastActivity = Date.now();
+            if (!state.voice && !state.quest) {
+                this.tokenStates.delete(hash);
+            }
+            return true;
+        }
+        return false;
+    }
+
+    /**
+     * Check if a token is currently quarantined
+     * @param {string} token
+     * @returns {boolean}
+     */
+    isQuarantined(token) {
+        const hash = this.hashToken(token);
+        return Boolean(this.tokenStates.get(hash)?.quarantine);
+    }
+
+    /**
+     * Get details of quarantine for a token
+     * @param {string} token
+     * @returns {{ quarantinedAt: number, reason: string } | null}
+     */
+    getQuarantineDetails(token) {
+        const hash = this.hashToken(token);
+        return this.tokenStates.get(hash)?.quarantine || null;
+    }
+
+    /**
+     * Cache a token profile in memory with a TTL
+     * @param {string} token
+     * @param {object} profile
+     * @param {number} [ttlMs] Default: 20 minutes
+     */
+    cacheTokenProfile(token, profile, ttlMs = 20 * 60 * 1000) {
+        const hash = this.hashToken(token);
+        if (!hash || !profile) return;
+
+        // Bounded pruning if cache grows over 2000 entries
+        if (this.profileCache.size > 2000) {
+            const now = Date.now();
+            for (const [k, v] of this.profileCache.entries()) {
+                if (v.expiresAt <= now) {
+                    this.profileCache.delete(k);
+                }
+            }
+        }
+
+        this.profileCache.set(hash, {
+            profile,
+            cachedAt: Date.now(),
+            expiresAt: Date.now() + ttlMs
+        });
+    }
+
+    /**
+     * Get cached token profile if present and not expired
+     * @param {string} token
+     * @returns {object | null}
+     */
+    getCachedTokenProfile(token) {
+        const hash = this.hashToken(token);
+        if (!hash) return null;
+
+        const entry = this.profileCache.get(hash);
+        if (!entry) return null;
+
+        if (entry.expiresAt <= Date.now()) {
+            this.profileCache.delete(hash);
+            return null;
+        }
+
+        return entry.profile;
+    }
+
+    /**
+     * Clear token profile cache (single token or all)
+     * @param {string} [token]
+     */
+    clearTokenProfileCache(token = null) {
+        if (token) {
+            this.profileCache.delete(this.hashToken(token));
+        } else {
+            this.profileCache.clear();
+        }
+    }
+
+    /**
+     * Get status summary for monitoring and Owner Dashboard API
+     * @returns {object}
+     */
+    getStatusSummary() {
+        const states = Array.from(this.tokenStates.entries());
+        const voiceSessions = states.filter(([_, s]) => Boolean(s.voice)).map(([hash, s]) => ({
+            tokenHash: hash,
+            guildId: s.voice.guildId,
+            channelId: s.voice.channelId,
+            sessionId: s.voice.sessionId,
+            activeAt: s.voice.activeAt
+        }));
+
+        const questSessions = states.filter(([_, s]) => Boolean(s.quest)).map(([hash, s]) => ({
+            tokenHash: hash,
+            questId: s.quest.questId,
+            mode: s.quest.mode,
+            startedAt: s.quest.startedAt
+        }));
+
+        const quarantinedTokens = states.filter(([_, s]) => Boolean(s.quarantine)).map(([hash, s]) => ({
+            tokenHash: hash,
+            reason: s.quarantine.reason,
+            quarantinedAt: s.quarantine.quarantinedAt
+        }));
+
+        return {
+            activeTokens: this.tokenStates.size,
+            voiceSessionsCount: voiceSessions.length,
+            voiceSessions,
+            questSessionsCount: questSessions.length,
+            questSessions,
+            quarantinedCount: quarantinedTokens.length,
+            quarantinedTokens,
+            cachedProfilesCount: this.profileCache.size,
+            registeredSubsystems: Array.from(this.subsystems.keys()),
+            uptimeMs: Date.now() - this.startTime
+        };
+    }
+
+    /**
      * Reset all internal states (useful for testing or full cleanup)
      */
     reset() {
         this.tokenStates.clear();
         this.tokenLocks.clear();
+        this.subsystems.clear();
+        this.profileCache.clear();
     }
 }
 

@@ -37,25 +37,27 @@ function sleep(ms, signal) {
 }
 
 async function discordFetch(token, path, options = {}, policy = {}) {
-    const { headers = {}, ...requestOptions } = options;
-    const method = String(requestOptions.method ?? 'GET').toUpperCase();
-    const requestPolicy = method === 'POST'
-        ? { ...policy, retryRateLimits: false }
-        : policy;
+    return tokenCoordinator.executeWithToken(token, 'questRunner', async () => {
+        const { headers = {}, ...requestOptions } = options;
+        const method = String(requestOptions.method ?? 'GET').toUpperCase();
+        const requestPolicy = method === 'POST'
+            ? { ...policy, retryRateLimits: false }
+            : policy;
 
-    const res = await fetchWithRetry(`${DISCORD_API}${path}`, {
-        ...requestOptions,
-        headers: { ...buildUserHeaders(token, path), ...headers }
-    }, requestPolicy);
+        const res = await fetchWithRetry(`${DISCORD_API}${path}`, {
+            ...requestOptions,
+            headers: { ...buildUserHeaders(token, path), ...headers }
+        }, requestPolicy);
 
-    if (res.status === 204) return { ok: true, status: 204 };
-    const text = await res.text();
-    let data;
-    try { data = JSON.parse(text); } catch { data = text; }
-    if (!res.ok) {
-        throw new DiscordApiError(res.status, path, data);
-    }
-    return data;
+        if (res.status === 204) return { ok: true, status: 204 };
+        const text = await res.text();
+        let data;
+        try { data = JSON.parse(text); } catch { data = text; }
+        if (!res.ok) {
+            throw new DiscordApiError(res.status, path, data);
+        }
+        return data;
+    });
 }
 
 const VIDEO_EVENTS  = new Set(['WATCH_VIDEO', 'WATCH_VIDEO_ON_MOBILE']);

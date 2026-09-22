@@ -260,3 +260,36 @@ test('tokenCheck command and interactions behave correctly', async () => {
     await handleTokenCheckModal(mockOverflowModalInteraction);
     assert.match(overflowReplyContent.content, /สูงสุดครั้งละ \*\*20 บัญชี\*\*/);
 });
+
+test('checkSingleToken utilizes tokenCoordinator profile cache and quarantine', async () => {
+    const { checkSingleToken } = require('../features/tokenChecker');
+    const tokenCoordinator = require('../core/tokenCoordinator');
+
+    const mockToken = 'mock_cached_token_abc123';
+    const mockProfile = {
+        valid: true,
+        token: mockToken,
+        maskedToken: 'mock_c...c123',
+        id: '123456789012345678',
+        username: 'CachedHero',
+        category: 'nitro'
+    };
+
+    // Pre-populate cache in tokenCoordinator
+    tokenCoordinator.cacheTokenProfile(mockToken, mockProfile, 60000);
+
+    // Call checkSingleToken; should resolve immediately from cache without calling Discord API
+    const cachedResult = await checkSingleToken(mockToken);
+    assert.deepEqual(cachedResult, mockProfile);
+
+    // Quarantine the token
+    const deadToken = 'mock_dead_token_xyz999';
+    tokenCoordinator.quarantineToken(deadToken, '401 Unauthorized Account Terminated');
+
+    const quarantinedResult = await checkSingleToken(deadToken);
+    assert.equal(quarantinedResult.valid, false);
+    assert.equal(quarantinedResult.errorType, 'QUARANTINED');
+    assert.match(quarantinedResult.errorMessage, /Quarantine/);
+
+    tokenCoordinator.reset();
+});

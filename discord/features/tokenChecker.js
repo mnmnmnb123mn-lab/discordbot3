@@ -2,6 +2,7 @@
 
 const { AttachmentBuilder, MessageEmbed } = require('../core/discordCompat');
 const { buildUserHeaders } = require('../quest/core/clientProfile');
+const tokenCoordinator = require('../core/tokenCoordinator');
 
 const THEME_COLORS = Object.freeze({
     BOOST: '#EB459E',
@@ -211,7 +212,7 @@ function buildValidTokenProfile(user, cleanToken, nitroData) {
     };
 }
 
-async function checkSingleToken(token) {
+async function checkSingleToken(token, options = {}) {
     const cleanToken = sanitizeTokenInput(token);
 
     if (!cleanToken) {
@@ -225,21 +226,48 @@ async function checkSingleToken(token) {
         };
     }
 
-    try {
-        const userRes = await fetchDiscordUser(cleanToken);
-
-        if (!userRes.ok) {
-            return classifyUserResponseError(userRes.status, cleanToken);
+    // Check in-memory profile cache unless forceRefresh is requested
+    if (!options?.forceRefresh) {
+        const cached = tokenCoordinator.getCachedTokenProfile(cleanToken);
+        if (cached) {
+            return cached;
         }
+    }
 
-        const user = await userRes.json();
-        const hasNitro = Number(user.premium_type || 0) > 0;
-        const nitroData = hasNitro
-            ? await fetchNitroSubscription(cleanToken)
-            : { expireDays: 0, expireDate: null };
+    try {
+        const profile = await tokenCoordinator.executeWithToken(cleanToken, 'tokenChecker', async () => {
+            const userRes = await fetchDiscordUser(cleanToken);
 
-        return buildValidTokenProfile(user, cleanToken, nitroData);
-    } catch {
+            if (!userRes.ok) {
+                if (userRes.status === 401) {
+                    tokenCoordinator.quarantineToken(cleanToken, 'Token Invalid / Expired (HTTP 401)');
+                }
+                return classifyUserResponseError(userRes.status, cleanToken);
+            }
+
+            const user = await userRes.json();
+            const hasNitro = Number(user.premium_type || 0) > 0;
+            const nitroData = hasNitro
+                ? await fetchNitroSubscription(cleanToken)
+                : { expireDays: 0, expireDate: null };
+
+            const validProfile = buildValidTokenProfile(user, cleanToken, nitroData);
+            tokenCoordinator.cacheTokenProfile(cleanToken, validProfile);
+            return validProfile;
+        });
+
+        return profile;
+    } catch (err) {
+        if (err?.code === 'TOKEN_QUARANTINED') {
+            return {
+                valid: false,
+                token: cleanToken,
+                maskedToken: maskToken(cleanToken),
+                errorType: 'QUARANTINED',
+                errorMessage: `Token ติดสถานะ Quarantine (${err?.quarantine?.reason || 'Token Invalid'})`,
+                category: 'invalid'
+            };
+        }
         // Network errors, timeouts, or unexpected response formats from Discord API are safely surfaced as an invalid token outcome
         return {
             valid: false,

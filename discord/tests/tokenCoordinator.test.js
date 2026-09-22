@@ -117,3 +117,120 @@ test('withTokenLock serializes operations on the same token in FIFO order', asyn
     await Promise.all([p1, p2, p3]);
     assert.deepEqual(executionOrder, [1, 2, 3]);
 });
+
+test('executeWithToken executes successfully and tracks token activity', async () => {
+    const token = 'token-exec-success';
+    let executed = false;
+
+    const res = await tokenCoordinator.executeWithToken(token, 'testSubsystem', async () => {
+        executed = true;
+        return { ok: true, data: 42 };
+    });
+
+    assert.equal(executed, true);
+    assert.deepEqual(res, { ok: true, data: 42 });
+    assert.equal(tokenCoordinator.isQuarantined(token), false);
+});
+
+test('executeWithToken catches HTTP 401, auto-quarantines token, and triggers subsystem hooks', async () => {
+    const token = 'token-exec-401';
+    let hookTriggered = false;
+    let hookTokenHash = null;
+    let hookReason = null;
+
+    tokenCoordinator.registerSubsystem({
+        name: 'mockVoice',
+        onTokenQuarantined: (hash, reason) => {
+            hookTriggered = true;
+            hookTokenHash = hash;
+            hookReason = reason;
+        }
+    });
+
+    await assert.rejects(async () => {
+        await tokenCoordinator.executeWithToken(token, 'mockVoice', async () => {
+            const err = new Error('401 Unauthorized: Invalid Token');
+            err.status = 401;
+            throw err;
+        });
+    }, /401/);
+
+    assert.equal(tokenCoordinator.isQuarantined(token), true);
+    assert.equal(hookTriggered, true);
+    assert.equal(hookTokenHash, tokenCoordinator.hashToken(token));
+    assert.match(hookReason, /401/);
+
+    // Subsequent call must be blocked immediately by quarantine guard
+    await assert.rejects(async () => {
+        await tokenCoordinator.executeWithToken(token, 'anotherSubsystem', async () => {
+            return 'should-not-run';
+        });
+    }, (err) => err.code === 'TOKEN_QUARANTINED');
+
+    // Releasing quarantine allows execution again
+    tokenCoordinator.releaseQuarantine(token);
+    assert.equal(tokenCoordinator.isQuarantined(token), false);
+
+    const afterRelease = await tokenCoordinator.executeWithToken(token, 'anotherSubsystem', async () => {
+        return 'now-it-runs';
+    });
+    assert.equal(afterRelease, 'now-it-runs');
+});
+
+test('token profile cache stores, retrieves, and handles TTL expiration and manual clearing', async () => {
+    const token = 'token-profile-cache';
+    const profile = { id: '123456789', username: 'TestUser', nitro: 'Nitro Basic' };
+
+    // Initially not cached
+    assert.equal(tokenCoordinator.getCachedTokenProfile(token), null);
+
+    // Cache with normal TTL
+    tokenCoordinator.cacheTokenProfile(token, profile, 60000);
+    assert.deepEqual(tokenCoordinator.getCachedTokenProfile(token), profile);
+
+    // Manual single token clear
+    tokenCoordinator.clearTokenProfileCache(token);
+    assert.equal(tokenCoordinator.getCachedTokenProfile(token), null);
+
+    // Cache with expired TTL
+    tokenCoordinator.cacheTokenProfile(token, profile, -100);
+    assert.equal(tokenCoordinator.getCachedTokenProfile(token), null);
+});
+
+test('getStatusSummary aggregates active tokens, voice, quest, and quarantine metrics', () => {
+    const tokenVoice = 'token-summary-voice';
+    const tokenQuest = 'token-summary-quest';
+    const tokenDead = 'token-summary-dead';
+
+    tokenCoordinator.registerVoiceActivity(tokenVoice, {
+        guildId: 'g1',
+        channelId: 'c1',
+        sessionId: 's1'
+    });
+
+    tokenCoordinator.notifyQuestStart(tokenQuest, { questId: 'quest-99' });
+    tokenCoordinator.quarantineToken(tokenDead, 'Expired token');
+
+    const summary = tokenCoordinator.getStatusSummary();
+    assert.equal(summary.activeTokens, 3);
+    assert.equal(summary.voiceSessionsCount, 1);
+    assert.equal(summary.questSessionsCount, 1);
+    assert.equal(summary.quarantinedCount, 1);
+    assert.equal(summary.quarantinedTokens[0].reason, 'Expired token');
+});
+
+test('rate limiter allows burst within capacity without delay', async () => {
+    const token = 'token-burst-test';
+    const start = Date.now();
+
+    // Fire 3 immediate requests (within capacity of 4)
+    await Promise.all([
+        tokenCoordinator.executeWithToken(token, 'sub1', async () => 1),
+        tokenCoordinator.executeWithToken(token, 'sub2', async () => 2),
+        tokenCoordinator.executeWithToken(token, 'sub3', async () => 3)
+    ]);
+
+    const elapsed = Date.now() - start;
+    // Burst should complete in under 50ms without waiting for refill
+    assert.ok(elapsed < 100, `Burst took too long: ${elapsed}ms`);
+});

@@ -77,6 +77,28 @@ const channelLock = require("./channelLock");
 
 const ensureSessionFlights = new Map();
 
+tokenCoordinator.registerSubsystem({
+    name: "voiceWorker",
+    onTokenQuarantined: (tokenHash, reason) => {
+        try {
+            const allSessions = sessionManager.getAllSessions();
+            if (allSessions && typeof allSessions.entries === "function") {
+                for (const [id, s] of allSessions.entries()) {
+                    const h = getSessionTokenHash(id, s);
+                    if (h === tokenHash) {
+                        console.warn(`[WORKER] 🚨 Stopping voice session ${sanitizeLogText(id)} due to token quarantine: ${reason}`);
+                        stopSession(id, { reason: `Token Quarantined: ${reason}` }).catch((err) => {
+                            console.error(`[WORKER] Failed to stop quarantined session ${id}:`, err?.message || err);
+                        });
+                    }
+                }
+            }
+        } catch {
+            // safe swallow
+        }
+    }
+});
+
 
 const {
     getVoiceGroup,
@@ -202,13 +224,16 @@ function isLoginGenerationActive(current, session, loginGeneration, isShuttingDo
     return current.loginGeneration === loginGeneration;
 }
 
-async function handleLoginFailure(err, { newClient, sessionId, session, loginGeneration, markInvalid, disposeClient }) {
+async function handleLoginFailure(err, { newClient, sessionId, session, tokenHash, loginGeneration, markInvalid, disposeClient }) {
     if (session.loginGeneration === loginGeneration) session.loginGeneration = null;
     const errorDetail = sanitizeLifecycleError(err?.message || err?.code || "UNKNOWN");
     console.error(`[WORKER] ❌ Login failed for ${sanitizeLogText(sessionId)}: ${errorDetail}. Destroying ghost client.`);
     try { disposeClient(newClient, "login-failure"); } catch {}
     if (err.code === "OPERATION_QUEUE_FULL") throw new Error("VOICE_QUEUE_BUSY");
     if (isInvalidTokenError(err)) {
+        if (tokenHash) {
+            tokenCoordinator.quarantineToken(tokenHash, `Voice login rejected: ${errorDetail}`);
+        }
         await markInvalid(sessionId, "login_rejected");
         throw new Error("TOKEN_INVALID");
     }
@@ -260,7 +285,7 @@ async function performClientLogin(newClient, sessionId, session, tokenHash, toke
         session.loginGeneration = null;
         putClientInPool(sessionId, session, tokenHash, newClient);
     } catch (err) {
-        await handleLoginFailure(err, { newClient, sessionId, session, loginGeneration, markInvalid, disposeClient });
+        await handleLoginFailure(err, { newClient, sessionId, session, tokenHash, loginGeneration, markInvalid, disposeClient });
     }
 }
 
@@ -359,6 +384,10 @@ async function startSession(sessionId, tokenString, options = {}) {
         assertVoiceStartupAllowed(sessionId, session, "pre_login", startupDeps);
         tokenHash = getSessionTokenHash(sessionId, session);
         if (!tokenHash) throw new Error("TOKEN_DECRYPTION_FAILED");
+        if (tokenCoordinator.isQuarantined(tokenHash)) {
+            const q = tokenCoordinator.getQuarantineDetails(tokenHash);
+            throw new Error(`TOKEN_QUARANTINED: Cannot start voice session, token is quarantined (${q?.reason || 'Invalid'})`);
+        }
 
         /*
          * Client ownership is token+guild scoped. Same token in different guilds
