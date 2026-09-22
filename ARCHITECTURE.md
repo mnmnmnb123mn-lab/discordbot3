@@ -1,25 +1,33 @@
 # Architecture
 
-Last implementation verification: 2026-07-23 (`ttt`).
+Last implementation verification: 2026-09-22.
 
 ## 1. System shape
 
 Phomueangtai runs as one deployable Node.js 24.18 LTS application:
 
 ```text
-                         one HTTPS origin
-                                │
-                    Express on PORT || 3000
-                     /                    \
-           Owner PIN dashboard       public OAuth callback
-                 │                           │
-                 └──────────┬────────────────┘
-                            │
-                    shared Mongoose connection
-                            │
-                         MongoDB
-                            │
-              Discord bot + voice/session workers
+                                 one HTTPS origin
+                                        │
+                            Express on PORT || 3000
+                             /                    \
+                   Owner PIN dashboard       public OAuth callback
+                         │                           │
+                         └──────────┬────────────────┘
+                                    │
+                            shared Mongoose connection
+                                    │
+                                 MongoDB
+                                    │
+        ┌───────────────────────────┼───────────────────────────┐
+        │                           │                           │
+   Discord bot             Master Token Hub             Memory Monitor
+(discord.js v14)          (Token Coordinator)           (V8 / Leak Guard)
+        │                           │                           │
+        └───────────────────────────┼───────────────────────────┘
+                                    │
+                        Voice/Session workers
+                      (discord.js-selfbot-v13)
 ```
 
 The runtime is started only by:
@@ -96,15 +104,19 @@ continuation payloads when one Discord message cannot hold the full event.
 │   ├── commands.js
 │   ├── commands/                 slash command modules
 │   ├── core/                     env, HTTP, feature flags, safe logging, webhooks
+│   │   └── tokenCoordinator.js   master token coordinator, rate-limit backoff, quarantine lifecycle
 │   ├── dm/                       shared DM design, volatile outage recovery, durable outbox, and retry
 │   ├── features/                 protection, role button, Join Campaign
 │   ├── guards/                   command/dashboard guards
 │   ├── index/                    Owner web/API modules and lifecycle helpers
+│   │   ├── adminRoutes.js        Token Hub APIs, scheduled quests, command audit and toggles
+│   │   ├── memoryMonitor.js      V8 heap pressure, memory trend tracking, emergency cleanup
+│   │   └── system.js             Crash shield, transient gateway error classifier, cron jobs
 │   ├── logging/                  moderation cases and reconciliation
 │   ├── sessions/                 voice session helpers
 │   ├── quest/                    Discord Quest automation subsystem (engine, crypto, DM throttler, logs)
 │   ├── voiceWorker.js
-│   ├── voiceWorker/              voice worker implementation
+│   ├── voiceWorker/              voice worker implementation (lean caching, AutoDeaf, Natural timers)
 │   ├── verification/
 │   │   ├── runtime.js            mounts routes/assets into the main Express app
 │   │   ├── lifecycle.js          migration, history, snapshots, retention, and token refresh
@@ -117,13 +129,37 @@ continuation payloads when one Discord message cannot hold the full event.
 │   │   ├── utils/                Discord API, crypto, state, IP/device, serializers
 │   │   ├── views/                public callback HTML
 │   │   └── public/               verification CSS/browser JavaScript
-│   └── tests/                    Node built-in tests
+│   └── tests/                    Node built-in tests (500 passing tests)
 ├── verification-tests/          Node built-in tests with focused expect/mock adapters
 ├── scripts/                     guards, diagnostics, additive migration
 ├── docs/                        focused operational notes
 ├── render.yaml                  one root Web Service
 └── package.json                 single dependency and command manifest
 ```
+
+### Master Token Coordinator & Concurrency Hub
+
+Located at `discord/core/tokenCoordinator.js`, the Token Coordinator provides centralized governance for all user tokens across the runtime:
+- **Subsystem Registration**: Subsystems (`voiceWorker`, `quest`, etc.) register callbacks for token quarantine events.
+- **Activity Locking**: Tracks in-flight tasks per token to prevent conflicting concurrent API operations.
+- **Rate-Limit Backoff (429 Handling)**: Detects HTTP 429 response headers and applies exponential backoff per token and globally, preventing Discord IP and token bans.
+- **Quarantine Lifecycle**: If a token receives a 401 Unauthorized or explicit gateway invalidation, it enters quarantined state, firing notifications that automatically halt voice connections and quest runners without terminating the bot process.
+- **Dashboard Token Hub UI**: Exposed directly on the Owner Dashboard (`/`) and via `/api/token-hub/*` with manual release and profile cache clearing.
+
+### Transient Gateway Error Resilience & Crash Shield
+
+Located at `discord/index/system.js`, the Crash Shield features an intelligent transient gateway classifier (`isTransientGatewayError`):
+- Detects Cloudflare 520–525 and 502–504 handshake responses.
+- Detects socket resets (`ECONNRESET`, `ETIMEDOUT`, `EAI_AGAIN`, `ENOTFOUND`, `ECONNREFUSED`).
+- Detects WebSocket timeout and premature closure during connection establishment.
+- Rather than executing fatal shutdown (`process.exit(1)`), the Crash Shield logs a warning, alerts the operations webhook, and keeps the Node process running so Discord self-clients and bot shards can automatically execute `shardResume`.
+
+### Voice Lean Mode & Memory Monitoring
+
+- **Voice Lean Mode (`VOICE_LEAN_MODE`)**:
+  Prunes non-target guild channels, non-target members, and voice states while locking roles, emojis, presences, and messages to strict bounded limits. When Discord sends a full guild dispatch, memory briefly spikes and is immediately collected back to target-channel footprint (~13 channels).
+- **Lightweight Memory Monitor (`discord/index/memoryMonitor.js`)**:
+  Periodically samples V8 heap statistics, RSS, external memory, and active handles. Logs memory trends without mutating runtime architecture and triggers volatile cache sweeps if heap exceeds safety thresholds. Baseline production RSS remains ~210–230MB under 13+ active voice sessions.
 
 `discord/systemProvider.js` and the entire `discord/systemProvider/` tree are
 owner-locked. Their implementation details are intentionally not documented.
@@ -450,6 +486,16 @@ field or collection.
 
 ## 9. Deployment
 
+### Dedicated Discord Bot Hosting (Pterodactyl / VPS / Node container)
+
+```text
+Startup command: npm start
+Node.js engine:  >= 24.18.0 LTS (npm >= 12)
+Memory budget:   512MB - 1GB allocated (production RSS baseline is ~210–230MB across 13+ concurrent sessions)
+Environment:     Continuous 24/7 background process (no sleep or idle spin-down required)
+Web port:        process.env.PORT (or 3000)
+```
+
 ### inwcloud
 
 ```text
@@ -497,17 +543,19 @@ Do not commit real values.
 
 ## 11. Validation
 
-```text
-npm run check:protected
-npm run check:all
-npm run check:scripts
-npm run check:memory-guards
-npm run check:memory-trend < diagnostics.json
-npm run test:discord
-npm run test:voice
-npm run test:verification
+The project enforces zero-regression quality gates with 100% pass baseline across 500 automated tests:
+
+```bash
+npm run check
+npm test
+npm run check:coverage
 npm audit --audit-level=high
 ```
+
+Individual test suites:
+- `npm run test:discord`: Discord bot commands, lifecycle, crash shield, token hub, and admin APIs.
+- `npm run test:voice`: Voice worker, session manager, and voice cache tests.
+- `npm run test:verification`: Single-process verification runtime and OAuth contracts.
 
 CI installs only the root lockfile, runs all three suites, checks the protected
 paths, and audits the root dependency graph.

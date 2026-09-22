@@ -1,6 +1,6 @@
 # Project Context
 
-Last verified against the owner requirements: 2026-07-27 (`ttt.1` release candidate).
+Last verified against the owner requirements: 2026-09-22.
 
 ## Binding owner intent
 
@@ -17,8 +17,12 @@ Phomueangtai is a personal multi-tool Discord bot. It is not a
 verification-only project. The same runtime contains:
 
 - Discord bot and slash commands
-- voice/session management
-- Dashboard ควบคุมบอท
+- voice/session management with Voice Lean caching and AutoDeaf / Natural timers
+- Master Token Coordinator (Token Hub) with activity locking, 429 backoff, and quarantine
+- Discord Quest automation subsystem (interactive panel, recurring scheduler, admission control)
+- Dashboard ควบคุมบอท with Token Hub controller and Quest monitoring
+- Transient Gateway Crash Shield protecting against Cloudflare and gateway socket blips
+- Memory monitoring and leak prevention
 - Owner-only verification management
 - public member OAuth2 verification
 - MongoDB persistence
@@ -73,6 +77,10 @@ booleans only; detailed diagnostics remain behind Owner authentication.
 | Runtime orchestration | `discord/index.js`, `discord/index/system.js` |
 | Main HTTP APIs and health | `discord/index/server.js` |
 | Bot-control pages/auth | `discord/index/views.js`, `discord/index/auth.js` |
+| Token Hub & Admin routes | `discord/index/adminRoutes.js` |
+| Token Coordinator | `discord/core/tokenCoordinator.js` |
+| Memory Monitor | `discord/index/memoryMonitor.js` |
+| Quest automation subsystem | `discord/quest/` |
 | Owner verification bridge | `discord/index/verifyOwner.js` |
 | Persistence | `discord/sessionManager.js` |
 | Commands | `discord/commands.js`, `discord/commands/` |

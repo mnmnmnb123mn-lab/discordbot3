@@ -1,6 +1,19 @@
 # Changelog
 
-## [Unreleased] - Unified Bot And Verification Runtime 2026-07-16
+## [Unreleased] - 2026-09-22
+
+- Prevented Crash Shield from terminating the process on transient Cloudflare and Discord gateway errors (`5db3d2b`):
+  - Implemented `isTransientGatewayError` in `discord/index/system.js` to recognize Cloudflare 520–525 / 502–504 responses, WebSocket handshake timeouts, and gateway network socket blips (`ECONNRESET`, `ETIMEDOUT`, `EAI_AGAIN`, `ENOTFOUND`, `ECONNREFUSED`).
+  - Intercepted these transient errors in `uncaughtException` and `unhandledRejection` handlers: logs a warning, alerts the operational webhook, and preserves the process so Discord clients can execute automatic `shardResume` instead of dropping all active voice sessions.
+  - Added unit test suite in `discord/tests/systemCrashShield.test.js` validating that non-transient runtime exceptions (e.g. `TypeError`, MongoDB errors) continue to trigger graceful termination as expected.
+
+- Implemented Master Token Coordinator (Token Hub) and Concurrency Controller (`81caa28`, `19643bf`):
+  - Core subsystem (`discord/core/tokenCoordinator.js`) providing centralized concurrency control across voice sessions, quest runners, and profile lookups.
+  - Dynamic subsystem registration: allows subsystems to register lifecycle hooks for quarantine events.
+  - Automatic HTTP 429 rate-limit backoff: intercepts rate-limit responses and enforces per-token and global cooldowns.
+  - Quarantine lifecycle: automatically quarantines invalid tokens (HTTP 401 / gateway invalidated) and signals registered subsystems to immediately stop tasks, protecting tokens and IPs from repeat bans.
+  - Added Owner Dashboard Token Hub UI card (`/`) and REST management APIs (`GET /api/token-hub/status`, `POST /api/token-hub/quarantine/release`, `POST /api/token-hub/cache/clear`).
+  - Pass raw token into `runTask` and tighten 401 detection to prevent false quarantine triggers.
 
 - Expanded Discord Quest automation subsystem to full parity with reference architecture:
   - Command: `/quest panel` (interactive panel with Start Now, Auto Daily, and Stop buttons).

@@ -54,6 +54,9 @@ and the HTTP server.
 | `GET /api/quest-logs` | Owner PIN | Recent Quest execution logs and status data |
 | `GET /api/quest-scheduled` | Owner PIN | Active Auto Daily scheduled quest runners |
 | `DELETE /api/quest-scheduled/:id` | Owner PIN | Terminate and remove a scheduled quest runner |
+| `GET /api/token-hub/status` | Owner PIN | Master Token Coordinator status, active token activities, backoff, and quarantine summary |
+| `POST /api/token-hub/quarantine/release` | Owner PIN | Release a quarantined token by hash |
+| `POST /api/token-hub/cache/clear` | Owner PIN | Flush token profile cache |
 | `GET /ping` | Public | Lightweight listener liveness |
 | `GET /health` | Public | Combined MongoDB, Discord, slash-command, voice, and verification readiness |
 | `GET /ready` | Public | Alias of the combined `/health` readiness response |
@@ -245,6 +248,16 @@ Discord Developer Portal redirect URI:
 https://YOUR-DOMAIN/auth/callback
 ```
 
+For Dedicated Discord Bot Hosting (Pterodactyl / VPS / Node container):
+
+```text
+Startup command: npm start
+Node.js engine:  >= 24.18.0 LTS (npm >= 12)
+Memory budget:   512MB - 1GB allocated (production RSS baseline is ~210–230MB across 13+ concurrent sessions)
+Environment:     Continuous 24/7 background process (no sleep or idle spin-down required)
+Web port:        process.env.PORT (or 3000)
+```
+
 For inwcloud:
 
 ```text
@@ -253,6 +266,17 @@ Internal port:   PORT (or 3000)
 ```
 
 `render.yaml` describes one root Web Service with `npm start` and uses `/ping` for host liveness. `/health` and `/ready` remain the combined dependency-readiness responses used by monitoring and diagnostics.
+
+## Operational Resilience & Architecture Guards
+
+- **Master Token Coordinator (Token Hub)** (`discord/core/tokenCoordinator.js`):
+  Centralized concurrency coordinator with dynamic subsystem registration (`voiceWorker`, `quest`, etc.), per-token activity locking, automatic HTTP 429 rate-limit backoff, token quarantine lifecycle, and profile caching. When a token is rejected or invalid, registered subsystems are alerted automatically to halt voice/quest tasks and prevent API ban.
+- **Transient Gateway Crash Shield** (`discord/index/system.js`):
+  Specialized error classifier (`isTransientGatewayError`) intercepting Cloudflare 520–525 / 502–504 handshake responses, WebSocket timeouts (`Opening handshake has timed out`), and gateway network socket blips (`ECONNRESET`, `ETIMEDOUT`). Instead of terminating the bot process, Crash Shield preserves the runtime, keeping voice connections alive and allowing Discord WebSockets to execute automatic `shardResume`.
+- **Voice Lean Mode & Memory Monitoring** (`discord/index/memoryMonitor.js`):
+  Periodic V8 heap tracking and memory trend analysis. Voice clients apply aggressive lean cache pruning (`VOICE_LEAN_MODE`), purging non-target guild channels, members, and states while keeping memory steady (~101–112MB heap used, ~220MB RSS for 13 concurrent voice sessions).
+- **Background Timers & Auto-Healing**:
+  AutoDeaf and Natural blink automation run 1:1 paired timers per session, executing periodic voice presence refresh with zero timer or ghost-client leaks.
 
 After deploy, run the single-port smoke helper from a trusted machine:
 
@@ -295,6 +319,8 @@ migration but does not replace an external backup for whole-database loss.
 
 ## Validation
 
+The project enforces zero-regression quality gates with 100% pass baseline across 500 automated tests:
+
 ```bash
 npm run check
 npm test
@@ -302,12 +328,23 @@ npm run check:coverage
 npm audit --audit-level=high
 ```
 
-Individual suites:
+`npm run check` runs 9 automated safety and compatibility gates:
+1. `check:protected`: Verifies tracked digest manifest for 7 owner-locked files.
+2. `check:protected-syntax`: Node syntax scan on protected files.
+3. `check:discord14`: Compatibility AST scan across 187 production JS files ensuring Discord.js v14 invariants.
+4. `check:secrets`: Secret leak detection for credentials, keys, or private tokens.
+5. `check:all`: Syntax scan on all non-protected JavaScript files.
+6. `check:scripts`: Syntax scan on maintenance and diagnostic scripts.
+7. `check:memory-guards`: Bounded memory guard pattern verification.
+8. `check:runtime-safety`: CSRF, session persistence, voice identity, readiness, and Discord permission guards.
+9. `check:mongoose9`: AST compatibility checks for MongoDB Mongoose 9.
+
+Individual test suites (500 tests across 63 suites):
 
 ```bash
-npm run test:discord
-npm run test:voice
-npm run test:verification
+npm run test:discord       # Discord bot commands, lifecycle, crash shield, token hub, and admin APIs
+npm run test:voice         # Voice worker, session manager, and voice cache tests
+npm run test:verification  # Single-process verification runtime and OAuth contracts
 ```
 
 `discord/systemProvider.js` and every file under `discord/systemProvider/` are
