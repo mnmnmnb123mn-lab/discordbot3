@@ -42,7 +42,7 @@ function getElevatedMentionRequirement(interaction) {
     let content = "";
     if (commandName === "say") {
         content = readCommandOption(interaction, "message");
-    } else if (commandName === "embed" || commandName === "announce") {
+    } else if (commandName === "embed") {
         content = readCommandOption(interaction, "content");
     }
 

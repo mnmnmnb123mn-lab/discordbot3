@@ -29,7 +29,6 @@ async function handle(interaction) {
     const cmd = interaction.commandName;
     if (cmd === "say")        return handleSay(interaction);
     if (cmd === "embed")      return handleEmbed(interaction);
-    if (cmd === "announce")   return handleEmbedCreate(interaction);
     if (cmd === "copy-emojis") return handleSteal(interaction);
 }
 
@@ -151,7 +150,7 @@ async function validateEmbedCreateTarget(interaction) {
 }
 
 function buildEmbedCreatePayload(interaction) {
-    const rawDescription = interaction.options.getString("description") || interaction.options.getString("message");
+    const rawDescription = interaction.options.getString("description");
     if (!rawDescription?.trim()) return null;
 
     const description = sanitizeUserMessage(rawDescription.replaceAll(String.raw`\n`, "\n"), { maxLength: 4096 });
@@ -170,7 +169,7 @@ function buildEmbedCreatePayload(interaction) {
         timestamp: interaction.options.getBoolean("timestamp")
     });
 
-    const buttonLabel = interaction.options.getString("button_label") || interaction.options.getString("button_text");
+    const buttonLabel = interaction.options.getString("button_label");
     const buttonUrl = interaction.options.getString("button_url");
 
     const components = buildEmbedComponents(buttonLabel, buttonUrl);
@@ -188,7 +187,7 @@ async function handleEmbedCreate(interaction) {
     const targetChannel = await validateEmbedCreateTarget(interaction);
     if (!targetChannel) return;
 
-    const buttonLabel = interaction.options.getString("button_label") || interaction.options.getString("button_text");
+    const buttonLabel = interaction.options.getString("button_label");
     const buttonUrl = interaction.options.getString("button_url");
 
     if (buttonLabel && !buttonUrl) {
@@ -748,11 +747,8 @@ module.exports = {
     _test: {
         handleSay,
         handleEmbedCreate,
-        handleAnnounce: handleEmbedCreate,
         buildEmbedCreateEmbed,
-        buildAnnouncementEmbed: buildEmbedCreateEmbed,
         buildEmbedComponents,
-        buildAnnouncementComponents: buildEmbedComponents,
         validateEmbedCreateTarget,
         buildEmbedCreatePayload,
         isValidHttpUrl,

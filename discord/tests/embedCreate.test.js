@@ -33,7 +33,7 @@ test("embed create resolveEmbedColor resolves hex and fallbacks", () => { // NOS
 test("embed create buildEmbedCreateEmbed constructs rich embed matching all options", () => { // NOSONAR -- node:test assertions are not recognized by Sonar S2699.
     const embed = buildEmbedCreateEmbed({
         description: "Hello world\nSecond line",
-        title: "Announcement Title",
+        title: "Embed Title",
         colorHex: "#123456",
         url: "https://example.com/news",
         thumbnailUrl: "https://example.com/thumb.png",
@@ -43,7 +43,7 @@ test("embed create buildEmbedCreateEmbed constructs rich embed matching all opti
     }).toJSON();
 
     assert.equal(embed.description, "Hello world\nSecond line");
-    assert.equal(embed.title, "Announcement Title");
+    assert.equal(embed.title, "Embed Title");
     assert.equal(embed.url, "https://example.com/news");
     assert.equal(embed.color, 0x123456);
     assert.equal(embed.thumbnail.url, "https://example.com/thumb.png");
@@ -101,7 +101,7 @@ test("embed create handleEmbedCreate sends embed to specified target channel", a
             getChannel: name => (name === "channel" ? targetChannel : null),
             getString: name => {
                 const map = {
-                    description: "Custom Announcement Message",
+                    description: "Custom Embed Description",
                     title: "Special Update",
                     content: "@everyone Check this out",
                     button_label: "Join Now",
