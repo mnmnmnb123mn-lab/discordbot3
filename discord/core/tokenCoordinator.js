@@ -480,7 +480,6 @@ class TokenCoordinator extends EventEmitter {
 
                 // Check HTTP 401 Unauthorized / Invalid Token
                 const is401 = status === 401 ||
-                    msg.includes('401') ||
                     msg.toLowerCase().includes('unauthorized') ||
                     msg.toLowerCase().includes('invalid token') ||
                     err?.code === 'TOKEN_INVALID';
@@ -517,7 +516,7 @@ class TokenCoordinator extends EventEmitter {
         const hash = this.hashToken(token);
 
         if (hash) {
-            this.acquireActivity(hash, subsystem, options?.metadata || {});
+            this.acquireActivity(token, subsystem, options?.metadata || {});
         }
 
         let timeoutTimer;
@@ -537,7 +536,7 @@ class TokenCoordinator extends EventEmitter {
         } finally {
             if (timeoutTimer) clearTimeout(timeoutTimer);
             if (hash) {
-                this.releaseActivity(hash, subsystem);
+                this.releaseActivity(token, subsystem);
             }
         }
     }
