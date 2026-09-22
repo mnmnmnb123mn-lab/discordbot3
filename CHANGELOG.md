@@ -2,6 +2,12 @@
 
 ## [Unreleased] - 2026-09-22
 
+- Added `auto_daily` toggle option to `/quest panel`:
+  - Added optional boolean option `auto_daily` (default: `false`) to the `/quest panel` slash command.
+  - When omitted or `false`, the panel renders 2 primary control buttons: `[ 🚀 START NOW ]` and `[ 🛑 STOP ]`.
+  - When explicitly set to `true`, the panel renders all 3 buttons: `[ 🚀 START NOW ]`, `[ 🤖 AUTO DAILY ]`, and `[ 🛑 STOP ]`.
+  - Updated command registry with recursive option validation, command handler, and unit tests in `discord/tests/questSubsystem.test.js` and `discord/tests/registry.test.js`.
+
 - Enhanced `/re-role` sweep reliability and upgraded UX/UI:
   - Implemented seamless cache fallback in `executeSweep` (`discord/commands/roleSweep.js`) when fresh member fetch fails due to Discord Gateway rate limits or timeouts, preventing false aborts while strictly verifying role assignment fingerprints.
   - Eliminated redundant plain-text summary content above the preview embed in `buildPreviewPayload`, rendering a clean, uncluttered embed.

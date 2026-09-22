@@ -61,7 +61,8 @@ const {
 const {
     handleQuestCommand,
     handleQuestButton,
-    handleQuestSelect
+    handleQuestSelect,
+    buildQuestPanelRow
 } = require('../commands/quest');
 const {
     questSummaryTone,
@@ -263,6 +264,53 @@ test('handleQuestCommand enforces bot owner check for panel', async () => {
     assert.ok(ownerReply.components && ownerReply.components.length > 0);
     assert.ok(ownerReply.files && ownerReply.files.length > 0);
     assert.equal(ownerReply.embeds[0].data.image.url, 'attachment://quest-banner.gif');
+    const defaultButtons = ownerReply.components[0].components;
+    assert.equal(defaultButtons.length, 2);
+    assert.equal(defaultButtons[0].data.custom_id, 'quest_panel:run_oneshot');
+    assert.equal(defaultButtons[1].data.custom_id, 'quest_panel:stop');
+});
+
+test('handleQuestCommand renders AUTO DAILY button when auto_daily option is true', async () => {
+    const ownerId = process.env.OWNER_ID || require('../config.json').system?.ownerId || '661415152146710558';
+    let ownerReply = null;
+    const ownerInteraction = {
+        user: { id: ownerId },
+        options: {
+            getSubcommand: () => 'panel',
+            getBoolean: (name) => (name === 'auto_daily' ? true : null)
+        },
+        reply: (payload) => { ownerReply = payload; return Promise.resolve(payload); },
+        isRepliable: () => true,
+        deferred: false,
+        replied: false
+    };
+
+    await handleQuestCommand(ownerInteraction);
+    assert.ok(ownerReply);
+    assert.ok(ownerReply.components && ownerReply.components.length > 0);
+    const buttons = ownerReply.components[0].components;
+    assert.equal(buttons.length, 3);
+    assert.equal(buttons[0].data.custom_id, 'quest_panel:run_oneshot');
+    assert.equal(buttons[1].data.custom_id, 'quest_panel:run_daily');
+    assert.equal(buttons[2].data.custom_id, 'quest_panel:stop');
+});
+
+test('buildQuestPanelRow respects showDaily option', () => {
+    const defaultRow = buildQuestPanelRow();
+    assert.equal(defaultRow.components.length, 2);
+    assert.equal(defaultRow.components[0].data.custom_id, 'quest_panel:run_oneshot');
+    assert.equal(defaultRow.components[1].data.custom_id, 'quest_panel:stop');
+
+    const dailyRow = buildQuestPanelRow({ showDaily: true });
+    assert.equal(dailyRow.components.length, 3);
+    assert.equal(dailyRow.components[0].data.custom_id, 'quest_panel:run_oneshot');
+    assert.equal(dailyRow.components[1].data.custom_id, 'quest_panel:run_daily');
+    assert.equal(dailyRow.components[2].data.custom_id, 'quest_panel:stop');
+
+    const explicitFalseRow = buildQuestPanelRow({ showDaily: false });
+    assert.equal(explicitFalseRow.components.length, 2);
+    assert.equal(explicitFalseRow.components[0].data.custom_id, 'quest_panel:run_oneshot');
+    assert.equal(explicitFalseRow.components[1].data.custom_id, 'quest_panel:stop');
 });
 
 test('handleQuestButton allows users to open modal and view stop controls', async () => {

@@ -34,6 +34,10 @@ function validateOption(option, commandName, index) {
             }
         }
     }
+    if (option.options !== undefined) {
+        if (!Array.isArray(option.options)) throw new Error(`${label} options must be an array`);
+        option.options.forEach((nestedOption, nestedIndex) => validateOption(nestedOption, `${commandName} ${option.name}`, nestedIndex));
+    }
 }
 
 function validateSlashCommandsData(commands) {
@@ -234,7 +238,15 @@ const slashCommandsData = [
                 type: 1,
                 name: "panel",
                 description: "เปิดแผงควบคุม NeverDie Auto Quest (เฉพาะเจ้าของบอท)",
-                required: false
+                required: false,
+                options: [
+                    {
+                        type: 5,
+                        name: "auto_daily",
+                        description: "แสดงปุ่ม AUTO DAILY บนแผงควบคุม (ค่าเริ่มต้น: ปิด)",
+                        required: false
+                    }
+                ]
             }
         ]
     },

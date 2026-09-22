@@ -74,24 +74,34 @@ function buildQuestPanelEmbed(interaction = null, { hasAttachment = false } = {}
     return embed;
 }
 
-function buildQuestPanelRow() {
-    return new MessageActionRow().addComponents(
+function buildQuestPanelRow({ showDaily = false } = {}) {
+    const buttons = [
         new MessageButton()
             .setCustomId(IDS.BTN_QUEST_RUN_ONESHOT)
             .setLabel('START NOW')
             .setEmoji('🚀')
-            .setStyle('SUCCESS'),
-        new MessageButton()
-            .setCustomId(IDS.BTN_QUEST_RUN_DAILY)
-            .setLabel('AUTO DAILY')
-            .setEmoji('🤖')
-            .setStyle('PRIMARY'),
+            .setStyle('SUCCESS')
+    ];
+
+    if (showDaily) {
+        buttons.push(
+            new MessageButton()
+                .setCustomId(IDS.BTN_QUEST_RUN_DAILY)
+                .setLabel('AUTO DAILY')
+                .setEmoji('🤖')
+                .setStyle('PRIMARY')
+        );
+    }
+
+    buttons.push(
         new MessageButton()
             .setCustomId(IDS.BTN_QUEST_STOP)
             .setLabel('STOP')
             .setEmoji('🛑')
             .setStyle('DANGER')
     );
+
+    return new MessageActionRow().addComponents(...buttons);
 }
 
 async function showQuestModal(interaction, mode = 'oneshot') {
@@ -180,10 +190,11 @@ async function handleQuestCommand(interaction) {
                 flags: 64
             });
         }
+        const showDaily = interaction.options?.getBoolean?.('auto_daily') === true;
         const bannerPath = getQuestBannerPath();
         const hasAttachment = Boolean(bannerPath);
         const embed = buildQuestPanelEmbed(interaction, { hasAttachment });
-        const row = buildQuestPanelRow();
+        const row = buildQuestPanelRow({ showDaily });
         const payload = { embeds: [embed], components: [row] };
         if (hasAttachment) {
             payload.files = [new AttachmentBuilder(bannerPath, { name: QUEST_BANNER_ATTACHMENT_NAME })];
@@ -311,5 +322,6 @@ module.exports = {
     handleQuestCommand,
     handleQuestButton,
     handleQuestSelect,
-    handleQuestModalSubmit
+    handleQuestModalSubmit,
+    buildQuestPanelRow
 };

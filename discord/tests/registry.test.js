@@ -62,6 +62,20 @@ test("re-role exposes target role and five optional role exceptions", () => {
     assert.equal(rerole.options.every(option => option.type === 8 && option.required === false), true);
 });
 
+test("quest panel exposes optional auto_daily boolean option", () => {
+    const quest = slashCommandsData.find(command => command.name === "quest");
+    assert.ok(quest);
+    assert.equal(Array.isArray(quest.options), true);
+    const panelSubcommand = quest.options.find(opt => opt.name === "panel");
+    assert.ok(panelSubcommand);
+    assert.equal(panelSubcommand.type, 1);
+    assert.equal(Array.isArray(panelSubcommand.options), true);
+    const autoDaily = panelSubcommand.options.find(opt => opt.name === "auto_daily");
+    assert.ok(autoDaily);
+    assert.equal(autoDaily.type, 5);
+    assert.equal(autoDaily.required, false);
+});
+
 test("slash command definitions have stable required shape", () => { // NOSONAR -- node:test assertions are not recognized by Sonar S2699.
     for (const command of slashCommandsData) {
         assert.equal(typeof command.name, "string");
