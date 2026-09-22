@@ -2,6 +2,18 @@
 
 ## [Unreleased] - 2026-09-22
 
+- Renamed slash command from `/rerole` to `/re-role`:
+  - Updated registry in `discord/commands/registry.js` to register `/re-role` as the canonical command name.
+  - Enforced strict slash command routing in `discord/commands.js` to accept `/re-role` only.
+  - Updated test suites in `discord/tests/registry.test.js` and `discord/tests/roleSweep.test.js` to verify registration, rejection of legacy name, and strict routing.
+  - Updated documentation in `README.md`.
+
+- Renamed slash command from `/voiceadmin` to `/voice-admin`:
+  - Updated registry in `discord/commands/registry.js` to expose `/voice-admin`.
+  - Enforced strict command routing in `discord/commands.js` to accept `/voice-admin` only.
+  - Aligned command cooldown configuration in `discord/index.js` and registry unit tests in `discord/tests/registry.test.js`.
+  - Added unit regression test in `discord/tests/commandReliability.test.js` validating strict routing and rejection of legacy name.
+
 - Prevented Crash Shield from terminating the process on transient Cloudflare and Discord gateway errors (`5db3d2b`):
   - Implemented `isTransientGatewayError` in `discord/index/system.js` to recognize Cloudflare 520–525 / 502–504 responses, WebSocket handshake timeouts, and gateway network socket blips (`ECONNRESET`, `ETIMEDOUT`, `EAI_AGAIN`, `ENOTFOUND`, `ECONNREFUSED`).
   - Intercepted these transient errors in `uncaughtException` and `unhandledRejection` handlers: logs a warning, alerts the operational webhook, and preserves the process so Discord clients can execute automatic `shardResume` instead of dropping all active voice sessions.

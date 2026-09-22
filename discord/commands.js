@@ -267,10 +267,10 @@ async function handleVoiceOnlineCommand(interaction) {
 
 async function handleSlashCommand(interaction, client) {
     const commandName = interaction.commandName;
-    if (commandName === "rerole") return roleSweep.handleSlashCommand(interaction);
+    if (commandName === "re-role") return roleSweep.handleSlashCommand(interaction);
     const handler = delegatedCommandHandler(commandName);
     if (handler) return handler(interaction, client, sessionManager);
-    if (commandName === "voiceadmin") return voiceAdmin.handleVoiceAdminCommand(interaction);
+    if (commandName === "voice-admin") return voiceAdmin.handleVoiceAdminCommand(interaction);
     if (commandName === "setup-verify") return verification.handle(interaction, client);
     if (commandName === "voice-online") return handleVoiceOnlineCommand(interaction);
     if (commandName === "quest") return questCommand.handleQuestCommand(interaction);

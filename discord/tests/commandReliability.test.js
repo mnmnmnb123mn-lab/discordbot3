@@ -149,6 +149,25 @@ test("command router delegates registered command groups without changing handle
     assert.equal(commands._test.delegatedCommandHandler("unknown"), null);
 });
 
+test("handleSlashCommand routes voice-admin strictly and ignores legacy voiceadmin", async () => {
+    const voiceAdmin = require("../features/voiceAdmin");
+    const original = voiceAdmin.handleVoiceAdminCommand;
+    const handled = [];
+    voiceAdmin.handleVoiceAdminCommand = async interaction => {
+        handled.push(interaction.commandName);
+        return "voice_admin_handled";
+    };
+    try {
+        const res1 = await commands._test.handleSlashCommand({ commandName: "voice-admin" });
+        const res2 = await commands._test.handleSlashCommand({ commandName: "voiceadmin" });
+        assert.equal(res1, "voice_admin_handled");
+        assert.equal(res2, null);
+        assert.deepEqual(handled, ["voice-admin"]);
+    } finally {
+        voiceAdmin.handleVoiceAdminCommand = original;
+    }
+});
+
 test("latest setting prefix rejects values that could alter a Mongo query", async () => { // NOSONAR -- node:test assertions are not recognized by Sonar S2699.
     await assert.rejects(
         sessionManager.getLatestSettingByPrefix({ $ne: "" }),

@@ -831,7 +831,7 @@ function validateSlashTargetRole(targetRole, guild, exceptRoleIds) {
     return { ok: true, targetRoleId };
 }
 
-/** Starts a role-sweep preview from the owner-only /rerole slash command. */
+/** Starts a role-sweep preview from the owner-only /re-role slash command. */
 async function handleSlashCommand(interaction) {
     if (!isGuildOwner(interaction.user?.id, interaction.guild)) {
         return interaction.reply({

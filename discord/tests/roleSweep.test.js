@@ -645,13 +645,16 @@ test("slash command is owner-only and accepts the selected exception roles", asy
     assert.equal(calls.at(-1)[0], "reply");
 });
 
-test("slash router dispatches rerole to the dedicated handler", async () => {
+test("slash router dispatches re-role strictly and ignores legacy rerole", async () => {
     const original = roleSweep.handleSlashCommand;
     let dispatched = false;
     roleSweep.handleSlashCommand = async () => { dispatched = true; return "handled"; };
     try {
-        assert.equal(await commands._test.handleSlashCommand({ commandName: "rerole" }), "handled");
+        assert.equal(await commands._test.handleSlashCommand({ commandName: "re-role" }), "handled");
         assert.equal(dispatched, true);
+        dispatched = false;
+        assert.equal(await commands._test.handleSlashCommand({ commandName: "rerole" }), null);
+        assert.equal(dispatched, false);
     } finally {
         roleSweep.handleSlashCommand = original;
     }
@@ -1139,14 +1142,14 @@ test("chat //ถอดยศ validates target role hierarchy, managed, and every
     assert.equal(pending.targetRoleId, fixture.regular.id);
 });
 
-test("slash /rerole validates target_role and handles targeted preview", async () => {
+test("slash /re-role validates target_role and handles targeted preview", async () => {
     const fixture = guildFixture();
     const replies = [];
     const makeInteraction = (targetRole, exceptRoles = []) => ({
         guild: fixture.guild,
         channel: { id: "channel" },
         user: { id: ACTOR_ID },
-        commandName: "rerole",
+        commandName: "re-role",
         options: {
             getRole: (name) => {
                 if (name === "target_role") return targetRole;

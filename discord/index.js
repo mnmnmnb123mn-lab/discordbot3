@@ -115,7 +115,7 @@ const requestCounts       = new Map();
 let readyInitializationController = null;
 
 const COMMAND_COOLDOWNS_MS = {
-    ban:5000, kick:5000, timeout:5000, voiceadmin:5000,
+    ban:5000, kick:5000, timeout:5000, "voice-admin":5000,
     say:5000, announce:5000, clear:10000, "copy-emojis":10000,
     backup:30000, restore:30000
 };

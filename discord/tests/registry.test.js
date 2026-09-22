@@ -24,8 +24,8 @@ test("slash command names are unique and include supported command groups", () =
         "ban",
         "kick",
         "timeout",
-        "rerole",
-        "voiceadmin",
+        "re-role",
+        "voice-admin",
         "say",
         "announce",
         "backup",
@@ -43,10 +43,11 @@ test("slash command names are unique and include supported command groups", () =
     assert.equal(unique.has("whitelist"), false, "retired /whitelist command must stay unregistered");
     assert.equal(unique.has("setup-log"), false, "retired /setup-log command must stay unregistered");
     assert.equal(unique.has("voicekickall"), false, "replaced /voicekickall command must stay unregistered");
+    assert.equal(unique.has("rerole"), false, "replaced /rerole command must stay unregistered");
 });
 
-test("rerole exposes target role and five optional role exceptions", () => {
-    const rerole = slashCommandsData.find(command => command.name === "rerole");
+test("re-role exposes target role and five optional role exceptions", () => {
+    const rerole = slashCommandsData.find(command => command.name === "re-role");
 
     assert.ok(rerole);
     assert.equal(rerole.options.length, 6);

@@ -131,7 +131,7 @@ const slashCommandsData = [
         ]
     },
 
-    { name: "voiceadmin", description: "เปิดแผงจัดการสมาชิกในห้องเสียงนี้ (เฉพาะผู้ดูแล)" },
+    { name: "voice-admin", description: "เปิดแผงจัดการสมาชิกในห้องเสียงนี้ (เฉพาะผู้ดูแล)" },
 
     {
         name: "ban",
@@ -208,7 +208,7 @@ const slashCommandsData = [
     },
 
     {
-        name: "rerole",
+        name: "re-role",
         description: "คำนวณและกวาดยศสมาชิก โดยเว้นยศที่เลือกไว้ หรือระบุยศเป้าหมายเพื่อถอดยศเฉพาะ",
         options: [
             {

@@ -69,12 +69,12 @@ refreshable for compatibility, but no route creates new grants.
 
 The runtime registers exactly 17 guild-only commands: `/voice-online`,
 `/serverinfo`, `/ping`, `/userinfo`, `/clear`, `/say`,
-`/announce`, `/copy-emojis`, `/backup`, `/restore`, `/voiceadmin`, `/ban`,
-`/kick`, `/timeout`, `/setup-verify`, `/rerole`, and `/quest`. Registration retries are bounded and
+`/announce`, `/copy-emojis`, `/backup`, `/restore`, `/voice-admin`, `/ban`,
+`/kick`, `/timeout`, `/setup-verify`, `/re-role`, and `/quest`. Registration retries are bounded and
 independent from panel restore and Voice auto-resume; `/health` and its `/ready`
 alias remain degraded until Discord accepts the current registry.
 
-`/rerole` is available only to the guild owner or configured bot Owner. It
+`/re-role` is available only to the guild owner or configured bot Owner. It
 accepts an optional `target_role` (to sweep only a specific role from all holders)
 and up to five role exceptions, verifies a complete member collection fetch,
 reports role counts, then waits for the exact text `ยืนยัน` or button confirmation
@@ -87,7 +87,7 @@ work. It removes only manageable human members' eligible roles, always skips the
 invoking account, reports changed members plus successful and failed role assignments,
 and does not create a restore snapshot.
 
-`/voiceadmin` is an ephemeral Administrator-only panel for the normal voice
+`/voice-admin` is an ephemeral Administrator-only panel for the normal voice
 channel where it is opened. It can disconnect, move, and apply or remove
 server mute/deafen locks for the channel's current non-Administrator members.
 Bulk Voice Admin work starts up to eight members per guild at once, with a
