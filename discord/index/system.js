@@ -211,9 +211,51 @@ function setFatalShutdownHandler(handler) {
     fatalShutdownHandler = typeof handler === "function" ? handler : null;
 }
 
+function isTransientGatewayError(err) {
+    if (!err) return false;
+    const msg = String(err?.message || "");
+    const code = String(err?.code || "");
+    const stack = String(err?.stack || "");
+
+    // 1. Cloudflare / Discord gateway HTTP response errors on WebSocket handshake
+    if (/Unexpected server response:\s*(?:520|521|522|523|524|525|502|503|504)/i.test(msg)) {
+        return true;
+    }
+
+    // 2. Common transient socket/DNS blips on gateway connection
+    if (["ECONNRESET", "ETIMEDOUT", "EAI_AGAIN", "ENOTFOUND", "ECONNREFUSED"].includes(code)) {
+        if (/websocket|gateway|discord/i.test(stack) || /websocket|gateway|discord/i.test(msg)) {
+            return true;
+        }
+    }
+
+    // 3. WS handshake timeout or connection abort
+    if (/Opening handshake has timed out|WebSocket was closed before the connection was established/i.test(msg)) {
+        return true;
+    }
+
+    return false;
+}
+
 function initCrashShield(config) {
     const criticalAlerts = createCriticalAlertDispatcher();
     process.on("uncaughtException", async (err) => {
+        if (isTransientGatewayError(err)) {
+            originalWarn(sanitizeLogText(`[GATEWAY] ⚠️ Transient gateway/network error ignored by crash shield (keeping process alive for auto-reconnect): ${err.message}`));
+            await criticalAlerts.dispatch("transientGatewayError", err, buildWebhookEventPayload({
+                target: "ALERT",
+                severity: "WARNING",
+                category: "SYSTEM",
+                code: "gateway.transient_error",
+                state: "UPDATE",
+                title: "Discord Gateway ขัดข้องชั่วคราว (ระบบรันต่อเนื่อง)",
+                description: `${safeError(err)}\n\nระบบตรวจพบความขัดข้องระหว่างเครือข่าย Cloudflare/Discord ระบบยังคงทำงานต่อเนื่องและจะเชื่อมต่อใหม่อัตโนมัติ`,
+                impact: "การเชื่อมต่อ Gateway หรือห้องเสียงอาจสะดุดชั่วขณะ ระบบกำลังเชื่อมต่อใหม่",
+                action: "ไม่ต้องดำเนินการใดๆ ระบบจะทำการ Reconnect เอง"
+            })).catch(() => {});
+            return;
+        }
+
         originalError(sanitizeLogText(`[CRITICAL] uncaughtException: ${err.message}\n${err.stack || ""}`));
         await criticalAlerts.dispatch("uncaughtException", err, buildWebhookEventPayload({
             target: "ALERT",
@@ -236,6 +278,23 @@ function initCrashShield(config) {
     process.on("unhandledRejection", async (reason) => {
         const error = reason instanceof Error ? reason : new Error(String(reason));
         const msg = error.message;
+
+        if (isTransientGatewayError(error)) {
+            originalWarn(sanitizeLogText(`[GATEWAY] ⚠️ Transient gateway/network rejection ignored by crash shield (keeping process alive): ${msg}`));
+            await criticalAlerts.dispatch("transientGatewayError", error, buildWebhookEventPayload({
+                target: "ALERT",
+                severity: "WARNING",
+                category: "SYSTEM",
+                code: "gateway.transient_error",
+                state: "UPDATE",
+                title: "Discord Gateway ขัดข้องชั่วคราว (ระบบรันต่อเนื่อง)",
+                description: sanitizeLogText(msg).substring(0, 900),
+                impact: "การเชื่อมต่อ Gateway หรือห้องเสียงอาจสะดุดชั่วขณะ ระบบกำลังเชื่อมต่อใหม่",
+                action: "ไม่ต้องดำเนินการใดๆ ระบบจะทำการ Reconnect เอง"
+            })).catch(() => {});
+            return;
+        }
+
         originalError(sanitizeLogText(`[CRITICAL] unhandledRejection: ${msg}`));
         await criticalAlerts.dispatch("unhandledRejection", error, buildWebhookEventPayload({
             target: "ALERT",
@@ -398,5 +457,5 @@ module.exports = {
     markAppShuttingDown, isShuttingDown,
     originalLog, originalError, originalWarn,
     initLogCapture, initCrashShield, initCronJobs, stopCronJobs, setFatalShutdownHandler, terminateAfterFatal,
-    criticalFingerprint, createCriticalAlertDispatcher, stopRuntimeCleanups
+    criticalFingerprint, createCriticalAlertDispatcher, stopRuntimeCleanups, isTransientGatewayError
 };

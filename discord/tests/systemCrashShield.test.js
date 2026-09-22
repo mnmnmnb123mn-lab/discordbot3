@@ -3,7 +3,7 @@
 const assert = require("node:assert/strict");
 const test = require("node:test");
 
-const { createCriticalAlertDispatcher, stopRuntimeCleanups } = require("../index/system");
+const { createCriticalAlertDispatcher, stopRuntimeCleanups, isTransientGatewayError } = require("../index/system");
 
 function createHarness(options = {}) {
     const sent = [];
@@ -137,3 +137,35 @@ test("runtime cleanup awaits every healthy timer even when one cleanup fails", a
         console.warn = originalWarn;
     }
 });
+
+test("isTransientGatewayError identifies Cloudflare and Discord gateway transient blips", () => {
+    // Cloudflare 521, 522, 520, etc.
+    assert.equal(isTransientGatewayError(new Error("Unexpected server response: 521")), true);
+    assert.equal(isTransientGatewayError(new Error("Unexpected server response: 522")), true);
+    assert.equal(isTransientGatewayError(new Error("Unexpected server response: 502")), true);
+    assert.equal(isTransientGatewayError(new Error("Unexpected server response: 503")), true);
+    assert.equal(isTransientGatewayError(new Error("Unexpected server response: 504")), true);
+    assert.equal(isTransientGatewayError(new Error("Unexpected server response: 520")), true);
+
+    // WebSocket handshake timeouts and premature closes
+    assert.equal(isTransientGatewayError(new Error("Opening handshake has timed out")), true);
+    assert.equal(isTransientGatewayError(new Error("WebSocket was closed before the connection was established")), true);
+
+    // Socket network errors on gateway/websocket
+    const resetErr = new Error("read ECONNRESET");
+    resetErr.code = "ECONNRESET";
+    resetErr.stack = "Error: read ECONNRESET at TLSWrap.onStreamRead (/app/node_modules/ws/lib/websocket.js:930)";
+    assert.equal(isTransientGatewayError(resetErr), true);
+
+    const timedOutErr = new Error("connect ETIMEDOUT gateway.discord.gg:443");
+    timedOutErr.code = "ETIMEDOUT";
+    assert.equal(isTransientGatewayError(timedOutErr), true);
+
+    // Non-transient normal errors must NOT be ignored
+    assert.equal(isTransientGatewayError(new Error("TypeError: Cannot read properties of undefined")), false);
+    assert.equal(isTransientGatewayError(new Error("MongoDB connection failed")), false);
+    assert.equal(isTransientGatewayError(new Error("Unexpected token < in JSON at position 0")), false);
+    assert.equal(isTransientGatewayError(null), false);
+    assert.equal(isTransientGatewayError(undefined), false);
+});
+
