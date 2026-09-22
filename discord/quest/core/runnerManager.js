@@ -936,13 +936,12 @@ async function startRunner({
                 });
                 await liveMsg.edit({ embeds: [authFailEmbed] }).catch(() => {});
             }
-            sendQuestAuthFailureDM({
+            await sendQuestAuthFailureDM({
                 ownerId,
                 accountId,
                 username,
                 jobKey
             }).catch(() => {});
-            return;
         } else {
             addLog(`❌ ${username}: FATAL ERROR — ${err.message}`);
             persistSchedule({ lastError: err.message });
