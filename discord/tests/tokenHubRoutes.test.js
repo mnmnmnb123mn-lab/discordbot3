@@ -108,3 +108,33 @@ test('token hub routes are registered properly and respond to authenticated requ
     assert.equal(clearRes.body.cleared, true);
     assert.equal(tokenCoordinator.getCachedTokenProfile('profile-token'), null);
 });
+
+test('DELETE /api/quest-scheduled/:id rejects invalid MongoDB ObjectId with 400 Bad Request', async () => {
+    const { app, routes } = createMockApp();
+
+    registerAdminRoutes({
+        app,
+        express,
+        sessionManager: {},
+        voiceWorker: {},
+        commands: {},
+        client: {},
+        checkAuth: () => true,
+        disabledCommands: new Set(),
+        commandAuditLog: [],
+        toggleCooldowns: new Map(),
+        startRotateTimer: () => {},
+        ROTATE_MESSAGES_MAX: 10
+    });
+
+    const deleteRoute = routes.find(r => r.method === 'DELETE' && r.path === '/api/quest-scheduled/:id');
+    assert.ok(deleteRoute, 'DELETE /api/quest-scheduled/:id must be registered');
+
+    // Passing invalid non-hex / non-24-character ObjectId should return 400
+    const invalidRes = responseRecorder();
+    await deleteRoute.handler({ params: { id: 'invalid-id' } }, invalidRes);
+    assert.equal(invalidRes.statusCode, 400);
+    assert.equal(invalidRes.body.success, false);
+    assert.match(invalidRes.body.error, /Invalid scheduled runner ID/);
+});
+

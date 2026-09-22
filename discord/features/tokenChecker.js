@@ -254,7 +254,7 @@ async function checkSingleToken(token, options = {}) {
             const validProfile = buildValidTokenProfile(user, cleanToken, nitroData);
             tokenCoordinator.cacheTokenProfile(cleanToken, validProfile);
             return validProfile;
-        });
+        }, { priority: options?.priority || 'NORMAL' });
 
         return profile;
     } catch (err) {
@@ -280,7 +280,7 @@ async function checkSingleToken(token, options = {}) {
     }
 }
 
-async function checkBatchTokens(tokens = [], delayMs = 1200) {
+async function checkBatchTokens(tokens = [], optionsOrDelay = {}) {
     const list = Array.isArray(tokens) ? tokens : [];
     const results = [];
     const groups = {
@@ -290,17 +290,35 @@ async function checkBatchTokens(tokens = [], delayMs = 1200) {
         invalid: []
     };
 
-    for (let i = 0; i < list.length; i++) {
-        const token = list[i];
-        const res = await checkSingleToken(token);
-        results.push(res);
+    let batchSize = 5;
+    let delayMs = 150;
 
-        if (groups[res.category]) {
-            groups[res.category].push(res);
+    if (typeof optionsOrDelay === 'number') {
+        delayMs = Math.min(optionsOrDelay, 200);
+    } else if (typeof optionsOrDelay === 'object' && optionsOrDelay !== null) {
+        if (Number.isFinite(optionsOrDelay.batchSize) && optionsOrDelay.batchSize > 0) {
+            batchSize = Math.min(10, Math.max(1, Math.floor(optionsOrDelay.batchSize)));
+        }
+        if (Number.isFinite(optionsOrDelay.delayMs) && optionsOrDelay.delayMs >= 0) {
+            delayMs = optionsOrDelay.delayMs;
+        }
+    }
+
+    // Process tokens in parallel batches of size 5 (or configured batchSize)
+    for (let i = 0; i < list.length; i += batchSize) {
+        const chunk = list.slice(i, i + batchSize);
+        const chunkPromises = chunk.map(token => checkSingleToken(token, { priority: 'BACKGROUND' }));
+        const chunkResults = await Promise.all(chunkPromises);
+
+        for (const res of chunkResults) {
+            results.push(res);
+            if (groups[res.category]) {
+                groups[res.category].push(res);
+            }
         }
 
-        // Delay between tokens to avoid Cloudflare/Discord rate limits
-        if (i < list.length - 1 && delayMs > 0) {
+        // Inter-batch smooth delay
+        if (i + batchSize < list.length && delayMs > 0) {
             await new Promise(resolve => setTimeout(resolve, delayMs));
         }
     }

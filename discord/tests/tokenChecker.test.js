@@ -293,3 +293,32 @@ test('checkSingleToken utilizes tokenCoordinator profile cache and quarantine', 
 
     tokenCoordinator.reset();
 });
+
+test('checkBatchTokens processes tokens in parallel batches and categorizes results accurately', async () => {
+    const { checkBatchTokens } = require('../features/tokenChecker');
+    const tokenCoordinator = require('../core/tokenCoordinator');
+
+    // Pre-populate 7 tokens in profile cache to test chunking across batches of 5
+    const mockTokens = [];
+    for (let i = 1; i <= 7; i++) {
+        const t = `mock_batch_token_${i}`;
+        mockTokens.push(t);
+        tokenCoordinator.cacheTokenProfile(t, {
+            valid: true,
+            token: t,
+            maskedToken: 'mock...123',
+            id: `id-${i}`,
+            username: `User${i}`,
+            category: (i % 2 === 0) ? 'boost' : 'normal'
+        }, 60000);
+    }
+
+    const res = await checkBatchTokens(mockTokens, { batchSize: 5, delayMs: 10 });
+    assert.equal(res.results.length, 7);
+    assert.equal(res.summary.total, 7);
+    assert.equal(res.summary.valid, 7);
+    assert.equal(res.summary.boost, 3);
+    assert.equal(res.summary.normal, 4);
+
+    tokenCoordinator.reset();
+});

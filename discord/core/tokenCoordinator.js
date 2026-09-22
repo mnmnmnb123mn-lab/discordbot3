@@ -1,22 +1,27 @@
 'use strict';
 
+const { EventEmitter } = require('node:events');
 const crypto = require('node:crypto');
 
 /**
- * TokenCoordinator
+ * TokenCoordinator (Universal Token Hub & Master Controller)
  *
  * Central coordinator managing token lifecycle, cross-subsystem activity,
- * rate limit safety, and conflict prevention between:
+ * rate limit safety, concurrency smoothing, and conflict prevention across:
  * 1. 24/7 Voice Channel Sessions (voiceWorker)
  * 2. Scheduled & Automated Discord Quests (questRunner)
- * 3. Token checking and validation workflows
+ * 3. Token checking and validation workflows (tokenChecker)
+ * 4. Extensible Plugins and Future Subsystems
  */
-class TokenCoordinator {
+class TokenCoordinator extends EventEmitter {
     constructor(options = {}) {
-        this.tokenStates = new Map(); // tokenHash -> { voice: null, quest: null, quarantine: null, rateLimiter: { tokens, lastRefill }, lastActivity: number }
+        super();
+        this.tokenStates = new Map(); // tokenHash -> { voice: null, quest: null, activities: Map, quarantine: null, backoffUntil: number, rateLimiter, lastActivity: number }
         this.tokenLocks = new Map();  // tokenHash -> Promise (FIFO mutex queue)
         this.subsystems = new Map();  // name -> { onTokenQuarantined, onTokenActive }
         this.profileCache = new Map(); // tokenHash -> { profile, cachedAt, expiresAt }
+        this.alertHistory = new Map(); // tokenHash -> lastAlertTimestamp (throttling duplicate alerts)
+        this.alertCooldownMs = Number.isFinite(options.alertCooldownMs) ? options.alertCooldownMs : 5 * 60 * 1000;
         this.rateLimitConfig = {
             capacity: Number.isFinite(options.capacity) ? options.capacity : 4,
             refillRatePerSec: Number.isFinite(options.refillRatePerSec) ? options.refillRatePerSec : 2
@@ -43,7 +48,9 @@ class TokenCoordinator {
             state = {
                 voice: null,
                 quest: null,
+                activities: new Map(),
                 quarantine: null,
+                backoffUntil: 0,
                 rateLimiter: {
                     tokens: this.rateLimitConfig.capacity,
                     lastRefill: Date.now()
@@ -51,8 +58,115 @@ class TokenCoordinator {
                 lastActivity: Date.now()
             };
             this.tokenStates.set(tokenHash, state);
+        } else if (!state.activities) {
+            state.activities = new Map();
         }
         return state;
+    }
+
+    /**
+     * Dynamic Activity Registry: Acquire an activity slot for a token
+     * @param {string} token
+     * @param {string} subsystem
+     * @param {object} [metadata]
+     * @returns {boolean}
+     */
+    acquireActivity(token, subsystem, metadata = {}) {
+        const hash = this.hashToken(token);
+        if (!hash || !subsystem) return false;
+
+        const state = this._getOrCreateState(hash);
+        state.activities.set(String(subsystem), {
+            ...metadata,
+            startedAt: Date.now()
+        });
+        state.lastActivity = Date.now();
+
+        // Backward compatibility mappings
+        if (subsystem === 'voice') {
+            state.voice = {
+                guildId: String(metadata?.guildId || ''),
+                channelId: String(metadata?.channelId || ''),
+                sessionId: String(metadata?.sessionId || ''),
+                activeAt: Date.now()
+            };
+        } else if (subsystem === 'quest') {
+            state.quest = {
+                startedAt: Date.now(),
+                questId: metadata?.questId || null,
+                mode: metadata?.mode || 'scheduled'
+            };
+        }
+
+        this.emit('token:activity_start', { tokenHash: hash, subsystem, metadata });
+        return true;
+    }
+
+    /**
+     * Dynamic Activity Registry: Release an activity slot for a token
+     * @param {string} token
+     * @param {string} subsystem
+     * @returns {boolean}
+     */
+    releaseActivity(token, subsystem) {
+        const hash = this.hashToken(token);
+        if (!hash || !subsystem) return false;
+
+        const state = this.tokenStates.get(hash);
+        if (!state) return false;
+
+        const deleted = state.activities?.delete(String(subsystem));
+        state.lastActivity = Date.now();
+
+        // Backward compatibility mappings
+        if (subsystem === 'voice') state.voice = null;
+        if (subsystem === 'quest') state.quest = null;
+
+        if ((!state.activities || state.activities.size === 0) && !state.voice && !state.quest && !state.quarantine) {
+            this.tokenStates.delete(hash);
+        }
+
+        this.emit('token:activity_end', { tokenHash: hash, subsystem });
+        return Boolean(deleted);
+    }
+
+    /**
+     * Check if a token currently has a specific active activity
+     * @param {string} token
+     * @param {string} subsystem
+     * @returns {boolean}
+     */
+    hasActivity(token, subsystem) {
+        const hash = this.hashToken(token);
+        if (!hash) return false;
+        const state = this.tokenStates.get(hash);
+        if (!state) return false;
+
+        if (subsystem === 'voice') return Boolean(state.voice?.guildId && state.voice?.channelId);
+        if (subsystem === 'quest') return Boolean(state.quest);
+        return Boolean(state.activities?.has(String(subsystem)));
+    }
+
+    /**
+     * Get all active activities for a token
+     * @param {string} token
+     * @returns {Array<{ subsystem: string, startedAt: number, metadata: object }>}
+     */
+    getActivities(token) {
+        const hash = this.hashToken(token);
+        if (!hash) return [];
+        const state = this.tokenStates.get(hash);
+        if (!state?.activities) return [];
+
+        const list = [];
+        for (const [sub, meta] of state.activities.entries()) {
+            list.push({
+                subsystem: sub,
+                startedAt: meta?.startedAt || Date.now(),
+                metadata: meta
+            });
+        }
+        return list;
     }
 
     /**
@@ -61,35 +175,15 @@ class TokenCoordinator {
      * @param {{ guildId: string, channelId: string, sessionId?: string, client?: any }} details
      */
     registerVoiceActivity(token, details) {
-        const hash = this.hashToken(token);
-        if (!hash) return;
-
-        const state = this._getOrCreateState(hash);
-        state.voice = {
-            guildId: String(details?.guildId || ''),
-            channelId: String(details?.channelId || ''),
-            sessionId: String(details?.sessionId || ''),
-            activeAt: Date.now()
-        };
-        state.lastActivity = Date.now();
+        return this.acquireActivity(token, 'voice', details);
     }
 
     /**
-     * Unregister voice activity for a token (e.g. when session stops)
+     * Unregister voice activity for a token
      * @param {string} token
      */
     unregisterVoiceActivity(token) {
-        const hash = this.hashToken(token);
-        if (!hash) return;
-
-        const state = this.tokenStates.get(hash);
-        if (state) {
-            state.voice = null;
-            state.lastActivity = Date.now();
-            if (!state.quest && !state.quarantine) {
-                this.tokenStates.delete(hash);
-            }
-        }
+        return this.releaseActivity(token, 'voice');
     }
 
     /**
@@ -98,9 +192,7 @@ class TokenCoordinator {
      * @returns {boolean}
      */
     isVoiceActive(token) {
-        const hash = this.hashToken(token);
-        const state = this.tokenStates.get(hash);
-        return Boolean(state?.voice?.guildId && state?.voice?.channelId);
+        return this.hasActivity(token, 'voice');
     }
 
     /**
@@ -119,16 +211,7 @@ class TokenCoordinator {
      * @param {object} [metadata]
      */
     notifyQuestStart(token, metadata = {}) {
-        const hash = this.hashToken(token);
-        if (!hash) return;
-
-        const state = this._getOrCreateState(hash);
-        state.quest = {
-            startedAt: Date.now(),
-            questId: metadata?.questId || null,
-            mode: metadata?.mode || 'scheduled'
-        };
-        state.lastActivity = Date.now();
+        return this.acquireActivity(token, 'quest', metadata);
     }
 
     /**
@@ -136,17 +219,7 @@ class TokenCoordinator {
      * @param {string} token
      */
     notifyQuestEnd(token) {
-        const hash = this.hashToken(token);
-        if (!hash) return;
-
-        const state = this.tokenStates.get(hash);
-        if (state) {
-            state.quest = null;
-            state.lastActivity = Date.now();
-            if (!state.voice && !state.quarantine) {
-                this.tokenStates.delete(hash);
-            }
-        }
+        return this.releaseActivity(token, 'quest');
     }
 
     /**
@@ -155,8 +228,7 @@ class TokenCoordinator {
      * @returns {boolean}
      */
     isQuestActive(token) {
-        const hash = this.hashToken(token);
-        return Boolean(this.tokenStates.get(hash)?.quest);
+        return this.hasActivity(token, 'quest');
     }
 
     /**
@@ -188,8 +260,6 @@ class TokenCoordinator {
         // Priority 2: Check if account is in guild voice
         const voice = this.getVoiceActivity(token);
         if (voice?.guildId && voice?.channelId) {
-            // Send stream_key anchored to the current guild voice channel instead of private call:
-            // Discord accepts guild stream keys without ejecting the user from voice!
             return {
                 stream_key: `guild:${voice.guildId}:${voice.channelId}`,
                 terminal
@@ -205,7 +275,7 @@ class TokenCoordinator {
 
     /**
      * Run an operation with token-level serialized mutual exclusion
-     * to prevent rate limits and conflicting concurrent requests.
+     * to prevent race conditions and conflicting concurrent requests.
      * @param {string} token
      * @param {() => Promise<any>} operation
      * @returns {Promise<any>}
@@ -258,24 +328,63 @@ class TokenCoordinator {
     }
 
     /**
+     * Apply backoff to a token (e.g. from HTTP 429 Retry-After)
+     * @param {string} token
+     * @param {number} durationMs
+     */
+    applyTokenBackoff(token, durationMs) {
+        const hash = this.hashToken(token);
+        if (!hash) return;
+        const state = this._getOrCreateState(hash);
+        const until = Date.now() + Math.max(300, Number(durationMs) || 2000);
+        state.backoffUntil = Math.max(state.backoffUntil || 0, until);
+        this.emit('token:rate_limited', {
+            tokenHash: hash,
+            backoffUntil: state.backoffUntil,
+            waitMs: state.backoffUntil - Date.now()
+        });
+    }
+
+    /**
      * Acquire a rate limit slot for a token using adaptive leaky bucket
      * @param {string} tokenHash
-     * @param {{ maxWaitMs?: number }} [options]
+     * @param {{ maxWaitMs?: number, priority?: 'CRITICAL'|'NORMAL'|'BACKGROUND' }} [options]
      */
     async _acquireRateLimitSlot(tokenHash, options = {}) {
         if (!tokenHash) return;
-        const maxWaitMs = options.maxWaitMs ?? 15000;
+        const maxWaitMs = options.maxWaitMs ?? 20000;
+        const priority = String(options.priority || 'NORMAL').toUpperCase();
         const state = this._getOrCreateState(tokenHash);
-        const limiter = state.rateLimiter;
+
+        // Check if token is in 429 backoff pause
         const now = Date.now();
+        if (state.backoffUntil && state.backoffUntil > now) {
+            const backoffWaitMs = state.backoffUntil - now;
+            if (backoffWaitMs > maxWaitMs) {
+                const err = new Error(`RATE_LIMIT_BACKOFF: Token backoff wait ${backoffWaitMs}ms > max ${maxWaitMs}ms`);
+                err.code = 'RATE_LIMIT_BACKOFF';
+                throw err;
+            }
+            const jitter = Math.floor(Math.random() * 20) + 10;
+            await new Promise((resolve) => setTimeout(resolve, backoffWaitMs + jitter));
+        }
+
+        const limiter = state.rateLimiter;
+        const currentNow = Date.now();
 
         // Refill tokens
-        const elapsedSec = (now - limiter.lastRefill) / 1000;
+        const elapsedSec = (currentNow - limiter.lastRefill) / 1000;
         limiter.tokens = Math.min(
             this.rateLimitConfig.capacity,
             limiter.tokens + (elapsedSec * this.rateLimitConfig.refillRatePerSec)
         );
-        limiter.lastRefill = now;
+        limiter.lastRefill = currentNow;
+
+        // CRITICAL priority (e.g. Voice session keepalive) bypasses wait if capacity has at least 0.5 slot
+        if (priority === 'CRITICAL' && limiter.tokens >= 0.5) {
+            limiter.tokens = Math.max(0, limiter.tokens - 1);
+            return;
+        }
 
         if (limiter.tokens >= 1) {
             limiter.tokens -= 1;
@@ -292,21 +401,28 @@ class TokenCoordinator {
         }
 
         // Micro-jitter to prevent thundering herd
-        const jitter = Math.floor(Math.random() * 8) + 2;
+        const jitter = Math.floor(Math.random() * 10) + 2;
         await new Promise((resolve) => setTimeout(resolve, waitMs + jitter));
 
+        // Double check after waking
+        const postNow = Date.now();
+        const postElapsed = (postNow - limiter.lastRefill) / 1000;
+        limiter.tokens = Math.min(
+            this.rateLimitConfig.capacity,
+            limiter.tokens + (postElapsed * this.rateLimitConfig.refillRatePerSec)
+        );
         limiter.tokens = Math.max(0, limiter.tokens - 1);
-        limiter.lastRefill = Date.now();
+        limiter.lastRefill = postNow;
     }
 
     /**
      * Execute an operation safely with token rate limiting, quarantine guard,
-     * and automatic 401 detection.
+     * adaptive 429 backoff retry, and automatic 401/403 detection.
      *
      * @param {string} token
      * @param {string} subsystem
      * @param {() => Promise<any>} operation
-     * @param {{ maxWaitMs?: number }} [options]
+     * @param {{ maxWaitMs?: number, priority?: 'CRITICAL'|'NORMAL'|'BACKGROUND', retryOn429?: boolean }} [options]
      * @returns {Promise<any>}
      */
     async executeWithToken(token, subsystem, operation, options = {}) {
@@ -326,31 +442,108 @@ class TokenCoordinator {
             throw err;
         }
 
-        await this._acquireRateLimitSlot(hash, options);
+        const maxAttempts = (options.retryOn429 !== false) ? 2 : 1;
+        let attempt = 0;
 
-        try {
-            const result = await operation();
-            const state = this._getOrCreateState(hash);
-            state.lastActivity = Date.now();
-            return result;
-        } catch (err) {
-            const status = err?.status || err?.statusCode || err?.response?.status;
-            const msg = String(err?.message || '');
-            const is401 = status === 401 ||
-                msg.includes('401') ||
-                msg.toLowerCase().includes('unauthorized') ||
-                msg.toLowerCase().includes('invalid token') ||
-                err?.code === 'TOKEN_INVALID';
+        while (attempt < maxAttempts) {
+            attempt++;
+            await this._acquireRateLimitSlot(hash, options);
 
-            if (is401) {
-                this.quarantineToken(hash, `Detected by ${subsystem || 'unknown'}: ${msg || '401 Unauthorized'}`);
+            try {
+                const result = await operation();
+                const state = this._getOrCreateState(hash);
+                state.lastActivity = Date.now();
+                return result;
+            } catch (err) {
+                const status = err?.status || err?.statusCode || err?.response?.status;
+                const msg = String(err?.message || '');
+
+                // Check HTTP 429 Too Many Requests
+                const is429 = status === 429 || msg.includes('429') || msg.toLowerCase().includes('rate limit');
+                if (is429) {
+                    let waitSec = 2.5;
+                    const headerVal = err?.response?.headers?.get?.('retry-after') || err?.headers?.['retry-after'];
+                    if (headerVal && !isNaN(headerVal)) {
+                        waitSec = parseFloat(headerVal);
+                    } else if (err?.retry_after) {
+                        waitSec = typeof err.retry_after === 'number' ? (err.retry_after > 100 ? err.retry_after / 1000 : err.retry_after) : 2.5;
+                    }
+                    const waitMs = Math.ceil(waitSec * 1000) + 100;
+                    this.applyTokenBackoff(hash, waitMs);
+
+                    if (attempt < maxAttempts) {
+                        // Smooth pause and retry without dropping task
+                        await new Promise((r) => setTimeout(r, waitMs));
+                        continue;
+                    }
+                }
+
+                // Check HTTP 401 Unauthorized / Invalid Token
+                const is401 = status === 401 ||
+                    msg.includes('401') ||
+                    msg.toLowerCase().includes('unauthorized') ||
+                    msg.toLowerCase().includes('invalid token') ||
+                    err?.code === 'TOKEN_INVALID';
+
+                if (is401) {
+                    this.quarantineToken(hash, `Detected by ${subsystem || 'unknown'}: ${msg || '401 Unauthorized'}`);
+                }
+
+                // Check HTTP 403 Forbidden / Locked Account
+                const is403 = status === 403 || msg.includes('403') || msg.toLowerCase().includes('account locked');
+                if (is403 && (msg.toLowerCase().includes('verification') || msg.toLowerCase().includes('locked'))) {
+                    this.quarantineToken(hash, `Account Locked / Captcha Required: ${msg}`);
+                }
+
+                this.emit('token:error', { tokenHash: hash, subsystem, error: err });
+                throw err;
             }
-            throw err;
         }
     }
 
     /**
-     * Quarantine a token across the entire system
+     * Universal Standard Task Runner for current and future subsystems
+     * @param {string} token
+     * @param {{ subsystem: string, priority?: 'CRITICAL'|'NORMAL'|'BACKGROUND', timeoutMs?: number, retryOn429?: boolean, metadata?: object }} options
+     * @param {() => Promise<any>} taskFn
+     * @returns {Promise<any>}
+     */
+    async runTask(token, options, taskFn) {
+        if (typeof taskFn !== 'function') {
+            throw new TypeError('runTask requires taskFn to be a function');
+        }
+        const subsystem = options?.subsystem || 'genericTask';
+        const timeoutMs = options?.timeoutMs ?? 30000;
+        const hash = this.hashToken(token);
+
+        if (hash) {
+            this.acquireActivity(hash, subsystem, options?.metadata || {});
+        }
+
+        let timeoutTimer;
+        try {
+            const taskPromise = this.executeWithToken(token, subsystem, taskFn, options);
+            if (timeoutMs > 0) {
+                const timeoutPromise = new Promise((_, reject) => {
+                    timeoutTimer = setTimeout(() => {
+                        const err = new Error(`TASK_TIMEOUT: Subsystem ${subsystem} timed out after ${timeoutMs}ms`);
+                        err.code = 'TASK_TIMEOUT';
+                        reject(err);
+                    }, timeoutMs);
+                });
+                return await Promise.race([taskPromise, timeoutPromise]);
+            }
+            return await taskPromise;
+        } finally {
+            if (timeoutTimer) clearTimeout(timeoutTimer);
+            if (hash) {
+                this.releaseActivity(hash, subsystem);
+            }
+        }
+    }
+
+    /**
+     * Quarantine a token across the entire system with alert throttling
      * @param {string} token
      * @param {string} [reason]
      * @returns {boolean}
@@ -370,6 +563,9 @@ class TokenCoordinator {
         // Invalidate cached profile
         this.profileCache.delete(hash);
 
+        // Emit high-speed In-Memory event to all listeners
+        this.emit('token:quarantined', { tokenHash: hash, reason, state });
+
         // Notify registered subsystems to gracefully clean up
         for (const [subName, sub] of this.subsystems.entries()) {
             if (typeof sub?.onTokenQuarantined === 'function') {
@@ -381,19 +577,25 @@ class TokenCoordinator {
             }
         }
 
-        // Send unified webhook notification if webhooks module is accessible
-        try {
-            const { sendAlertWebhook, WEBHOOK_SEVERITIES } = require('./webhooks');
-            if (typeof sendAlertWebhook === 'function') {
-                sendAlertWebhook({
-                    title: '🚨 Token Quarantined (โทเคนถูกกักกัน)',
-                    description: `ตรวจพบโทเคนหมดอายุหรือไม่ถูกต้อง ระบบได้ทำการกักกัน (Quarantine) และหยุดการทำงานของเซสชันที่เกี่ยวข้องอย่างปลอดภัย\n\n**Token Hash:** \`${hash.slice(0, 16)}...\`\n**เหตุผล:** ${reason}`,
-                    severity: WEBHOOK_SEVERITIES?.ERROR || 'ERROR',
-                    category: 'SECURITY'
-                }).catch(() => {});
+        // Send alert webhook with throttling cooldown per token
+        const lastAlert = this.alertHistory.get(hash) || 0;
+        const shouldSendAlert = (now - lastAlert) > this.alertCooldownMs;
+
+        if (shouldSendAlert) {
+            this.alertHistory.set(hash, now);
+            try {
+                const { sendAlertWebhook, WEBHOOK_SEVERITIES } = require('./webhooks');
+                if (typeof sendAlertWebhook === 'function') {
+                    sendAlertWebhook({
+                        title: '🚨 Token Quarantined (โทเคนถูกกักกัน)',
+                        description: `ตรวจพบโทเคนหมดอายุหรือไม่ถูกต้อง ระบบได้ทำการกักกัน (Quarantine) และหยุดการทำงานของเซสชันที่เกี่ยวข้องอย่างปลอดภัย\n\n**Token Hash:** \`${hash.slice(0, 16)}...\`\n**เหตุผล:** ${reason}`,
+                        severity: WEBHOOK_SEVERITIES?.ERROR || 'ERROR',
+                        category: 'SECURITY'
+                    }).catch(() => {});
+                }
+            } catch {
+                // Webhooks module not available in isolated unit tests
             }
-        } catch {
-            // Webhooks module not available in isolated unit tests
         }
 
         return true;
@@ -412,7 +614,10 @@ class TokenCoordinator {
         if (state) {
             state.quarantine = null;
             state.lastActivity = Date.now();
-            if (!state.voice && !state.quest) {
+            this.alertHistory.delete(hash);
+            this.emit('token:released', { tokenHash: hash });
+
+            if ((!state.activities || state.activities.size === 0) && !state.voice && !state.quest) {
                 this.tokenStates.delete(hash);
             }
             return true;
@@ -441,7 +646,7 @@ class TokenCoordinator {
     }
 
     /**
-     * Cache a token profile in memory with a TTL
+     * Cache a token profile in memory with a TTL and bounded pruning
      * @param {string} token
      * @param {object} profile
      * @param {number} [ttlMs] Default: 20 minutes
@@ -526,6 +731,19 @@ class TokenCoordinator {
             quarantinedAt: s.quarantine.quarantinedAt
         }));
 
+        const dynamicActivities = [];
+        for (const [hash, s] of states) {
+            if (s.activities && s.activities.size > 0) {
+                for (const [sub, meta] of s.activities.entries()) {
+                    dynamicActivities.push({
+                        tokenHash: hash,
+                        subsystem: sub,
+                        startedAt: meta?.startedAt || s.lastActivity
+                    });
+                }
+            }
+        }
+
         return {
             activeTokens: this.tokenStates.size,
             voiceSessionsCount: voiceSessions.length,
@@ -534,6 +752,8 @@ class TokenCoordinator {
             questSessions,
             quarantinedCount: quarantinedTokens.length,
             quarantinedTokens,
+            dynamicActivitiesCount: dynamicActivities.length,
+            dynamicActivities,
             cachedProfilesCount: this.profileCache.size,
             registeredSubsystems: Array.from(this.subsystems.keys()),
             uptimeMs: Date.now() - this.startTime
@@ -548,6 +768,8 @@ class TokenCoordinator {
         this.tokenLocks.clear();
         this.subsystems.clear();
         this.profileCache.clear();
+        this.alertHistory.clear();
+        this.removeAllListeners();
     }
 }
 

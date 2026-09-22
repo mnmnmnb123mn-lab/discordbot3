@@ -337,8 +337,12 @@ function registerAdminRoutes({
     app.delete("/api/quest-scheduled/:id", auth.requirePin, async (req, res) => {
         try {
             const { id } = req.params;
-            const stopped = stopScheduledJob(null, id);
-            const deleted = await ScheduledRunner.findByIdAndDelete(id);
+            if (!id || !/^[0-9a-fA-F]{24}$/.test(String(id).trim())) {
+                return res.status(400).json({ success: false, error: "Invalid scheduled runner ID" });
+            }
+            const cleanId = String(id).trim();
+            const stopped = stopScheduledJob(null, cleanId);
+            const deleted = await ScheduledRunner.findByIdAndDelete(cleanId);
             res.json({ success: true, deleted: Boolean(deleted), stopped });
         } catch (e) {
             res.status(500).json({ success: false, error: e.message });

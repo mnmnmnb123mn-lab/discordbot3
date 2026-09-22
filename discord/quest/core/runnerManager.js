@@ -18,6 +18,17 @@ const {
 } = require('./questSession');
 const { encryptToken, maskToken } = require('./tokenCrypto');
 const tokenCoordinator = require('../../core/tokenCoordinator');
+
+try {
+    tokenCoordinator.registerSubsystem({
+        name: 'questRunner',
+        onTokenQuarantined: (tokenHash, reason) => {
+            // Quest runner execution detects quarantine on next executeWithToken call and aborts gracefully
+        }
+    });
+} catch {
+    // Safe swallow if already registered
+}
 const { formatRunnerStatusContent, formatRunnerStatusEmbed } = require('./runnerStatusHeader');
 const {
     createOneShotQuestSession,

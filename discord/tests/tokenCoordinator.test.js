@@ -234,3 +234,98 @@ test('rate limiter allows burst within capacity without delay', async () => {
     // Burst should complete in under 50ms without waiting for refill
     assert.ok(elapsed < 100, `Burst took too long: ${elapsed}ms`);
 });
+
+test('Dynamic Activity Registry supports arbitrary subsystems concurrently', () => {
+    const token = 'token-dyn-subsystem';
+    assert.equal(tokenCoordinator.hasActivity(token, 'guildBackup'), false);
+    assert.equal(tokenCoordinator.hasActivity(token, 'profileSync'), false);
+
+    tokenCoordinator.acquireActivity(token, 'guildBackup', { backupId: 'b-123' });
+    tokenCoordinator.acquireActivity(token, 'profileSync', { interval: 60 });
+
+    assert.equal(tokenCoordinator.hasActivity(token, 'guildBackup'), true);
+    assert.equal(tokenCoordinator.hasActivity(token, 'profileSync'), true);
+
+    const acts = tokenCoordinator.getActivities(token);
+    assert.equal(acts.length, 2);
+    const subNames = acts.map(a => a.subsystem);
+    assert.ok(subNames.includes('guildBackup'));
+    assert.ok(subNames.includes('profileSync'));
+
+    tokenCoordinator.releaseActivity(token, 'guildBackup');
+    assert.equal(tokenCoordinator.hasActivity(token, 'guildBackup'), false);
+    assert.equal(tokenCoordinator.hasActivity(token, 'profileSync'), true);
+
+    tokenCoordinator.releaseActivity(token, 'profileSync');
+    assert.equal(tokenCoordinator.hasActivity(token, 'profileSync'), false);
+});
+
+test('Event Bus emits token lifecycle events', async () => {
+    const token = 'token-eventbus-test';
+    const eventsCaught = [];
+
+    tokenCoordinator.on('token:activity_start', (e) => eventsCaught.push({ type: 'start', sub: e.subsystem }));
+    tokenCoordinator.on('token:activity_end', (e) => eventsCaught.push({ type: 'end', sub: e.subsystem }));
+    tokenCoordinator.on('token:quarantined', (e) => eventsCaught.push({ type: 'quarantine', reason: e.reason }));
+    tokenCoordinator.on('token:released', () => eventsCaught.push({ type: 'released' }));
+
+    tokenCoordinator.acquireActivity(token, 'customWorker', { foo: 'bar' });
+    tokenCoordinator.releaseActivity(token, 'customWorker');
+    tokenCoordinator.quarantineToken(token, 'Testing event bus');
+    tokenCoordinator.releaseQuarantine(token);
+
+    assert.deepEqual(eventsCaught.map(e => e.type), ['start', 'end', 'quarantine', 'released']);
+});
+
+test('429 rate limit backoff pauses token and automatically retries smoothly', async () => {
+    const token = 'token-429-test';
+    let attempts = 0;
+
+    const result = await tokenCoordinator.executeWithToken(token, 'testSub', async () => {
+        attempts++;
+        if (attempts === 1) {
+            const err = new Error('429 Too Many Requests');
+            err.status = 429;
+            err.retry_after = 0.1; // 100ms
+            throw err;
+        }
+        return 'success-after-429';
+    });
+
+    assert.equal(attempts, 2);
+    assert.equal(result, 'success-after-429');
+});
+
+test('runTask executes operation with automatic activity lifecycle and timeout protection', async () => {
+    const token = 'token-runtask-test';
+    let activitySeenDuringRun = false;
+
+    const result = await tokenCoordinator.runTask(token, { subsystem: 'futurePlugin', timeoutMs: 1000 }, async () => {
+        activitySeenDuringRun = tokenCoordinator.hasActivity(token, 'futurePlugin');
+        return 'plugin-output';
+    });
+
+    assert.equal(result, 'plugin-output');
+    assert.equal(activitySeenDuringRun, true);
+    assert.equal(tokenCoordinator.hasActivity(token, 'futurePlugin'), false);
+});
+
+test('quarantine alert is throttled within cooldown window', () => {
+    const token = 'token-throttle-alert';
+    const originalCooldown = tokenCoordinator.alertCooldownMs;
+    tokenCoordinator.alertCooldownMs = 10000; // 10s cooldown
+
+    try {
+        const hash = tokenCoordinator.hashToken(token);
+        tokenCoordinator.quarantineToken(token, 'First alert');
+        const firstTime = tokenCoordinator.alertHistory.get(hash);
+        assert.ok(firstTime > 0);
+
+        // Immediate second quarantine call should be throttled (alertHistory timestamp unchanged)
+        tokenCoordinator.quarantineToken(token, 'Second alert');
+        const secondTime = tokenCoordinator.alertHistory.get(hash);
+        assert.equal(secondTime, firstTime);
+    } finally {
+        tokenCoordinator.alertCooldownMs = originalCooldown;
+    }
+});
