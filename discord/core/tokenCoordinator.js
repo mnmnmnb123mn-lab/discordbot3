@@ -46,6 +46,7 @@ class TokenCoordinator extends EventEmitter {
         let state = this.tokenStates.get(tokenHash);
         if (!state) {
             state = {
+                tokenType: 'unknown',
                 voice: null,
                 quest: null,
                 activities: new Map(),
@@ -62,6 +63,46 @@ class TokenCoordinator extends EventEmitter {
             state.activities = new Map();
         }
         return state;
+    }
+
+    /**
+     * Set explicit token type ('user' | 'bot' | 'unknown')
+     * @param {string} token
+     * @param {'user'|'bot'|'unknown'} type
+     */
+    setTokenType(token, type) {
+        const hash = this.hashToken(token);
+        if (!hash) return;
+        const state = this._getOrCreateState(hash);
+        state.tokenType = type === 'bot' ? 'bot' : (type === 'user' ? 'user' : 'unknown');
+    }
+
+    /**
+     * Get token type from profile cache or state
+     * @param {string} token
+     * @returns {'user'|'bot'|'unknown'}
+     */
+    getTokenType(token) {
+        const hash = this.hashToken(token);
+        if (!hash) return 'unknown';
+        const cached = this.getCachedTokenProfile(token);
+        if (cached?.isBot || cached?.tokenType === 'bot' || cached?.category === 'bot') return 'bot';
+        if (cached?.tokenType === 'user' || (cached && !cached.isBot)) return 'user';
+        return this.tokenStates.get(hash)?.tokenType || 'unknown';
+    }
+
+    /**
+     * Build appropriate Discord Authorization header based on token type
+     * @param {string} token
+     * @param {'user'|'bot'} [explicitType]
+     * @returns {string}
+     */
+    formatAuthHeader(token, explicitType = null) {
+        if (!token) return '';
+        const trimmed = String(token).trim();
+        if (trimmed.startsWith('Bot ')) return trimmed;
+        const type = explicitType || this.getTokenType(trimmed);
+        return type === 'bot' ? `Bot ${trimmed}` : trimmed;
     }
 
     /**
@@ -434,7 +475,7 @@ class TokenCoordinator extends EventEmitter {
             return operation();
         }
 
-        if (this.isQuarantined(hash)) {
+        if (this.isQuarantined(hash) && !options?.bypassQuarantine) {
             const details = this.getQuarantineDetails(hash);
             const err = new Error(`TOKEN_QUARANTINED: Token is quarantined (${details?.reason || 'Invalid/Revoked'})`);
             err.code = 'TOKEN_QUARANTINED';
@@ -669,6 +710,15 @@ class TokenCoordinator extends EventEmitter {
             cachedAt: Date.now(),
             expiresAt: Date.now() + ttlMs
         });
+
+        const state = this._getOrCreateState(token);
+        if (profile.isBot || profile.tokenType === 'bot' || profile.category === 'bot') {
+            state.tokenType = 'bot';
+            if (!profile.tokenType) profile.tokenType = 'bot';
+        } else if (profile.tokenType === 'user' || profile.valid) {
+            state.tokenType = 'user';
+            if (!profile.tokenType) profile.tokenType = 'user';
+        }
     }
 
     /**

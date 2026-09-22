@@ -15,7 +15,7 @@ test("slash command names are unique and include supported command groups", () =
     const unique = new Set(names);
 
     assert.equal(unique.size, names.length);
-    assert.equal(names.length, 19);
+    assert.equal(names.length, 17);
     assert.equal(names.at(-1), "dm-panel");
 
     for (const expected of [
@@ -27,9 +27,8 @@ test("slash command names are unique and include supported command groups", () =
         "re-role",
         "voice-admin",
         "say",
-        "announce",
-        "backup",
-        "restore",
+        "embed",
+        "copy-emojis",
         "setup-verify",
         "quest",
         "token-check",
@@ -37,6 +36,9 @@ test("slash command names are unique and include supported command groups", () =
     ]) {
         assert.equal(unique.has(expected), true, `missing /${expected}`);
     }
+    assert.equal(unique.has("announce"), false, "retired /announce command must stay unregistered");
+    assert.equal(unique.has("backup"), false, "retired /backup command must stay unregistered");
+    assert.equal(unique.has("restore"), false, "retired /restore command must stay unregistered");
     assert.equal(unique.has("help"), false, "retired /help command must stay unregistered");
     assert.equal(unique.has("setup"), false, "retired /setup command must stay unregistered");
     assert.equal(unique.has("stats"), false, "retired /stats command must stay unregistered");
@@ -96,21 +98,43 @@ test("slash command definitions have stable required shape", () => { // NOSONAR 
     }
 });
 
-test("announce sends raw mention content without an extra permission toggle", () => { // NOSONAR -- node:test assertions are not recognized by Sonar S2699.
-    const announce = slashCommandsData.find(command => command.name === "announce");
-    const allowMentions = announce.options.find(option => option.name === "allow_mentions");
-    const content = announce.options.find(option => option.name === "content");
+test("embed command defines subcommand create with standard options and thai descriptions", () => { // NOSONAR -- node:test assertions are not recognized by Sonar S2699.
+    const embed = slashCommandsData.find(command => command.name === "embed");
+    assert.ok(embed, "missing /embed command in registry");
+    assert.equal(embed.description, "ระบบสร้างข้อความประกาศแบบ Embed");
 
-    assert.equal(allowMentions, undefined);
-    assert.match(content.description, /@everyone/);
-});
+    const create = embed.options?.find(option => option.name === "create");
+    assert.ok(create, "missing /embed create subcommand");
+    assert.equal(create.type, 1, "subcommand type must be 1");
+    assert.equal(create.description, "สร้างและส่งข้อความ Embed สำหรับประกาศ");
 
-test("restore exposes dry-run option", () => { // NOSONAR -- node:test assertions are not recognized by Sonar S2699.
-    const restore = slashCommandsData.find(command => command.name === "restore");
-    const dryRun = restore.options.find(option => option.name === "dry_run");
+    const optionNames = create.options.map(opt => opt.name);
+    const expectedOrder = [
+        "description", "title", "channel", "content", "color",
+        "image", "thumbnail", "footer", "url", "timestamp",
+        "button_label", "button_url"
+    ];
+    assert.deepEqual(optionNames, expectedOrder);
 
-    assert.equal(dryRun.type, 5);
-    assert.equal(dryRun.required, false);
+    const descOpt = create.options.find(opt => opt.name === "description");
+    assert.equal(descOpt.required, true);
+    assert.equal(descOpt.type, 3);
+    assert.equal(descOpt.max_length, 4096);
+    assert.equal(descOpt.description, "เนื้อหาหลักของ Embed รองรับ Markdown และขึ้นบรรทัดใหม่");
+
+    // Verify removed options
+    assert.equal(create.options.find(opt => opt.name === "message"), undefined);
+    assert.equal(create.options.find(opt => opt.name === "button_text"), undefined);
+    assert.equal(create.options.find(opt => opt.name === "author_name"), undefined);
+    assert.equal(create.options.find(opt => opt.name === "author_icon"), undefined);
+    assert.equal(create.options.find(opt => opt.name === "footer_icon"), undefined);
+
+    // Verify all other options are optional (required !== true)
+    for (const opt of create.options) {
+        if (opt.name !== "description") {
+            assert.notEqual(opt.required, true, `${opt.name} must be optional`);
+        }
+    }
 });
 
 test("slash command registry validation rejects empty or malformed payloads", () => { // NOSONAR -- node:test assertions are not recognized by Sonar S2699.

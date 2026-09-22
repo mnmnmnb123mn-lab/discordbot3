@@ -133,17 +133,23 @@ async function buildStopPanelPayload(ownerId, notice = null) {
     const scheduledJobs = getUserJobs(ownerId, { mode: 'scheduled' });
     const totalActive = rows.length + oneShotJobs.length;
 
+    const embedTitle = totalActive > 0 ? '🛑 AUTO QUEST RUNNER CONTROL' : '✅ ไม่มี Runner ที่กำลังทำงาน';
+    const embedDesc = totalActive > 0
+        ? 'เลือก Token ที่ต้องการหยุดจากเมนูด้านล่าง หรือกดปุ่ม **STOP ALL** เพื่อหยุดทั้งหมด'
+        : 'สามารถกด **START NOW** หรือ **AUTO DAILY** ได้เลย';
+
     const embed = new MessageEmbed()
-        .setTitle('🛑 AUTO QUEST RUNNER CONTROL')
+        .setTitle(embedTitle)
         .setColor(totalActive > 0 ? '#ED4245' : '#57F287')
         .setDescription([
             notice ? `${notice}\n` : '',
-            totalActive > 0
-                ? 'เลือก Token ที่ต้องการหยุดจากเมนูด้านล่าง หรือกดปุ่ม **STOP ALL** เพื่อหยุดทั้งหมด'
-                : 'ไม่มี Auto Daily หรือ One-shot Runner ที่กำลังทำงานอยู่'
+            embedDesc
         ].filter(Boolean).join('\n'))
-        .setFooter({ text: `Auto Daily: ${rows.length} · กำลังทำงานอยู่: ${oneShotJobs.length + scheduledJobs.length}` })
         .setTimestamp();
+
+    if (totalActive > 0) {
+        embed.setFooter({ text: `Auto Daily: ${rows.length} · กำลังทำงานอยู่: ${oneShotJobs.length + scheduledJobs.length}` });
+    }
 
     const components = [];
 

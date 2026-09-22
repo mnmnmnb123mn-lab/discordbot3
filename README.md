@@ -9,7 +9,7 @@ cases, protection features, role buttons, a private bot-control dashboard, and O
 > webhooks. The declared owner behavior must not be silently replaced by generic
 > security/privacy recommendations.
 
-Private notifications for Voice, verification, and restore results use a shared
+Private notifications for Voice and verification use a shared
 Thai Embed delivery service. Delivery supports owner-intended
 mentions, deduplication, and priority. A bounded in-memory recovery queue preserves delivery attempts while MongoDB is temporarily unavailable, then reconciles them into the durable MongoDB outbox.
 
@@ -69,8 +69,8 @@ refreshable for compatibility, but no route creates new grants.
 
 The runtime registers exactly 17 guild-only commands: `/voice-online`,
 `/serverinfo`, `/ping`, `/userinfo`, `/clear`, `/say`,
-`/announce`, `/copy-emojis`, `/backup`, `/restore`, `/voice-admin`, `/ban`,
-`/kick`, `/timeout`, `/setup-verify`, `/re-role`, and `/quest`. Registration retries are bounded and
+`/embed` (with `/embed create`), `/copy-emojis`, `/voice-admin`, `/ban`,
+`/kick`, `/timeout`, `/setup-verify`, `/re-role`, `/quest`, `/token-check`, and `/dm-panel`. Registration retries are bounded and
 independent from panel restore and Voice auto-resume; `/health` and its `/ready`
 alias remain degraded until Discord accepts the current registry.
 
@@ -84,8 +84,7 @@ commands are `//รียศ [ROLE_ID ...]` (for broad sweep with optional excep
 it rechecks bot permissions and the role fingerprint, including the bot's own
 hierarchy; role catalog, hierarchy, or member role assignment changes cancel the
 work. It removes only manageable human members' eligible roles, always skips the
-invoking account, reports changed members plus successful and failed role assignments,
-and does not create a restore snapshot.
+invoking account, and reports changed members plus successful and failed role assignments.
 
 `/voice-admin` is an ephemeral Administrator-only panel for the normal voice
 channel where it is opened. It can disconnect, move, and apply or remove
@@ -110,13 +109,6 @@ The owner-locked provider imports a thin compatibility adapter that delegates
 only to the separate internal event store. Enterprise Audit remains retired;
 internal events still use the `internal_event_*` settings namespace and never
 access retired Audit models, routes, channels, or `audit_event_*` keys.
-
-Guild backups are stored in bounded chunks. Every complete version is retained;
-one version per guild is marked active, older versions are marked superseded,
-and startup reconciliation selects the newest complete readable version without
-deleting history. Restore validates backup/target guild identity, chunk item
-counts and byte sizes, restores channel permission overwrites, and continues to
-read legacy embedded snapshots.
 
 ## Binding owner behavior
 

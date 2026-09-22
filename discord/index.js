@@ -116,8 +116,7 @@ let readyInitializationController = null;
 
 const COMMAND_COOLDOWNS_MS = {
     ban:5000, kick:5000, timeout:5000, "voice-admin":5000,
-    say:5000, announce:5000, clear:10000, "copy-emojis":10000,
-    backup:30000, restore:30000
+    say:5000, embed:5000, clear:10000, "copy-emojis":10000
 };
 const DEFAULT_COOLDOWN_MS = 3000;
 const COMMAND_REGISTRATION_DELAYS_MS = Object.freeze([0, 1000, 3000]);

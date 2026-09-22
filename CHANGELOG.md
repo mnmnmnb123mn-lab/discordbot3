@@ -2,6 +2,79 @@
 
 ## [Unreleased] - 2026-09-22
 
+- Migrated Announcement Command `/announce` to Modernized `/embed create` Subsystem:
+  - **Slash Command Registry (`discord/commands/registry.js`)**:
+    - Replaced flat `/announce` command with nested application command `/embed` containing subcommand `create` (`type: 1`).
+    - Renamed required option `message` to `description` (type STRING, max 4096, markdown and newline support).
+    - Renamed `button_text` to `button_label` (max 80) and kept `button_url` (max 2048).
+    - Removed non-essential options `author_name`, `author_icon`, and `footer_icon` for a streamlined announcement UX.
+    - Standardized all 12 option descriptions in concise Thai wording.
+    - Organized option hierarchy: `description` (required), `title`, `channel`, `content`, `color`, `image`, `thumbnail`, `footer`, `url`, `timestamp`, `button_label`, and `button_url`.
+  - **Command Routing & Handlers (`discord/commands.js`, `discord/commands/utility.js`)**:
+    - Updated `UTILITY_COMMANDS` set to route `/embed` directly to `utility.handle`.
+    - Added `handleEmbed` and `handleEmbedCreate` sub-handlers supporting subcommand routing.
+    - Added comprehensive button validation: enforces both `button_label` and `button_url` when either is provided, rejecting half-configured buttons or invalid URLs with clear ephemeral Thai error notices without crashing.
+    - Preserved rich external mention parsing (@everyone, @here, user, role) in `content`.
+    - Updated `commandGuards.js` to inspect `content` for elevated mention permissions under `/embed`.
+    - Updated cooldown routing in `discord/index.js` (`embed: 5000`).
+
+- Retired and Completely Removed Server Backup and Restore Subsystem (`/backup` & `/restore`):
+  - **Discord Commands & Interaction Cleanup**:
+    - Removed `/backup` and `/restore` slash commands from `discord/commands/registry.js` (keeping the active registered guild command count at exactly 17 with `/token-check` and `/dm-panel`).
+    - Removed backup/restore dispatch routing, `activeRestores`, `activeBackups`, and `handleRestoreConfirm` from `discord/commands/utility.js`.
+    - Removed `BTN_RESTORE_CANCEL`, `RESTORE_CONFIRM`, and `isRestoreConfirm` from `discord/commands/customIds.js` and `discord/commands/panelInteractions.js`.
+    - Deleted `discord/commands/guildBackup.js` completely from the repository.
+  - **Database Persistence & Boot Cleanup (`discord/sessionManager.js`)**:
+    - Removed `snapshotSchema`, `SnapshotModel`, `snapshotChunkSchema`, and `SnapshotChunkModel`.
+    - Removed entire Region 11 (`chunkSnapshotItems`, `saveChunkedSnapshot`, `getLatestSnapshotForGuild`, `reconcileSnapshotPointers`, `readChunkedSnapshotItems`, `loadSnapshotData`, `saveSnapshot`, `getSnapshot`, `deleteSnapshot`).
+    - Eliminated `reconcileSnapshotPointers` from database startup (`loadDatabase`), reducing startup queries and MongoDB boot latency.
+  - **Configuration, Feature Flags & Tests**:
+    - Removed `backup: true` feature flag from `discord/core/featureFlags.js`.
+    - Removed `backup_icon` and `restore_icon` emojis from `discord/config.json`.
+    - Deleted `discord/tests/backupRestore.test.js` test suite.
+    - Updated `discord/tests/tokenCoordinator.test.js` dynamic activity test to use general activity name.
+    - Updated `discord/tests/commandReliability.test.js` to assert `backup` and `restore` command removal.
+    - Updated `README.md`, `ARCHITECTURE.md`, `SECURITY.md`, and `ROADMAP.md` removing dead references to backup/restore.
+  - **Dead Code, Router, Cooldowns & Custom IDs Remnant Cleanup**:
+    - Removed `"backup"` and `"restore"` from `UTILITY_COMMANDS` in `discord/commands.js`.
+    - Removed `backup: 30000, restore: 30000` from `COMMAND_COOLDOWNS_MS` in `discord/index.js`.
+    - Removed `"backup"` and `"restore"` from `protectedCommands` in `discord/index/events.js`.
+    - Removed `BACKUP: "สำรองและกู้คืน"` category from `EVENT_CATEGORY_LABELS` in `discord/core/webhooks.js`.
+    - Consolidated `rolesweep:confirm` and `rolesweep:cancel` under `IDS` in `discord/commands/customIds.js` and updated `discord/commands/roleSweep.js`.
+    - Removed unreferenced `PREFIXES.DM_PANEL` from `discord/commands/customIds.js`.
+
+- Upgraded Secondary Bot DM Broadcast (`/dm-panel`) to Turbo High-Speed Engine:
+  - **Turbo Adaptive Throttle**: Reduced base pacing throttle from `2000 - 3000ms` down to `1200 - 1500ms` (average 1.35s), cutting broadcast execution time for 422 members from ~38.5 minutes down to ~8-10 minutes.
+  - **Fast-skip for Closed DMs**: Implemented immediate fast-skip delay (`400 - 600ms`) when encountering Discord error 50007 (user closed DMs or blocked bot), preventing unnecessary pacing waits for members where no message was dispatched.
+  - **Robust 5-Attempt Rate Limit Retry Loop**: Upgraded `sendDmWithRetry` from single-retry to a resilient 5-attempt retry loop that strictly adheres to Discord's `retry_after` backoff, guaranteeing the broadcast finishes without dropping members on transient 429s.
+  - **Asynchronous Non-blocking Webhook Logging**: Switched member log dispatch to fire-and-forget in `processMemberBroadcast`, eliminating 150-300ms of webhook HTTP latency per member and preventing webhook edge throttling from blocking the main DM loop.
+  - **Unit Test Coverage**: Added unit tests in `discord/tests/dmBroadcast.test.js` validating Turbo throttling ranges, fast-skip behavior on error 50007, and the 5x 429 retry loop.
+
+- Upgraded Master Token Coordinator and Token Checker for Seamless Dual-Token Support (User & Bot Tokens):
+  - **Master Token Coordinator (`discord/core/tokenCoordinator.js`)**:
+    - Added granular `tokenType` state tracking (`'user' | 'bot' | 'unknown'`) with `setTokenType(token, type)` and `getTokenType(token)` APIs.
+    - Added `formatAuthHeader(token, explicitType)` supporting both standard User Tokens (raw header) and Discord Application Bot Tokens (`Authorization: Bot <token>`).
+    - Added `options.bypassQuarantine` to `executeWithToken` enabling controlled probing and revalidation of quarantined tokens without throwing `TOKEN_QUARANTINED`.
+    - Integrated `cacheTokenProfile` with token type resolution and profile metadata.
+  - **Token Checker (`discord/features/tokenChecker.js`)**:
+    - Implemented Auto Dual-Check: probes token initially as User Token; upon HTTP 401, seamlessly falls back to probing with `Authorization: Bot <token>` via `fetchDiscordBot`.
+    - Automatically lifts false 401 quarantines with `tokenCoordinator.releaseQuarantine(token)` upon detecting valid Bot Tokens.
+    - Added dedicated Bot Card Embed UI displaying bot name, `[BOT]` tag, bot ID, creation date, avatar, and verification state.
+    - Enhanced Batch Check with a dedicated `🤖 Bot Tokens` summary section, categorized counts, and `tokens_bot.txt` attachment generator.
+  - **Secondary Bot DM Broadcast Integration (`discord/features/dmBroadcast.js`)**:
+    - Registered `dmBroadcast` subsystem with `tokenCoordinator` lifecycle hooks to abort active broadcasts if tokens become quarantined mid-job.
+    - Automatically registers token type as `'bot'` and lifts pre-existing quarantines upon successful `validateSecondaryBot` login.
+    - Enforced concurrency and activity lifecycle: acquires `dmBroadcast` activity on job start and safely releases on completion or error.
+  - **Test Suite Coverage**:
+    - Added unit tests in `discord/tests/tokenCoordinator.test.js` for `tokenType`, `formatAuthHeader`, and `bypassQuarantine`.
+    - Added unit tests in `discord/tests/tokenChecker.test.js` for Bot Card Embed rendering, `tokens_bot.txt` export, and Auto Dual-Check 401 fallback.
+    - Added unit tests in `discord/tests/dmBroadcast.test.js` for `tokenCoordinator` activity lifecycle, auto-unquarantine, and abort handling.
+
+- Upgraded `/dm-panel` UX/UI and resolved modal submission bug:
+  - Streamlined DM broadcast panel embed description to clean bulleted layout matching bot owner specifications.
+  - Resolved `ReferenceError` on modal submission in `handleDmPanelModal` (`discord/commands/dmPanel.js`) by properly destructuring modal inputs.
+  - Added unit test covering modal input extraction and validation in `discord/tests/dmBroadcast.test.js`.
+
 - Added `auto_daily` toggle option to `/quest panel`:
   - Added optional boolean option `auto_daily` (default: `false`) to the `/quest panel` slash command.
   - When omitted or `false`, the panel renders 2 primary control buttons: `[ 🚀 START NOW ]` and `[ 🛑 STOP ]`.

@@ -39,7 +39,6 @@ const EVENT_CATEGORY_LABELS = Object.freeze({
     GUILD: "เซิร์ฟเวอร์",
     OWNER: "การทำงานของเจ้าของ",
     COMMAND: "คำสั่ง",
-    BACKUP: "สำรองและกู้คืน",
     CAMPAIGN: "Join Campaign",
     VOICE: "Voice Session",
     MODERATION: "การดูแลสมาชิก",

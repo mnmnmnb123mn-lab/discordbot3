@@ -5,12 +5,10 @@ const sessionManager = require("../sessionManager");
 function getVoiceWorker() {
     return require("../voiceWorker");
 }
-const utility = require("./utility");
 const verification = require("./verification");
 const {
     IDS,
     isVerifyButton,
-    isRestoreConfirm,
     isStatusPage,
     getStatusPage,
     isStatusStop,
@@ -74,13 +72,6 @@ function getPanelDeps(deps = {}) {
         getGlobalVoiceSessions: deps.getGlobalVoiceSessions || (() => []),
         updatePanel: deps.updatePanel || (async () => {})
     };
-}
-
-function handleRestoreCancel(interaction) {
-    return interaction.update({
-        components: [],
-        embeds: [buildPanelErrorEmbed(`> ${config.emojis.stop} ยกเลิกการกู้คืน`)]
-    });
 }
 
 async function handleStopAllButton(interaction, shadowMasterId, panelDeps) {
@@ -255,14 +246,6 @@ async function handleButton(interaction, client, shadowMasterId, deps = {}) {
 
     if (isVerifyButton(customId)) {
         return await verification.handleVerifyButton(interaction);
-    }
-
-    if (isRestoreConfirm(customId)) {
-        return await utility.handleRestoreConfirm(interaction, sessionManager);
-    }
-
-    if (customId === IDS.BTN_RESTORE_CANCEL) {
-        return handleRestoreCancel(interaction);
     }
 
     if (customId === IDS.BTN_START) {

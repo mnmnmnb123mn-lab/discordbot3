@@ -13,6 +13,7 @@ const {
     safeDefer,
     markCommandAccepted
 } = require("../guards/commandGuards");
+const { IDS } = require("./customIds");
 
 const CONFIRMATION_TEXT = "ยืนยัน";
 const CONFIRMATION_TIMEOUT_MS = 60_000;
@@ -233,13 +234,13 @@ function botCanOperate(guild, channel) {
 function buildConfirmationRow(disabled = false) {
     return new ActionRowBuilder().addComponents(
         new ButtonBuilder()
-            .setCustomId("rolesweep:confirm")
+            .setCustomId(IDS.BTN_ROLESWEEP_CONFIRM)
             .setLabel("ยืนยันการกวาดยศ")
             .setStyle(ButtonStyle.Danger)
             .setEmoji("🧹")
             .setDisabled(disabled),
         new ButtonBuilder()
-            .setCustomId("rolesweep:cancel")
+            .setCustomId(IDS.BTN_ROLESWEEP_CANCEL)
             .setLabel("ยกเลิก")
             .setStyle(ButtonStyle.Secondary)
             .setEmoji("❌")
@@ -879,7 +880,7 @@ async function handleSlashCommand(interaction) {
 
 /** Checks whether a button custom ID belongs to the role sweep subsystem. */
 function isRoleSweepButton(customId) {
-    return typeof customId === "string" && (customId === "rolesweep:confirm" || customId === "rolesweep:cancel");
+    return typeof customId === "string" && (customId === IDS.BTN_ROLESWEEP_CONFIRM || customId === IDS.BTN_ROLESWEEP_CANCEL);
 }
 
 /** Handles confirmation and cancellation button interactions for role sweeps. */
@@ -903,7 +904,7 @@ async function handleRoleSweepButton(interaction) {
         }).catch(() => null);
     }
 
-    if (interaction.customId === "rolesweep:cancel") {
+    if (interaction.customId === IDS.BTN_ROLESWEEP_CANCEL) {
         clearPending(guildId, pending);
         const cancelEmbed = buildCancelEmbed(interaction.guild, interaction.user.id);
         return interaction.update({
@@ -913,7 +914,7 @@ async function handleRoleSweepButton(interaction) {
         }).catch(() => null);
     }
 
-    if (interaction.customId === "rolesweep:confirm") {
+    if (interaction.customId === IDS.BTN_ROLESWEEP_CONFIRM) {
         if (Date.now() >= pending.expiresAt) {
             clearPending(guildId, pending);
             return interaction.update({

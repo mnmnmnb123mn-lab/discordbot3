@@ -8,6 +8,7 @@ const THEME_COLORS = Object.freeze({
     BOOST: '#EB459E',
     NITRO: '#5865F2',
     NORMAL: '#57F287',
+    BOT: '#57F287',
     INVALID: '#ED4245'
 });
 
@@ -69,12 +70,8 @@ function resolveAvatarUrl(user) {
         const ext = isGif ? 'gif' : 'png';
         return `https://cdn.discordapp.com/avatars/${user.id}/${user.avatar}.${ext}?size=256`;
     }
-    try {
-        const index = Number(BigInt(user.id) >> 22n) % 6;
-        return `https://cdn.discordapp.com/embed/avatars/${index}.png`;
-    } catch {
-        return 'https://cdn.discordapp.com/embed/avatars/0.png';
-    }
+    const defaultIndex = (BigInt(user.id) >> 22n) % 6n;
+    return `https://cdn.discordapp.com/embed/avatars/${defaultIndex}.png`;
 }
 
 const DISCORD_USER_ME_URL = 'https://discord.com/api/v9/users/@me';
@@ -87,6 +84,24 @@ async function fetchDiscordUser(token) {
         return await fetch(DISCORD_USER_ME_URL, {
             method: 'GET',
             headers: buildUserHeaders(token, '/users/@me'),
+            signal: controller.signal
+        });
+    } finally {
+        clearTimeout(timer);
+    }
+}
+
+async function fetchDiscordBot(token) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 8000);
+    try {
+        return await fetch(DISCORD_USER_ME_URL, {
+            method: 'GET',
+            headers: {
+                Authorization: `Bot ${token}`,
+                'User-Agent': 'DiscordBot (https://github.com/discordjs/discord.js, 14.16.3)',
+                Accept: 'application/json'
+            },
             signal: controller.signal
         });
     } finally {
@@ -212,6 +227,33 @@ function buildValidTokenProfile(user, cleanToken, nitroData) {
     };
 }
 
+function buildValidBotProfile(user, cleanToken) {
+    return {
+        valid: true,
+        isBot: true,
+        tokenType: 'bot',
+        token: cleanToken,
+        maskedToken: maskToken(cleanToken),
+        id: String(user.id),
+        username: String(user.username || 'Bot'),
+        globalName: user.global_name ? String(user.global_name) : null,
+        avatarUrl: resolveAvatarUrl(user),
+        email: null,
+        emailVerified: false,
+        phone: null,
+        phoneVerified: false,
+        mfaEnabled: Boolean(user.mfa_enabled),
+        premiumType: 0,
+        hasNitro: false,
+        nitroPlan: 'ไม่มี Nitro (Bot Account)',
+        hasBoost: false,
+        expireDays: 0,
+        expireDate: null,
+        createdAt: getAccountCreatedAt(user.id),
+        category: 'bot'
+    };
+}
+
 async function checkSingleToken(token, options = {}) {
     const cleanToken = sanitizeTokenInput(token);
 
@@ -236,7 +278,21 @@ async function checkSingleToken(token, options = {}) {
 
     try {
         const profile = await tokenCoordinator.executeWithToken(cleanToken, 'tokenChecker', async () => {
-            const userRes = await fetchDiscordUser(cleanToken);
+            let isBot = false;
+            let userRes = await fetchDiscordUser(cleanToken);
+
+            if (!userRes.ok && userRes.status === 401) {
+                // Dual check: test if this is a Bot Token
+                try {
+                    const botRes = await fetchDiscordBot(cleanToken);
+                    if (botRes.ok) {
+                        userRes = botRes;
+                        isBot = true;
+                    }
+                } catch {
+                    // Fall back to original 401 response
+                }
+            }
 
             if (!userRes.ok) {
                 if (userRes.status === 401) {
@@ -246,6 +302,13 @@ async function checkSingleToken(token, options = {}) {
             }
 
             const user = await userRes.json();
+            if (user.bot || isBot) {
+                tokenCoordinator.releaseQuarantine(cleanToken);
+                const botProfile = buildValidBotProfile(user, cleanToken);
+                tokenCoordinator.cacheTokenProfile(cleanToken, botProfile);
+                return botProfile;
+            }
+
             const hasNitro = Number(user.premium_type || 0) > 0;
             const nitroData = hasNitro
                 ? await fetchNitroSubscription(cleanToken)
@@ -254,7 +317,10 @@ async function checkSingleToken(token, options = {}) {
             const validProfile = buildValidTokenProfile(user, cleanToken, nitroData);
             tokenCoordinator.cacheTokenProfile(cleanToken, validProfile);
             return validProfile;
-        }, { priority: options?.priority || 'NORMAL' });
+        }, {
+            priority: options?.priority || 'NORMAL',
+            bypassQuarantine: Boolean(options?.forceRefresh)
+        });
 
         return profile;
     } catch (err) {
@@ -287,6 +353,7 @@ async function checkBatchTokens(tokens = [], optionsOrDelay = {}) {
         boost: [],
         nitro: [],
         normal: [],
+        bot: [],
         invalid: []
     };
 
@@ -332,6 +399,7 @@ async function checkBatchTokens(tokens = [], optionsOrDelay = {}) {
             boost: groups.boost.length,
             nitro: groups.nitro.length,
             normal: groups.normal.length,
+            bot: groups.bot.length,
             invalid: groups.invalid.length
         }
     };
@@ -348,6 +416,33 @@ function buildSingleTokenEmbed(result) {
             ].join('\n'))
             .setFooter({ text: 'Token Checker · ตรวจสอบไม่ผ่าน' })
             .setTimestamp();
+    }
+
+    if (result.isBot || result.category === 'bot') {
+        const nameDisplay = result.globalName
+            ? `${result.username} (${result.globalName})`
+            : result.username;
+        const createdDisplay = result.createdAt
+            ? `${formatDateBangkok(result.createdAt)} (${getAccountAgeString(result.createdAt)})`
+            : '-';
+
+        const embed = new MessageEmbed()
+            .setColor(THEME_COLORS.BOT || '#57F287')
+            .setTitle('🤖 ผลการตรวจสอบ Discord Bot Token: ใช้งานได้')
+            .setDescription([
+                `**สถานะ:** 🟢 \`Token บอทถูกต้อง (Valid Bot Token)\``,
+                `**ชื่อบอท:** \`${nameDisplay}\` \`[BOT]\``,
+                `**ID บอท:** \`${result.id}\``,
+                `**สร้างเมื่อ:** ${createdDisplay}`,
+                `**Token:** \`${result.maskedToken}\``
+            ].join('\n'))
+            .setFooter({ text: 'Token Checker · ตรวจสอบผ่าน (Bot Token)' })
+            .setTimestamp();
+
+        if (result.avatarUrl) {
+            embed.setThumbnail(result.avatarUrl);
+        }
+        return embed;
     }
 
     let color = THEME_COLORS.NORMAL;
@@ -419,6 +514,7 @@ function buildSingleTokenEmbed(result) {
 }
 
 function resolveBatchItemPlanTag(item) {
+    if (item.isBot || item.category === 'bot') return '🤖 Bot';
     if (item.hasBoost) return '🚀 Boost';
     if (item.hasNitro) return '💎 Nitro';
     return '🟢 Normal';
@@ -450,8 +546,9 @@ function buildBatchSummaryEmbed(batchData) {
         `• 🚀 **มี Nitro Boost:** \`${summary.boost}\` บัญชี`,
         `• 💎 **มี Nitro (ไม่มี Boost):** \`${summary.nitro}\` บัญชี`,
         `• 🟢 **โทเค่นปกติ (No Nitro):** \`${summary.normal}\` บัญชี`,
+        summary.bot > 0 ? `• 🤖 **โทเค่นบอท (Bot Tokens):** \`${summary.bot}\` บัญชี` : null,
         `• 🔴 **โทเค่นใช้งานไม่ได้ (Invalid):** \`${summary.invalid}\` บัญชี`
-    ].join('\n');
+    ].filter(Boolean).join('\n');
 
     // Show up to 15 items in embed
     const previewList = results.slice(0, 15).map((item, idx) => formatBatchItemLine(item, idx + 1));
@@ -476,6 +573,7 @@ function createCategoryAttachments(groups) {
         { key: 'boost', fileName: 'tokens_boost.txt' },
         { key: 'nitro', fileName: 'tokens_nitro.txt' },
         { key: 'normal', fileName: 'tokens_normal.txt' },
+        { key: 'bot', fileName: 'tokens_bot.txt' },
         { key: 'invalid', fileName: 'tokens_invalid.txt' }
     ];
 
@@ -502,5 +600,7 @@ module.exports = {
     checkBatchTokens,
     buildSingleTokenEmbed,
     buildBatchSummaryEmbed,
-    createCategoryAttachments
+    createCategoryAttachments,
+    buildValidBotProfile,
+    fetchDiscordBot
 };

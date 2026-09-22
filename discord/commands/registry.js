@@ -95,24 +95,29 @@ const slashCommandsData = [
     },
 
     {
-        name: "announce",
-        description: "ส่งข้อความประกาศแบบ Embed ปรับแต่งได้อิสระ",
+        name: "embed",
+        description: "ระบบสร้างข้อความประกาศแบบ Embed",
         options: [
-            { type: 3, name: "message", description: String.raw`เนื้อหาประกาศใน Embed (รองรับ Markdown และ \n)`, required: true, min_length: 1, max_length: 4096 },
-            { type: 3, name: "title",   description: "หัวข้อประกาศ", required: false, max_length: 256 },
-            { type: 7, name: "channel", description: "ห้องที่จะส่งประกาศ (ถ้าไม่ระบุจะส่งห้องนี้)", required: false },
-            { type: 3, name: "content", description: "ข้อความดิบนอก Embed (รองรับ @everyone / @here / user / role)", required: false, max_length: 2000 },
-            { type: 3, name: "color", description: "สีขอบ Embed แบบ HEX เช่น #5865F2 หรือ FF0000", required: false },
-            { type: 3, name: "image", description: "ลิงก์รูปภาพหลักขนาดใหญ่ใน Embed", required: false, max_length: 2048 },
-            { type: 3, name: "thumbnail", description: "ลิงก์รูปภาพเล็กมุมขวาของ Embed", required: false, max_length: 2048 },
-            { type: 3, name: "footer", description: "ข้อความท้าย Embed", required: false, max_length: 2048 },
-            { type: 3, name: "footer_icon", description: "ลิงก์ไอคอนท้าย Embed", required: false, max_length: 2048 },
-            { type: 3, name: "author_name", description: "ชื่อผู้เขียนด้านบน Embed", required: false, max_length: 256 },
-            { type: 3, name: "author_icon", description: "ลิงก์ไอคอนผู้เขียนด้านบน Embed", required: false, max_length: 2048 },
-            { type: 3, name: "url", description: "ลิงก์ที่หัวข้อ Embed จะกดเข้าไปได้", required: false, max_length: 2048 },
-            { type: 5, name: "timestamp", description: "เปิดหรือปิดเวลาใต้ Embed", required: false },
-            { type: 3, name: "button_text", description: "ข้อความบนปุ่มลิงก์แนบประกาศ", required: false, max_length: 80 },
-            { type: 3, name: "button_url", description: "ลิงก์ URL ปลายทางของปุ่ม (ต้องขึ้นต้นด้วย http:// หรือ https://)", required: false, max_length: 2048 }
+            {
+                type: 1,
+                name: "create",
+                description: "สร้างและส่งข้อความ Embed สำหรับประกาศ",
+                required: false,
+                options: [
+                    { type: 3, name: "description", description: "เนื้อหาหลักของ Embed รองรับ Markdown และขึ้นบรรทัดใหม่", required: true, min_length: 1, max_length: 4096 },
+                    { type: 3, name: "title", description: "หัวข้อของ Embed", required: false, max_length: 256 },
+                    { type: 7, name: "channel", description: "ช่องที่จะส่ง Embed นี้", required: false },
+                    { type: 3, name: "content", description: "ข้อความปกตินอก Embed รองรับ @everyone, @here, ผู้ใช้ และยศ", required: false, max_length: 2000 },
+                    { type: 3, name: "color", description: "สีขอบด้านซ้ายของ Embed แบบ HEX เช่น #5865F2 หรือ FF0000", required: false },
+                    { type: 3, name: "image", description: "URL ของรูปภาพหลักขนาดใหญ่ใน Embed", required: false, max_length: 2048 },
+                    { type: 3, name: "thumbnail", description: "URL ของรูปภาพขนาดเล็กบริเวณมุมขวาบน", required: false, max_length: 2048 },
+                    { type: 3, name: "footer", description: "ข้อความที่แสดงด้านล่างของ Embed", required: false, max_length: 2048 },
+                    { type: 3, name: "url", description: "URL ที่จะเปิดเมื่อกดหัวข้อของ Embed", required: false, max_length: 2048 },
+                    { type: 5, name: "timestamp", description: "เพิ่มเวลาปัจจุบันลงใน Embed", required: false },
+                    { type: 3, name: "button_label", description: "ข้อความที่แสดงบนปุ่มลิงก์", required: false, max_length: 80 },
+                    { type: 3, name: "button_url", description: "URL ที่ปุ่มจะเปิดเมื่อกด", required: false, max_length: 2048 }
+                ]
+            }
         ]
     },
 
@@ -121,17 +126,6 @@ const slashCommandsData = [
         description: "ดึงอิโมจิเข้าเซิร์ฟเวอร์ (สูงสุด 50 ตัว)",
         options: [
             { type: 3, name: "emojis", description: "วางอิโมจิที่ต้องการดึง", required: true }
-        ]
-    },
-
-    { name: "backup", description: "บันทึกโครงสร้างเซิร์ฟเวอร์ (เฉพาะเจ้าของ)" },
-
-    {
-        name: "restore",
-        description: "กู้คืนโครงสร้างเซิร์ฟเวอร์",
-        options: [
-            { type: 3, name: "server_id", description: "ไอดีเซิร์ฟเวอร์ต้นทาง", required: true },
-            { type: 5, name: "dry_run", description: "ดูแผนกู้คืนก่อน โดยยังไม่สร้างอะไร", required: false }
         ]
     },
 

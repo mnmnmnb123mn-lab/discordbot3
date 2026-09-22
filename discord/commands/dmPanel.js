@@ -45,13 +45,10 @@ function buildDmPanelEmbed({ hasAttachment = false } = {}) {
         .setColor(primaryColor)
         .setTitle(`${universeEmoji} : Phomueangtai ระบบกระจายข้อความ DM`)
         .setDescription(
-            `ระบบกระจายข้อความ DM ผ่านบอทตัวรอง (Secondary Bot Broadcast) 🤖\n\n` +
-            `**คุณสมบัติและการทำงาน:**\n` +
-            `• ปลอดภัยสูงสุดด้วยการส่งผ่านบอทตัวรอง ป้องกันบอทหลักโดนจำกัดสิทธิ์\n` +
-            `• ตรวจสอบสิทธิ์และจำนวนสมาชิกในเซิร์ฟเวอร์เป้าหมายอัตโนมัติก่อนเริ่มส่ง\n` +
-            `• ระบบหน่วงเวลาอัจฉริยะ (Adaptive Throttling 2-3s) เพื่อความปลอดภัยของ Token\n` +
-            `• แจ้งเตือนสถานะการส่งรายบุคคลแบบ Real-time ลง Webhook อย่างละเอียด\n\n` +
-            `*Developed by <@${ownerId}> • สงวนสิทธิ์เฉพาะเจ้าของบอทเท่านั้น*`
+            `- ระบบส่ง DM ผ่านบอทตัวรอง\n\n` +
+            `- ดำเนินการทุกคนตามบอทที่อยู่ในเซิฟเวอร์นั้น\n\n` +
+            `- ตั้งค่าควบคุมผ่านปุ่มแผงควบคุมด้านล่าง\n\n` +
+            `*Developed by <@${ownerId}>*`
         )
         .setFooter({ text: 'คลิกปุ่มด้านล่างเพื่อเริ่มการตั้งค่าการส่งข้อความ' })
         .setTimestamp();
@@ -316,6 +313,8 @@ async function handleDmPanelModal(interaction) {
         targetCount: checkResult.targetCount
     });
 
+    const { message, imageUrl, webhookUrl } = inputs;
+
     const previewMessage = message.length > 300
         ? `${message.slice(0, 300)}...`
         : message;
@@ -356,5 +355,7 @@ module.exports = {
     showDmPanelModal,
     handleDmPanelCommand,
     handleDmPanelButton,
-    handleDmPanelModal
+    handleDmPanelModal,
+    extractDmModalInputs,
+    validateDmModalFields
 };

@@ -42,7 +42,7 @@ function getElevatedMentionRequirement(interaction) {
     let content = "";
     if (commandName === "say") {
         content = readCommandOption(interaction, "message");
-    } else if (commandName === "announce") {
+    } else if (commandName === "embed" || commandName === "announce") {
         content = readCommandOption(interaction, "content");
     }
 
@@ -128,7 +128,7 @@ function sanitizeUserMessage(msg, options = {}) {
     const bounded = msg.slice(0, maxLength);
     if (!bounded.trim()) return "";
 
-    // Admin-authored /say and /announce content must remain unchanged. Risky-link
+    // Admin-authored /say and /embed content must remain unchanged. Risky-link
     // filtering is still available for any future untrusted-input caller that
     // explicitly opts in.
     if (options.filterRiskyLinks !== true) return bounded;

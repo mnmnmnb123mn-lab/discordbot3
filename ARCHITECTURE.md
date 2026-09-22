@@ -168,9 +168,9 @@ it does not restore the retired Enterprise Audit subsystem.
 
 ### Direct-message delivery
 
-Voice, verification, and restore-result notifications share the DM service
+Voice and verification notifications share the DM service
 under `discord/dm/`. Every delivered payload disables mentions; Verification
-uses its own concise server-first Embed while Voice and Restore retain their
+uses its own concise server-first Embed while Voice retains its
 existing presentation. `DmNotification` is a
 30-day MongoDB outbox with a unique event key, bounded retry schedule, delivery
 state, and priority ordering. Closed DMs and unknown users are terminal;
@@ -181,8 +181,7 @@ but high/critical failures bypass the routine DM budget. A recovered event is
 sent in important-only mode when it closes a previously announced outage.
 Moderation actions do not send a DM and retain their ModCase reconciliation.
 Verification distinguishes a newly successful verification, an already-held
-role, policy denial, and an operational failure. Restore detail is never used
-as a public channel fallback when private delivery is unavailable.
+role, policy denial, and an operational failure.
 
 ## 4. HTTP boundary
 

@@ -395,7 +395,7 @@ async function checkProtectedCommandAccess(interaction, config, shadowMasterId) 
     if (!interaction.guild || interaction.isAutocomplete() || !interaction.isChatInputCommand()) {
         return { allowed: true };
     }
-    const protectedCommands = ["voice-online", "backup", "restore", "setup-verify"];
+    const protectedCommands = ["voice-online", "setup-verify"];
     if (!protectedCommands.includes(interaction.commandName)) {
         return { allowed: true };
     }

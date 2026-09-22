@@ -1,7 +1,6 @@
 /*
 ================================================================================
 ⚠️ [AI COGNITIVE DIRECTIVE] ⚠️
-DO NOT REMOVE: activeRestores and activeBackups Sets.
 DO NOT REMOVE: finally blocks — they unlock race condition guards.
 DO NOT SIMPLIFY: Permission check chain — each check serves a specific purpose.
 ================================================================================

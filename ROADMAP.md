@@ -54,7 +54,7 @@ require a new explicit owner decision.
   sizing, oversized-object checksum chunks, rollback recovery, and no aggregate
   truncation ceiling.
 - Added a resumable, guild-scoped privacy-deletion manifest with post-delete reference verification, while keeping IP-history backfill idempotent and requiring a confirmed maintenance window for archive restore apply.
-- Added guild-backup identity/chunk validation and permission-overwrite restore.
+- Retired and decommissioned the legacy /backup and /restore guild snapshot subsystem to simplify bot architecture and minimize attack surface.
 - Replaced the inherited Owner Verification presentation with a five-section,
   mobile-first module inside the purple Owner Dashboard while preserving routes,
   APIs, management capabilities, and the existing public OAuth callback page.

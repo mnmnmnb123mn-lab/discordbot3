@@ -271,36 +271,6 @@ const sessionSchema = new mongoose.Schema({
 });
 const SessionModel = mongoose.model("Session", sessionSchema);
 
-// --- Snapshot Schema (Backup/Restore) ---
-const snapshotSchema = new mongoose.Schema({
-    snapshotId: { type: String, required: true, unique: true },
-    guildId: String,
-    Backup_Owner_ID: String,
-    data: Object,
-    storageMode: { type: String, default: "legacy" },
-    chunkMeta: Object,
-    complete: { type: Boolean, default: true },
-    activationPending: { type: Boolean, default: false },
-    active: { type: Boolean, default: false },
-    supersededAt: { type: Number, default: null },
-    supersededBy: { type: String, default: null },
-    createdAt: { type: Number, default: Date.now }
-});
-snapshotSchema.index({ guildId: 1 }, { unique: true, partialFilterExpression: { active: true } });
-const SnapshotModel = mongoose.model("Snapshot", snapshotSchema);
-const snapshotChunkSchema = new mongoose.Schema({
-    snapshotId: { type: String, required: true, index: true },
-    kind: { type: String, required: true },
-    chunkIndex: { type: Number, required: true },
-    items: { type: [mongoose.Schema.Types.Mixed], default: [] },
-    itemCount: { type: Number, required: true },
-    byteSize: { type: Number, required: true },
-    complete: { type: Boolean, default: true },
-    createdAt: { type: Number, default: Date.now }
-});
-snapshotChunkSchema.index({ snapshotId: 1, kind: 1, chunkIndex: 1 }, { unique: true });
-const SnapshotChunkModel = mongoose.model("SnapshotChunk", snapshotChunkSchema);
-
 // --- Approved Guild Schema ---
 const approvedGuildSchema = new mongoose.Schema({
     guildId: { type: String, required: true, unique: true },
@@ -587,9 +557,6 @@ async function loadDatabase() {
     }
 
     try {
-        await reconcileSnapshotPointers().catch(err => {
-            console.warn(`[DATABASE] ⚠️ Snapshot pointer reconciliation deferred: ${String(err?.message || err).slice(0, 180)}`);
-        });
         const now = Date.now();
         const recoverableCutoff = now - LOAD_RECOVERABLE_STOP_CLEANUP_MS;
         const cleanup = await cleanStaleSessionsAndLegacyModels(now);
@@ -1329,216 +1296,6 @@ async function removePendingGuild(guildId) {
 }
 
 // ════════════════════════════════════════════════════════════════════════════
-//  💾 REGION 11: BACKUP SNAPSHOTS
-// ════════════════════════════════════════════════════════════════════════════
-const SNAPSHOT_CHUNK_MAX_BYTES = 512 * 1024;
-
-function chunkSnapshotItems(items, maxBytes = SNAPSHOT_CHUNK_MAX_BYTES) {
-    const chunks = [];
-    let current = [];
-    let currentBytes = 2;
-    for (const item of Array.isArray(items) ? items : []) {
-        const itemBytes = Buffer.byteLength(JSON.stringify(item), "utf8") + 1;
-        if (itemBytes > maxBytes) throw new Error("SNAPSHOT_ITEM_TOO_LARGE");
-        if (current.length && currentBytes + itemBytes > maxBytes) {
-            chunks.push(current);
-            current = [];
-            currentBytes = 2;
-        }
-        current.push(item);
-        currentBytes += itemBytes;
-    }
-    if (current.length || chunks.length === 0) chunks.push(current);
-    return chunks;
-}
-
-async function saveChunkedSnapshot(snapshotId, guildId, backupOwnerId, data) {
-    if (!dbConnected) return false;
-    const normalizedGuildId = String(guildId);
-    const oldSnapshot = await getLatestSnapshotForGuild(normalizedGuildId);
-    const createdAt = Date.now();
-    const kinds = ["roles", "channels"];
-    const chunkMeta = {};
-    try {
-        for (const kind of kinds) {
-            const source = Array.isArray(data?.[kind]) ? data[kind] : [];
-            const chunks = chunkSnapshotItems(source);
-            chunkMeta[kind] = { returnedCount: source.length, storedCount: 0, chunkCount: chunks.length, complete: false };
-            for (let index = 0; index < chunks.length; index++) {
-                const items = chunks[index];
-                const byteSize = Buffer.byteLength(JSON.stringify(items), "utf8");
-                await SnapshotChunkModel.create({ snapshotId, kind, chunkIndex: index, items, itemCount: items.length, byteSize, complete: true, createdAt });
-                chunkMeta[kind].storedCount += items.length;
-            }
-            chunkMeta[kind].complete = chunkMeta[kind].storedCount === source.length;
-            if (!chunkMeta[kind].complete) throw new Error("SNAPSHOT_CHUNK_INCOMPLETE");
-        }
-        const metadata = { ...data };
-        delete metadata.roles;
-        delete metadata.channels;
-        await SnapshotModel.create({
-            snapshotId,
-            guildId: normalizedGuildId,
-            Backup_Owner_ID: String(backupOwnerId),
-            data: metadata,
-            storageMode: "chunked",
-            chunkMeta,
-            complete: true,
-            activationPending: true,
-            active: false,
-            createdAt
-        });
-
-        await SnapshotModel.updateMany(
-            { guildId: normalizedGuildId, snapshotId: { $ne: snapshotId } },
-            { $set: { active: false, supersededAt: createdAt, supersededBy: snapshotId } }
-        );
-        try {
-            const activated = await SnapshotModel.updateOne(
-                { snapshotId, complete: true, activationPending: true },
-                { $set: { active: true, activationPending: false, supersededAt: null, supersededBy: null } }
-            );
-            if ((activated?.matchedCount ?? activated?.n ?? 0) !== 1) throw new Error("SNAPSHOT_ACTIVATION_FAILED");
-        } catch (activationError) {
-            if (oldSnapshot?.snapshotId) {
-                await SnapshotModel.updateOne(
-                    { snapshotId: oldSnapshot.snapshotId },
-                    { $set: { active: true, supersededAt: null, supersededBy: null } }
-                ).catch(() => null);
-            }
-            throw activationError;
-        }
-        return true;
-    } catch (err) {
-        await SnapshotChunkModel.deleteMany({ snapshotId }).catch(() => null);
-        await SnapshotModel.deleteOne({ snapshotId, active: { $ne: true } }).catch(() => null);
-        await reconcileSnapshotPointers().catch(() => null);
-        console.error(`[DATABASE] ❌ Failed to save chunked snapshot: ${err.message}`);
-        systemMetrics.increment("errors");
-        return false;
-    }
-}
-
-async function getLatestSnapshotForGuild(guildId) {
-    const normalizedGuildId = String(guildId || "");
-    if (!normalizedGuildId || !dbConnected) return null;
-    const readable = { complete: { $ne: false }, activationPending: { $ne: true } };
-    const active = await SnapshotModel.findOne({ guildId: normalizedGuildId, active: true, ...readable })
-        .sort({ createdAt: -1, _id: -1 });
-    if (active) return active;
-    return SnapshotModel.findOne({ guildId: normalizedGuildId, ...readable })
-        .sort({ createdAt: -1, _id: -1 });
-}
-
-async function reconcileSnapshotPointers() {
-    if (!dbConnected) return { guilds: 0, activated: 0 };
-    const guildIds = await SnapshotModel.distinct("guildId", { guildId: { $type: "string", $ne: "" } });
-    let activated = 0;
-    for (const guildId of guildIds) {
-        const latest = await SnapshotModel.findOne({ guildId, complete: { $ne: false }, activationPending: { $ne: true } })
-            .sort({ createdAt: -1, _id: -1 })
-            .select("snapshotId")
-            .lean();
-        if (!latest) continue;
-        const now = Date.now();
-        await SnapshotModel.updateMany(
-            { guildId, snapshotId: { $ne: latest.snapshotId } },
-            { $set: { active: false, supersededAt: now, supersededBy: latest.snapshotId } }
-        );
-        await SnapshotModel.updateOne(
-            { snapshotId: latest.snapshotId },
-            { $set: { active: true, activationPending: false, supersededAt: null, supersededBy: null } }
-        );
-        activated++;
-    }
-    return { guilds: guildIds.length, activated };
-}
-
-function isSnapshotChunkDocValid(doc, index) {
-    const items = Array.isArray(doc.items) ? doc.items : [];
-    return doc.complete &&
-        doc.chunkIndex === index &&
-        doc.itemCount === items.length &&
-        doc.byteSize === Buffer.byteLength(JSON.stringify(items), "utf8");
-}
-
-async function loadValidatedSnapshotChunkKind(source, kind) {
-    const meta = source.chunkMeta[kind];
-    if (!meta?.complete || !Number.isInteger(meta.chunkCount) || meta.chunkCount < 1) return null;
-    const docs = await SnapshotChunkModel.find({ snapshotId: source.snapshotId, kind }).sort({ chunkIndex: 1 }).lean();
-    if (docs.length !== meta.chunkCount || docs.some((doc, index) => !isSnapshotChunkDocValid(doc, index))) {
-        return null;
-    }
-    const items = docs.flatMap(doc => Array.isArray(doc.items) ? doc.items : []);
-    if (items.length !== meta.returnedCount || items.length !== meta.storedCount) return null;
-    return items;
-}
-
-async function loadSnapshotData(snapshot) {
-    if (!snapshot) return null;
-    const source = snapshot.toObject?.() || snapshot;
-    if (source.storageMode !== "chunked") return source.data || null;
-    if (!source.complete || !source.chunkMeta) return null;
-    const data = { ...source.data };
-    for (const kind of ["roles", "channels"]) {
-        const items = await loadValidatedSnapshotChunkKind(source, kind);
-        if (!items) return null;
-        data[kind] = items;
-    }
-    return data;
-}
-
-async function saveSnapshot(snapshotId, guildId, backupOwnerId, data) {
-    if (!dbConnected) return false;
-
-    try {
-        await SnapshotModel.updateOne(
-            { snapshotId },
-            {
-                $set: {
-                    snapshotId,
-                    guildId,
-                    Backup_Owner_ID: backupOwnerId,
-                    data,
-                    createdAt: Date.now()
-                }
-            },
-            { upsert: true }
-        );
-        return true;
-    } catch (err) {
-        console.error(`[DATABASE] ❌ Failed to save snapshot ${snapshotId}: ${err.message}`);
-        systemMetrics.increment("errors");
-        return false;
-    }
-}
-
-async function getSnapshot(snapshotId) {
-    if (!dbConnected) return null;
-
-    try {
-        return await SnapshotModel.findOne({ snapshotId });
-    } catch (err) {
-        console.error(`[DATABASE] ❌ Failed to get snapshot ${snapshotId}: ${err.message}`);
-        systemMetrics.increment("errors");
-        return null;
-    }
-}
-
-async function deleteSnapshot(snapshotId) {
-    if (!dbConnected) return false;
-
-    try {
-        await SnapshotModel.deleteOne({ snapshotId });
-        return true;
-    } catch (err) {
-        console.error(`[DATABASE] ❌ Failed to delete snapshot ${snapshotId}: ${err.message}`);
-        systemMetrics.increment("errors");
-        return false;
-    }
-}
-
-// ════════════════════════════════════════════════════════════════════════════
 //  🧾 REGION 12: PANEL STATE
 // ════════════════════════════════════════════════════════════════════════════
 async function savePanelState(guildId, channelId, messageId) {
@@ -1979,16 +1736,6 @@ module.exports = {
     getPendingGuilds,
     removePendingGuild,
 
-    // Snapshots
-    saveSnapshot,
-    saveChunkedSnapshot,
-    loadSnapshotData,
-    getLatestSnapshotForGuild,
-    reconcileSnapshotPointers,
-    chunkSnapshotItems,
-    getSnapshot,
-    deleteSnapshot,
-
     // Panel state
     savePanelState,
     getPanelState,
@@ -2010,8 +1757,6 @@ module.exports = {
 
     // Raw models for existing internal dashboards/tools
     SessionModel,
-    SnapshotModel,
-    SnapshotChunkModel,
     ApprovedGuildModel,
     PendingGuildModel,
     PanelStateModel,

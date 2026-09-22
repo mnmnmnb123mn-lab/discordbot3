@@ -2,21 +2,17 @@
 /*
 ================================================================================
 ⚠️ [AI COGNITIVE DIRECTIVE] ⚠️
-DO NOT REMOVE: activeRestores, activeBackups Sets — race condition guards.
+DO NOT REMOVE: activeEmojiCopies Set — race condition guard.
 DO NOT REMOVE: finally blocks — they MUST unlock Sets after every operation.
-DO NOT SIMPLIFY: Restore loop — delay + setImmediate required (เฟส 19+21).
 ================================================================================
 */
 
 const {
     MessageEmbed,
     MessageActionRow,
-    MessageButton,
-    getLegacyChannelType,
-    resolveChannelType
+    MessageButton
 } = require("../core/discordCompat");
 const { PermissionFlagsBits } = require("discord.js");
-const crypto = require("node:crypto");
 const config = require("../config.json");
 const {
     requireMemberPermission,
@@ -25,20 +21,24 @@ const {
     sanitizeUserMessage,
     markCommandAccepted
 } = require("../guards/commandGuards");
-const guildBackup = require("./guildBackup");
 
 // Race Condition Guards
 const activeEmojiCopies = new Set();
-const { activeRestores, activeBackups, handleBackup, handleRestore, handleRestoreConfirm } = guildBackup;
-
 
 async function handle(interaction) {
     const cmd = interaction.commandName;
     if (cmd === "say")        return handleSay(interaction);
-    if (cmd === "announce")   return handleAnnounce(interaction);
+    if (cmd === "embed")      return handleEmbed(interaction);
+    if (cmd === "announce")   return handleEmbedCreate(interaction);
     if (cmd === "copy-emojis") return handleSteal(interaction);
-    if (cmd === "backup")     return handleBackup(interaction);
-    if (cmd === "restore")    return handleRestore(interaction);
+}
+
+async function handleEmbed(interaction) {
+    const subcommand = interaction.options?.getSubcommand?.(false) || "create";
+    if (subcommand === "create") {
+        return handleEmbedCreate(interaction);
+    }
+    return null;
 }
 
 // ════════════════════════════════════════════════════════════════════════════
@@ -66,7 +66,7 @@ async function handleSay(interaction) {
 }
 
 // ════════════════════════════════════════════════════════════════════════════
-//  📣  ANNOUNCE (Custom Embed & Target Channel Renovation)
+//  📣  EMBED CREATE (Custom Embed & Target Channel Renovation)
 // ════════════════════════════════════════════════════════════════════════════
 function isValidHttpUrl(str) {
     if (!str || typeof str !== "string") return false;
@@ -84,26 +84,15 @@ function resolveEmbedColor(colorHex, fallback) {
     return /^[0-9A-Fa-f]{6}$/.test(cleaned) ? `#${cleaned}` : fallback;
 }
 
-function applyEmbedAuthor(embed, name, iconUrl) {
-    if (!name) return;
-    embed.setAuthor({
-        name,
-        iconURL: (iconUrl && isValidHttpUrl(iconUrl)) ? iconUrl.trim() : undefined
-    });
-}
-
-function applyEmbedFooter(embed, text, iconUrl) {
+function applyEmbedFooter(embed, text) {
     if (!text) return;
-    embed.setFooter({
-        text,
-        iconURL: (iconUrl && isValidHttpUrl(iconUrl)) ? iconUrl.trim() : undefined
-    });
+    embed.setFooter({ text });
 }
 
-function buildAnnouncementEmbed(options) {
+function buildEmbedCreateEmbed(options) {
     const embed = new MessageEmbed()
-        .setColor(resolveEmbedColor(options.colorHex, config.system.themeColors.primary || "#5865F2"))
-        .setDescription(options.messageText);
+        .setColor(resolveEmbedColor(options.colorHex, config.system?.themeColors?.primary || "#5865F2"))
+        .setDescription(options.description);
 
     if (options.title) {
         embed.setTitle(options.title);
@@ -111,32 +100,31 @@ function buildAnnouncementEmbed(options) {
     if (options.url && isValidHttpUrl(options.url)) {
         embed.setURL(options.url.trim());
     }
-    applyEmbedAuthor(embed, options.authorName, options.authorIcon);
     if (options.thumbnailUrl && isValidHttpUrl(options.thumbnailUrl)) {
         embed.setThumbnail(options.thumbnailUrl.trim());
     }
     if (options.imageUrl && isValidHttpUrl(options.imageUrl)) {
         embed.setImage(options.imageUrl.trim());
     }
-    applyEmbedFooter(embed, options.footerText, options.footerIcon);
+    applyEmbedFooter(embed, options.footerText);
     if (options.timestamp === true) {
         embed.setTimestamp();
     }
     return embed;
 }
 
-function buildAnnouncementComponents(buttonText, buttonUrl) {
-    if (!buttonText || !buttonUrl || !isValidHttpUrl(buttonUrl)) {
+function buildEmbedComponents(buttonLabel, buttonUrl) {
+    if (!buttonLabel || !buttonUrl || !isValidHttpUrl(buttonUrl)) {
         return [];
     }
     const button = new MessageButton()
-        .setLabel(buttonText.slice(0, 80))
+        .setLabel(buttonLabel.slice(0, 80))
         .setStyle("LINK")
         .setURL(buttonUrl.trim());
     return [new MessageActionRow().addComponents(button)];
 }
 
-async function validateAnnounceTarget(interaction) {
+async function validateEmbedCreateTarget(interaction) {
     if (!await requireMemberPermission(
         interaction,
         PermissionFlagsBits.Administrator,
@@ -162,35 +150,30 @@ async function validateAnnounceTarget(interaction) {
     return targetChannel;
 }
 
-function buildAnnouncePayload(interaction) {
-    const rawMessage = interaction.options.getString("message");
-    if (!rawMessage?.trim()) return null;
+function buildEmbedCreatePayload(interaction) {
+    const rawDescription = interaction.options.getString("description") || interaction.options.getString("message");
+    if (!rawDescription?.trim()) return null;
 
-    const messageText = sanitizeUserMessage(rawMessage.replaceAll(String.raw`\n`, "\n"), { maxLength: 4096 });
+    const description = sanitizeUserMessage(rawDescription.replaceAll(String.raw`\n`, "\n"), { maxLength: 4096 });
     const rawTitle = interaction.options.getString("title");
     const rawContent = interaction.options.getString("content");
-    const authorName = interaction.options.getString("author_name");
     const footerText = interaction.options.getString("footer");
 
-    const embed = buildAnnouncementEmbed({
-        messageText,
+    const embed = buildEmbedCreateEmbed({
+        description,
         title: rawTitle ? sanitizeUserMessage(rawTitle, { maxLength: 256 }) : null,
         colorHex: interaction.options.getString("color"),
         imageUrl: interaction.options.getString("image"),
         thumbnailUrl: interaction.options.getString("thumbnail"),
         footerText: footerText ? sanitizeUserMessage(footerText, { maxLength: 2048 }) : null,
-        footerIcon: interaction.options.getString("footer_icon"),
-        authorName: authorName ? sanitizeUserMessage(authorName, { maxLength: 256 }) : null,
-        authorIcon: interaction.options.getString("author_icon"),
         url: interaction.options.getString("url"),
         timestamp: interaction.options.getBoolean("timestamp")
     });
 
-    const components = buildAnnouncementComponents(
-        interaction.options.getString("button_text"),
-        interaction.options.getString("button_url")
-    );
+    const buttonLabel = interaction.options.getString("button_label") || interaction.options.getString("button_text");
+    const buttonUrl = interaction.options.getString("button_url");
 
+    const components = buildEmbedComponents(buttonLabel, buttonUrl);
     const content = rawContent ? sanitizeUserMessage(rawContent, { maxLength: 2000 }) : null;
 
     return {
@@ -201,13 +184,35 @@ function buildAnnouncePayload(interaction) {
     };
 }
 
-async function handleAnnounce(interaction) {
-    const targetChannel = await validateAnnounceTarget(interaction);
+async function handleEmbedCreate(interaction) {
+    const targetChannel = await validateEmbedCreateTarget(interaction);
     if (!targetChannel) return;
 
-    const payload = buildAnnouncePayload(interaction);
+    const buttonLabel = interaction.options.getString("button_label") || interaction.options.getString("button_text");
+    const buttonUrl = interaction.options.getString("button_url");
+
+    if (buttonLabel && !buttonUrl) {
+        return interaction.reply({
+            content: `> ${config.emojis.error} หากต้องการใส่ปุ่ม ต้องระบุทั้ง \`button_label\` และ \`button_url\``,
+            ephemeral: true
+        });
+    }
+    if (!buttonLabel && buttonUrl) {
+        return interaction.reply({
+            content: `> ${config.emojis.error} หากต้องการใส่ปุ่ม ต้องระบุทั้ง \`button_label\` และ \`button_url\``,
+            ephemeral: true
+        });
+    }
+    if (buttonUrl && !isValidHttpUrl(buttonUrl)) {
+        return interaction.reply({
+            content: `> ${config.emojis.error} \`button_url\` ต้องเป็น URL ที่ถูกต้อง (ขึ้นต้นด้วย http:// หรือ https://)`,
+            ephemeral: true
+        });
+    }
+
+    const payload = buildEmbedCreatePayload(interaction);
     if (!payload) {
-        return interaction.reply({ content: `> ${config.emojis.error} ข้อความประกาศต้องไม่ว่าง`, ephemeral: true });
+        return interaction.reply({ content: `> ${config.emojis.error} เนื้อหาหลักของ Embed (description) ต้องไม่ว่าง`, ephemeral: true });
     }
 
     markCommandAccepted(interaction);
@@ -218,15 +223,15 @@ async function handleAnnounce(interaction) {
         const sentMsg = await targetChannel.send(payload);
 
         const successText = targetChannel.id === interaction.channel.id
-            ? `> ${config.emojis.success} ส่งประกาศเรียบร้อยแล้ว`
-            : `> ${config.emojis.success} ส่งประกาศไปยังห้อง <#${targetChannel.id}> เรียบร้อยแล้ว`;
+            ? `> ${config.emojis.success} สร้าง Embed และส่งเรียบร้อยแล้ว`
+            : `> ${config.emojis.success} สร้าง Embed และส่งไปยังห้อง <#${targetChannel.id}> เรียบร้อยแล้ว`;
 
         return interaction.editReply({
             content: sentMsg?.url ? `${successText} • [เปิดดูข้อความ](${sentMsg.url})` : successText
         });
     } catch (err) {
         return interaction.editReply({
-            content: `> ${config.emojis.error} ส่งประกาศไม่สำเร็จ: ${err?.message || "เกิดข้อผิดพลาด"}`
+            content: `> ${config.emojis.error} สร้าง Embed ไม่สำเร็จ: ${err?.message || "เกิดข้อผิดพลาด"}`
         });
     }
 }
@@ -733,22 +738,23 @@ async function handleSteal(interaction, { delayMs = 1200 } = {}) {
 
 function getRuntimeDiagnostics() {
     return {
-        activeRestores: activeRestores.size,
-        activeBackups: activeBackups.size,
         activeEmojiCopies: activeEmojiCopies.size
     };
 }
 
 module.exports = {
     handle,
-    handleRestoreConfirm,
     getRuntimeDiagnostics,
     _test: {
-        ...guildBackup._test,
         handleSay,
-        handleAnnounce,
-        buildAnnouncementEmbed,
-        buildAnnouncementComponents,
+        handleEmbedCreate,
+        handleAnnounce: handleEmbedCreate,
+        buildEmbedCreateEmbed,
+        buildAnnouncementEmbed: buildEmbedCreateEmbed,
+        buildEmbedComponents,
+        buildAnnouncementComponents: buildEmbedComponents,
+        validateEmbedCreateTarget,
+        buildEmbedCreatePayload,
         isValidHttpUrl,
         resolveEmbedColor,
         handleSteal,

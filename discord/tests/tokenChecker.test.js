@@ -139,7 +139,33 @@ test('tokenChecker embed builders produce correct outputs', () => {
     assert.match(batchEmbed.data.description, /Apichat/);
     assert.match(batchEmbed.data.description, /NormalUser/);
 
-    // 4. Category attachments
+    // 4. Bot token embed
+    const botResult = {
+        valid: true,
+        isBot: true,
+        maskedToken: 'MTUzMD...5678',
+        id: '153012345678901234',
+        username: 'BroadcastHelperBot',
+        globalName: 'Broadcast Helper',
+        avatarUrl: 'https://cdn.discordapp.com/avatars/153/bot.png',
+        createdAt: new Date('2022-01-01T00:00:00Z'),
+        category: 'bot'
+    };
+    const botEmbed = buildSingleTokenEmbed(botResult);
+    assert.match(botEmbed.data.title, /Discord Bot Token: ใช้งานได้/);
+    assert.match(botEmbed.data.description, /Valid Bot Token/);
+    assert.match(botEmbed.data.description, /Broadcast Helper/);
+    assert.match(botEmbed.data.description, /\[BOT\]/);
+
+    // 5. Category attachments with Bot
+    const attachments = createCategoryAttachments({
+        bot: [{ token: 'bot_token_123' }],
+        normal: [{ token: 'normal_token_456' }]
+    });
+    assert.equal(attachments.length, 2);
+    assert.equal(attachments.some(a => a.name === 'tokens_bot.txt'), true);
+
+    // 6. Category attachments
     const groups = {
         boost: [{ token: 'token_boost_1' }],
         nitro: [],
@@ -321,4 +347,58 @@ test('checkBatchTokens processes tokens in parallel batches and categorizes resu
     assert.equal(res.summary.normal, 4);
 
     tokenCoordinator.reset();
+});
+
+test('checkSingleToken auto-detects Bot Token on 401 fallback and auto-unquarantines', async () => {
+    const { checkSingleToken } = require('../features/tokenChecker');
+    const tokenCoordinator = require('../core/tokenCoordinator');
+
+    const botToken = 'MTUzMDk5OTk5OTk5OTk5OTk5.G_XXXX.YYYYZZZZ12345678';
+    const originalFetch = global.fetch;
+
+    const calls = [];
+    global.fetch = async (url, options) => {
+        calls.push({ url, headers: options?.headers });
+        const auth = options?.headers?.Authorization || options?.headers?.authorization;
+        if (auth && auth.startsWith('Bot ')) {
+            return {
+                ok: true,
+                status: 200,
+                json: async () => ({
+                    id: '153099999999999999',
+                    username: 'AutoDetectedBot',
+                    global_name: 'Auto Bot',
+                    bot: true,
+                    mfa_enabled: false
+                })
+            };
+        }
+        // User probe fails with 401
+        return {
+            ok: false,
+            status: 401,
+            json: async () => ({ message: '401: Unauthorized', code: 0 })
+        };
+    };
+
+    try {
+        const result = await checkSingleToken(botToken, { forceRefresh: true });
+        assert.equal(result.valid, true);
+        assert.equal(result.isBot, true);
+        assert.equal(result.tokenType, 'bot');
+        assert.equal(result.username, 'AutoDetectedBot');
+        assert.equal(result.category, 'bot');
+
+        // Check that 2 probes occurred (first as user, second as bot)
+        assert.equal(calls.length, 2);
+        assert.equal(calls[0].headers.Authorization, botToken);
+        assert.equal(calls[1].headers.Authorization, `Bot ${botToken}`);
+
+        // Check tokenCoordinator state: NOT quarantined and tokenType is 'bot'
+        assert.equal(tokenCoordinator.isQuarantined(botToken), false);
+        assert.equal(tokenCoordinator.getTokenType(botToken), 'bot');
+    } finally {
+        global.fetch = originalFetch;
+        tokenCoordinator.reset();
+    }
 });

@@ -237,23 +237,23 @@ test('rate limiter allows burst within capacity without delay', async () => {
 
 test('Dynamic Activity Registry supports arbitrary subsystems concurrently', () => {
     const token = 'token-dyn-subsystem';
-    assert.equal(tokenCoordinator.hasActivity(token, 'guildBackup'), false);
+    assert.equal(tokenCoordinator.hasActivity(token, 'customSync'), false);
     assert.equal(tokenCoordinator.hasActivity(token, 'profileSync'), false);
 
-    tokenCoordinator.acquireActivity(token, 'guildBackup', { backupId: 'b-123' });
+    tokenCoordinator.acquireActivity(token, 'customSync', { syncId: 's-123' });
     tokenCoordinator.acquireActivity(token, 'profileSync', { interval: 60 });
 
-    assert.equal(tokenCoordinator.hasActivity(token, 'guildBackup'), true);
+    assert.equal(tokenCoordinator.hasActivity(token, 'customSync'), true);
     assert.equal(tokenCoordinator.hasActivity(token, 'profileSync'), true);
 
     const acts = tokenCoordinator.getActivities(token);
     assert.equal(acts.length, 2);
     const subNames = acts.map(a => a.subsystem);
-    assert.ok(subNames.includes('guildBackup'));
+    assert.ok(subNames.includes('customSync'));
     assert.ok(subNames.includes('profileSync'));
 
-    tokenCoordinator.releaseActivity(token, 'guildBackup');
-    assert.equal(tokenCoordinator.hasActivity(token, 'guildBackup'), false);
+    tokenCoordinator.releaseActivity(token, 'customSync');
+    assert.equal(tokenCoordinator.hasActivity(token, 'customSync'), false);
     assert.equal(tokenCoordinator.hasActivity(token, 'profileSync'), true);
 
     tokenCoordinator.releaseActivity(token, 'profileSync');
@@ -328,4 +328,65 @@ test('quarantine alert is throttled within cooldown window', () => {
     } finally {
         tokenCoordinator.alertCooldownMs = originalCooldown;
     }
+});
+
+test('tokenType management and formatAuthHeader support both User and Bot tokens', () => {
+    const userToken = 'user-token-example-123';
+    const botToken = 'bot-token-example-456';
+
+    // Defaults to 'unknown' before being set
+    assert.equal(tokenCoordinator.getTokenType(userToken), 'unknown');
+    assert.equal(tokenCoordinator.formatAuthHeader(userToken), userToken);
+
+    // Set as user token
+    tokenCoordinator.setTokenType(userToken, 'user');
+    assert.equal(tokenCoordinator.getTokenType(userToken), 'user');
+    assert.equal(tokenCoordinator.formatAuthHeader(userToken), userToken);
+
+    // Set as bot token
+    tokenCoordinator.setTokenType(botToken, 'bot');
+    assert.equal(tokenCoordinator.getTokenType(botToken), 'bot');
+    assert.equal(tokenCoordinator.formatAuthHeader(botToken), `Bot ${botToken}`);
+
+    // If bot token already has 'Bot ' prefix, formatAuthHeader does not double-prefix
+    assert.equal(tokenCoordinator.formatAuthHeader(`Bot ${botToken}`), `Bot ${botToken}`);
+
+    // Explicit override in formatAuthHeader
+    assert.equal(tokenCoordinator.formatAuthHeader(userToken, 'bot'), `Bot ${userToken}`);
+    assert.equal(tokenCoordinator.formatAuthHeader(botToken, 'user'), botToken);
+});
+
+test('cacheTokenProfile sets tokenType to bot when profile.isBot is true', () => {
+    const token = 'bot-cache-token-789';
+    tokenCoordinator.cacheTokenProfile(token, {
+        id: '123456789012345678',
+        username: 'CoolBot',
+        isBot: true,
+        category: 'bot'
+    });
+
+    assert.equal(tokenCoordinator.getTokenType(token), 'bot');
+    const profile = tokenCoordinator.getCachedTokenProfile(token);
+    assert.ok(profile);
+    assert.equal(profile.isBot, true);
+    assert.equal(profile.tokenType, 'bot');
+});
+
+test('executeWithToken allows bypassQuarantine when probing tokens', async () => {
+    const token = 'quarantined-token-probe';
+    tokenCoordinator.quarantineToken(token, 'Pre-existing 401 error');
+
+    assert.equal(tokenCoordinator.isQuarantined(token), true);
+
+    // Default call throws TOKEN_QUARANTINED
+    await assert.rejects(
+        () => tokenCoordinator.executeWithToken(token, 'testSub', async () => 'ok'),
+        /TOKEN_QUARANTINED/
+    );
+
+    // bypassQuarantine: true allows probe to execute
+    const probeResult = await tokenCoordinator.executeWithToken(token, 'testSub', async () => 'probe-success', {
+        bypassQuarantine: true
+    });
+    assert.equal(probeResult, 'probe-success');
 });
