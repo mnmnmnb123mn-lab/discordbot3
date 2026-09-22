@@ -201,11 +201,14 @@ test("preview performs no role mutation and confirmation removes the planned rol
     });
 
     assert.equal(fixture.target.calls.length, 0);
-    const previewContent = typeof responses[0] === "string" ? responses[0] : responses[0].content;
-    assert.match(previewContent, /ยศทั้งหมด \(ไม่รวม @everyone\): \*\*5\*\*/);
-    assert.match(previewContent, /ยศที่สมาชิกถือรวมแบบนับซ้ำ: \*\*7\*\*/);
-    assert.ok(previewContent.includes(`<@&${fixture.exempt.id}>`));
-    assert.ok(responses[0].embeds?.[0]);
+    const previewEmbed = responses[0].embeds?.[0]?.data;
+    assert.ok(previewEmbed);
+    const statsField = previewEmbed.fields?.find(f => f.name.includes("สถิติ"));
+    assert.ok(statsField);
+    assert.match(statsField.value, /ยศทั้งหมด \(ไม่รวม @everyone\): \*\*5\*\*/);
+    assert.match(statsField.value, /ยศที่สมาชิกถือรวมแบบนับซ้ำ: \*\*7\*\*/);
+    const exemptField = previewEmbed.fields?.find(f => f.name.includes("คุ้มครอง"));
+    assert.ok(exemptField?.value?.includes(`<@&${fixture.exempt.id}>`));
     assert.ok(responses[0].components?.[0]);
 
     const message = confirmationMessage(fixture.guild);
@@ -477,7 +480,7 @@ test("a changed member count during the confirmation fetch does not abort a vali
     assert.match(message.replies.at(-1).content, /กวาดยศเสร็จแล้ว/);
 });
 
-test("a rejected confirmation fetch aborts without removal and releases the active lock", async () => {
+test("a rejected confirmation fetch aborts without removal and releases the active lock when no cache exists", async () => {
     const fixture = guildFixture();
     await roleSweep._test.startPreview({
         guild: fixture.guild,
@@ -486,6 +489,9 @@ test("a rejected confirmation fetch aborts without removal and releases the acti
         exceptRoleIds: [],
         respond: async () => {}
     });
+    // Simulate both fresh fetch failure and empty cache
+    roleSweep._test.pendingByGuild.get(GUILD_ID).members = null;
+    fixture.guild.members.cache.clear();
     fixture.guild.members.fetch = async () => { throw new Error("fetch failed"); };
 
     const message = confirmationMessage(fixture.guild);
@@ -493,6 +499,25 @@ test("a rejected confirmation fetch aborts without removal and releases the acti
     assert.equal(fixture.target.calls.length, 0);
     assert.equal(roleSweep._test.activeByGuild.has(GUILD_ID), false);
     assert.match(message.replies.at(-1).content, /ดึงรายชื่อสมาชิกใหม่ไม่สำเร็จ/);
+});
+
+test("confirmation fetch failure seamlessly falls back to cached preview members and completes sweep", async () => {
+    const fixture = guildFixture();
+    await roleSweep._test.startPreview({
+        guild: fixture.guild,
+        channel: { id: "channel" },
+        actorId: ACTOR_ID,
+        exceptRoleIds: [fixture.exempt.id],
+        respond: async () => {}
+    });
+    // Simulate Discord Gateway rate-limiting fresh fetch
+    fixture.guild.members.fetch = async () => { throw new Error("GatewayRateLimitError"); };
+
+    const message = confirmationMessage(fixture.guild);
+    assert.equal(await roleSweep._test.handleConfirmation(message), true);
+    // Verified: sweep was NOT aborted, it seamlessly used cached preview members!
+    assert.deepEqual(fixture.target.calls, [[fixture.regular.id]]);
+    assert.match(message.replies.at(-1).content, /กวาดยศเสร็จแล้ว/);
 });
 
 test("chat shortcut is handled before the legacy Voice // command router", async () => {
@@ -637,7 +662,9 @@ test("slash command is owner-only and accepts the selected exception roles", asy
 
     await roleSweep.handleSlashCommand(interaction);
     assert.deepEqual(calls[0], ["deferReply", { ephemeral: true }]);
-    assert.match(calls.at(-1)[1].content, /ยศที่สมาชิกถือรวมแบบนับซ้ำ/);
+    const statsField = calls.at(-1)[1].embeds?.[0]?.data?.fields?.find(f => f.name.includes("สถิติ"));
+    assert.ok(statsField);
+    assert.match(statsField.value, /ยศที่สมาชิกถือรวมแบบนับซ้ำ/);
     assert.equal(roleSweep._test.pendingByGuild.get(GUILD_ID).exceptRoleIds[0], fixture.exempt.id);
 
     const denied = { ...interaction, user: { id: TARGET_ID }, deferred: false, replied: false };

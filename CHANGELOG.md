@@ -2,6 +2,12 @@
 
 ## [Unreleased] - 2026-09-22
 
+- Enhanced `/re-role` sweep reliability and upgraded UX/UI:
+  - Implemented seamless cache fallback in `executeSweep` (`discord/commands/roleSweep.js`) when fresh member fetch fails due to Discord Gateway rate limits or timeouts, preventing false aborts while strictly verifying role assignment fingerprints.
+  - Eliminated redundant plain-text summary content above the preview embed in `buildPreviewPayload`, rendering a clean, uncluttered embed.
+  - Ensured button interaction replies clear placeholder text upon completion, displaying only the final rich summary embed.
+  - Added unit tests covering seamless cache fallback execution and verified all 56 role sweep test scenarios.
+
 - Renamed slash command from `/rerole` to `/re-role`:
   - Updated registry in `discord/commands/registry.js` to register `/re-role` as the canonical command name.
   - Enforced strict slash command routing in `discord/commands.js` to accept `/re-role` only.

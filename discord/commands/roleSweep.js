@@ -441,7 +441,6 @@ function previewText(stats, exceptRoleIds = [], targetRoleId = null) {
 /** Builds the complete preview payload including embed and interactive buttons. */
 function buildPreviewPayload(guild, stats, exceptRoleIds = [], actorId = null, targetRoleId = null) {
     return {
-        content: previewText(stats, exceptRoleIds, targetRoleId),
         embeds: [buildPreviewEmbed(guild, stats, exceptRoleIds, actorId, targetRoleId)],
         components: [buildConfirmationRow()]
     };
@@ -462,13 +461,21 @@ async function deliverSweepResult(target, payload) {
         : { allowedMentions: { parse: [], repliedUser: false }, ...payload };
 
     if (typeof target?.editReply === "function" && target?.isButton?.()) {
-        return target.editReply(formatted).catch(() => target?.channel?.send?.(formatted).catch(() => null));
+        const editPayload = { ...formatted };
+        if (!editPayload.content && editPayload.embeds?.length > 0) {
+            editPayload.content = null;
+        }
+        return target.editReply(editPayload).catch(() => target?.channel?.send?.(formatted).catch(() => null));
     }
     if (typeof target?.reply === "function") {
-        return replyMessage(target, formatted);
+        const msgPayload = { ...formatted };
+        if (msgPayload.content === null) delete msgPayload.content;
+        return replyMessage(target, msgPayload);
     }
     if (typeof target?.channel?.send === "function") {
-        return target.channel.send(formatted).catch(() => null);
+        const sendPayload = { ...formatted };
+        if (sendPayload.content === null) delete sendPayload.content;
+        return target.channel.send(sendPayload).catch(() => null);
     }
     return null;
 }
@@ -520,7 +527,7 @@ function formatEmptyTargetsMessage(targetRoleId, scanStats, exceptRoleIds) {
 }
 
 /** Registers a pending sweep entry with its auto-expiry timer. */
-function registerPendingPreview({ guild, guildId, channel, actorId, exceptRoleIds, targetRoleId, scan, respond, timeoutMs }) {
+function registerPendingPreview({ guild, guildId, channel, actorId, exceptRoleIds, targetRoleId, scan, members = null, respond, timeoutMs }) {
     const confirmationTimeout = getConfirmationTimeout(timeoutMs);
     const expiresAt = Date.now() + confirmationTimeout;
     let pending;
@@ -546,6 +553,7 @@ function registerPendingPreview({ guild, guildId, channel, actorId, exceptRoleId
         exceptRoleIds: dedupeRoleIds(exceptRoleIds),
         targetRoleId: targetRoleId ? String(targetRoleId) : null,
         fingerprint: scan.fingerprint,
+        members,
         respond,
         timeout,
         expiresAt,
@@ -600,6 +608,7 @@ async function startPreview({ guild, channel, actorId, exceptRoleIds, targetRole
             exceptRoleIds,
             targetRoleId,
             scan,
+            members,
             respond,
             timeoutMs
         });
@@ -631,11 +640,10 @@ async function executeSweep(pending, messageOrInteraction) {
         let members;
         try {
             members = await fetchAllMembers(pending.guild);
-        } catch {
-            try {
-                await new Promise(resolve => setTimeout(resolve, 100));
-                members = await fetchAllMembers(pending.guild);
-            } catch {
+        } catch (err) {
+            console.warn("[ROLE_SWEEP] Fresh member fetch failed, attempting cached preview members fallback:", err?.message || err);
+            members = pending.members || (pending.guild?.members?.cache?.size > 0 ? pending.guild.members.cache : null);
+            if (!members || typeof members.values !== "function" || !Number.isSafeInteger(members.size) || members.size <= 0) {
                 return await deliverSweepResult(messageOrInteraction, `> ❌ ดึงรายชื่อสมาชิกใหม่ไม่สำเร็จ จึงไม่ถอดยศใด ๆ`);
             }
         }
