@@ -47,5 +47,8 @@ module.exports = {
     cleanup: (opts) => runBoundedCleanup(connection.getDatabase(), opts),
     vacuum: (pages) => runIncrementalVacuum(connection.getDatabase(), pages),
     checkpoint: (mode) => checkpointWal(connection.getDatabase(), mode),
-    backup: (opts) => createBackup(connection.getDatabase(), opts)
+    backup: (opts) => createBackup(connection.getDatabase(), opts),
+    scheduler: require("./maintenance/scheduler"),
+    startScheduler: () => require("./maintenance/scheduler").startScheduler(),
+    stopScheduler: () => require("./maintenance/scheduler").stopScheduler()
 };

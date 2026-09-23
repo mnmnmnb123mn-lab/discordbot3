@@ -26,6 +26,25 @@ const VerificationStateNonceFacade = {
     async create(data) {
         return getVerificationStateNonceRepository().create(data);
     },
+    async exists(filter) {
+        return getVerificationStateNonceRepository().exists(filter);
+    },
+    async countDocuments(filter) {
+        return getVerificationStateNonceRepository().countDocuments(filter);
+    },
+    findOne(filter) {
+        return {
+            async lean() {
+                if (filter?.nonceHash) {
+                    return getVerificationStateNonceRepository().findByNonceHash(filter.nonceHash);
+                }
+                return null;
+            }
+        };
+    },
+    async deleteMany() {
+        return { acknowledged: true, deletedCount: 0 };
+    },
     findOneAndUpdate(filter, update, options) {
         return {
             async lean() {

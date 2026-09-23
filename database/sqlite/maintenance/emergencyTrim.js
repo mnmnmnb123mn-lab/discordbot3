@@ -26,8 +26,7 @@ function cleanExpiredHistory(db, now, maxBatches = 5) {
         { table: "command_events", col: "occurred_at" },
         { table: "session_events", col: "occurred_at" },
         { table: "runtime_events", col: "occurred_at" },
-        { table: "voice_events", col: "occurred_at" },
-        { table: "quest_logs", col: "created_at" }
+        { table: "voice_events", col: "occurred_at" }
     ];
 
     for (const { table, col } of historyConfigs) {

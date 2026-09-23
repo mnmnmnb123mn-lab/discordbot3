@@ -60,6 +60,47 @@ function cleanExpiredCacheEntries(db, now = Date.now(), maxBatches = 5) {
     return totalDeleted;
 }
 
+function resolveHistoryRetentionMs() {
+    const days = parseInt(process.env.SQLITE_HISTORY_RETENTION_DAYS, 10);
+    return (!isNaN(days) && days > 0 ? days : 30) * 24 * 60 * 60 * 1000;
+}
+
+function cleanExpiredHistory(db, now = Date.now(), maxBatches = 5) {
+    const retentionMs = resolveHistoryRetentionMs();
+    const cutoff = now - retentionMs;
+    let purged = 0;
+
+    const historyConfigs = [
+        { table: "command_events", col: "occurred_at" },
+        { table: "session_events", col: "occurred_at" },
+        { table: "runtime_events", col: "occurred_at" },
+        { table: "voice_events", col: "occurred_at" }
+    ];
+
+    for (const { table, col } of historyConfigs) {
+        try {
+            const stmt = db.prepare(`
+                DELETE FROM ${table}
+                WHERE id IN (
+                    SELECT id FROM ${table}
+                    WHERE ${col} <= ?
+                    LIMIT ${BATCH_SIZE}
+                )
+            `);
+
+            for (let i = 0; i < maxBatches; i++) {
+                const info = stmt.run(cutoff);
+                purged += info.changes;
+                if (info.changes < BATCH_SIZE) break;
+            }
+        } catch (_) {
+            // Table may not exist or be empty, continue safely
+        }
+    }
+
+    return purged;
+}
+
 function cleanStaleQuestLogs(db, now = Date.now(), retentionMs = THIRTY_DAYS_MS, maxBatches = 2) {
     const cutoff = now - retentionMs;
     let totalDeleted = 0;
@@ -87,15 +128,15 @@ function runBoundedCleanup(db, options = {}) {
     const nonces = cleanExpiredNonces(db, now, options.maxBatches);
     const dms = cleanExpiredDmNotifications(db, now, options.maxBatches);
     const cache = cleanExpiredCacheEntries(db, now, options.maxBatches);
-    const questLogs = cleanStaleQuestLogs(db, now, options.questRetentionMs, 1);
+    const history = cleanExpiredHistory(db, now, options.maxBatches);
 
     return {
         now,
         noncesDeleted: nonces,
         dmsDeleted: dms,
         cacheDeleted: cache,
-        questLogsDeleted: questLogs,
-        totalDeleted: nonces + dms + cache + questLogs
+        historyDeleted: history,
+        totalDeleted: nonces + dms + cache + history
     };
 }
 
@@ -103,6 +144,7 @@ module.exports = {
     cleanExpiredNonces,
     cleanExpiredDmNotifications,
     cleanExpiredCacheEntries,
+    cleanExpiredHistory,
     cleanStaleQuestLogs,
     runBoundedCleanup
 };

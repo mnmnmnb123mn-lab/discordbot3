@@ -61,6 +61,8 @@ pnpm-debug.log*
 # -------------------------
 tmp/
 temp/
+!database/sqlite/repositories/temp/
+!database/sqlite/repositories/temp/**
 .tmp/
 .temp/
 .cache/

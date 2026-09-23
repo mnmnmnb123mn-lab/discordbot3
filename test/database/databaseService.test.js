@@ -131,6 +131,22 @@ test("DatabaseService Comprehensive Suite", async (t) => {
         assert.equal(cmdIntegrity.ok, true);
         assert.match(cmdIntegrity.output, /ผ่านการตรวจสอบ Integrity/);
 
+        const cmdMigrations = await databaseService.executeDatabaseConsole("migrations");
+        assert.equal(cmdMigrations.ok, true);
+        assert.match(cmdMigrations.output, /ประวัติ Schema Migrations/);
+        assert.match(cmdMigrations.output, /v1/);
+
+        const cmdFullCheck = await databaseService.executeDatabaseConsole("full-check");
+        assert.equal(cmdFullCheck.ok, true);
+        assert.match(cmdFullCheck.output, /Full Health Check/);
+
+        // Verify maintenance_runs record
+        const detailed = await databaseService.getSqliteDetailedStatus();
+        assert.ok(Array.isArray(detailed.maintenanceHistory));
+        assert.ok(detailed.maintenanceHistory.length > 0);
+        assert.ok(detailed.maintenanceHistory[0].run_type);
+        assert.ok(detailed.maintenanceHistory[0].status);
+
         // Shell Injection Guard
         const dangerousCommands = [
             "rm -rf /",

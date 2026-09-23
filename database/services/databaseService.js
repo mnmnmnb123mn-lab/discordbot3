@@ -8,6 +8,7 @@ const { runBoundedCleanup } = require("../sqlite/maintenance/cleanup");
 const { runIncrementalVacuum, checkpointWal } = require("../sqlite/maintenance/vacuum");
 const { createBackup, listBackups } = require("../sqlite/maintenance/backup");
 const { runStartupCheck } = require("../sqlite/maintenance/startupCheck");
+const { evaluateStoragePaths } = require("../sqlite/maintenance/storageCheck");
 const { executeEmergencyTrim } = require("../sqlite/maintenance/emergencyTrim");
 const { sendWebhookEvent } = require("../../discord/core/webhooks");
 const mongo = require("../mongo/index");
@@ -253,11 +254,22 @@ async function getSqliteDetailedStatus() {
     // Maintenance runs log (last 5)
     let maintenanceHistory = [];
     try {
-        maintenanceHistory = db.prepare(`
-            SELECT id, type, status, details, duration_ms, started_at, completed_at
+        const rows = db.prepare(`
+            SELECT id, run_type, started_at, finished_at, status, details_json
             FROM maintenance_runs
             ORDER BY id DESC LIMIT 5
         `).all();
+        maintenanceHistory = rows.map(r => ({
+            id: r.id,
+            type: r.run_type,
+            run_type: r.run_type,
+            status: r.status,
+            details: r.details_json ? JSON.parse(r.details_json) : null,
+            started_at: r.started_at,
+            completed_at: r.finished_at,
+            finished_at: r.finished_at,
+            duration_ms: (r.finished_at && r.started_at) ? (r.finished_at - r.started_at) : 0
+        }));
     } catch (_) {}
 
     // Backups
@@ -320,9 +332,9 @@ async function executeSqliteAction(action, options = {}, invoker = "owner") {
     const recordAudit = (status, details) => {
         try {
             db.prepare(`
-                INSERT INTO maintenance_runs (type, status, details, duration_ms, started_at, completed_at)
-                VALUES (?, ?, ?, ?, ?, ?)
-            `).run(action, status, JSON.stringify(details), Date.now() - startTime, startTime, Date.now());
+                INSERT INTO maintenance_runs (run_type, started_at, finished_at, status, details_json)
+                VALUES (?, ?, ?, ?, ?)
+            `).run(action, startTime, Date.now(), status, JSON.stringify(details));
         } catch (_) {}
     };
 
@@ -360,7 +372,7 @@ async function executeSqliteAction(action, options = {}, invoker = "owner") {
             case "cleanup_expired":
             case "cleanup_all": {
                 const stats = runBoundedCleanup(db, { maxBatches: options.maxBatches || 5 });
-                result = { ok: true, action, stats, message: `ทำความสะอาดข้อมูลสำเร็จ ลบ ${stats.deletedRows} รายการ` };
+                result = { ok: true, action, stats, message: `ทำความสะอาดข้อมูลสำเร็จ ลบ ${stats.totalDeleted || stats.deletedRows || 0} รายการ` };
                 db.prepare("INSERT OR REPLACE INTO database_meta (key, value, updated_at) VALUES ('last_cleanup', ?, ?)")
                     .run(new Date().toISOString(), Date.now());
                 recordAudit("success", result);
@@ -369,21 +381,37 @@ async function executeSqliteAction(action, options = {}, invoker = "owner") {
 
             case "cleanup_cache": {
                 const del = db.prepare("DELETE FROM cache_entries").run();
-                const delAssets = db.prepare("DELETE FROM asset_cache").run();
-                const total = (del.changes || 0) + (delAssets.changes || 0);
-                result = { ok: true, action, deletedRows: total, message: `ล้างแคชสำเร็จ ลบทั้งหมด ${total} รายการ` };
+                let assetCount = 0;
+                try {
+                    const { getAssetCacheManager } = require("../sqlite/cache/assetCacheManager");
+                    const assetMgr = getAssetCacheManager(db);
+                    const allAssets = db.prepare("SELECT asset_key FROM asset_cache").all();
+                    for (const a of allAssets) {
+                        if (assetMgr.deleteAsset(a.asset_key)) {
+                            assetCount++;
+                        }
+                    }
+                    assetMgr.reconcileOrphans();
+                } catch (_) {
+                    const fallbackDel = db.prepare("DELETE FROM asset_cache").run();
+                    assetCount = fallbackDel.changes || 0;
+                }
+                const total = (del.changes || 0) + assetCount;
+                result = { ok: true, action, deletedRows: total, message: `ล้างแคชสำเร็จ ลบทั้งหมด ${total} รายการ (รวมไฟล์ Assets บนดิสก์)` };
                 recordAudit("success", result);
                 break;
             }
 
             case "cleanup_history": {
-                const cutoff = Date.now() - (30 * 24 * 60 * 60 * 1000);
-                const vDel = db.prepare("DELETE FROM voice_events WHERE created_at < ?").run(cutoff);
-                const cDel = db.prepare("DELETE FROM command_events WHERE created_at < ?").run(cutoff);
-                const sDel = db.prepare("DELETE FROM session_events WHERE created_at < ?").run(cutoff);
-                const rDel = db.prepare("DELETE FROM runtime_events WHERE created_at < ?").run(cutoff);
+                const days = parseInt(process.env.SQLITE_HISTORY_RETENTION_DAYS, 10);
+                const retentionDays = (!isNaN(days) && days > 0) ? days : 30;
+                const cutoff = Date.now() - (retentionDays * 24 * 60 * 60 * 1000);
+                const vDel = db.prepare("DELETE FROM voice_events WHERE occurred_at < ?").run(cutoff);
+                const cDel = db.prepare("DELETE FROM command_events WHERE occurred_at < ?").run(cutoff);
+                const sDel = db.prepare("DELETE FROM session_events WHERE occurred_at < ?").run(cutoff);
+                const rDel = db.prepare("DELETE FROM runtime_events WHERE occurred_at < ?").run(cutoff);
                 const total = (vDel.changes || 0) + (cDel.changes || 0) + (sDel.changes || 0) + (rDel.changes || 0);
-                result = { ok: true, action, deletedRows: total, message: `ล้างประวัติเก่าเกิน 30 วันสำเร็จ ลบ ${total} รายการ` };
+                result = { ok: true, action, deletedRows: total, message: `ล้างประวัติเก่าเกิน ${retentionDays} วันสำเร็จ ลบ ${total} รายการ` };
                 recordAudit("success", result);
                 break;
             }
@@ -432,29 +460,40 @@ async function executeSqliteAction(action, options = {}, invoker = "owner") {
             }
 
             case "full_check": {
-                const probe = runStartupCheck(db, { dbPath: getCurrentDbPath() });
+                const readRow = db.prepare("SELECT 1 AS probe").get();
                 const intRows = db.pragma("integrity_check");
                 const fkRows = db.pragma("foreign_key_check");
-                const quota = evaluateQuota(getCurrentDbPath() || resolveDbPath());
-                const emergency = evaluateEmergencyThresholds(getCurrentDbPath() || resolveDbPath());
-                const passed = probe.ok && intRows.length === 1 && (intRows[0].integrity_check === "ok" || intRows[0] === "ok") && fkRows.length === 0;
+                const journalMode = db.pragma("journal_mode", { simple: true });
+                const foreignKeys = db.pragma("foreign_keys", { simple: true });
+                const schemaVer = db.pragma("user_version", { simple: true });
+                const dbPath = getCurrentDbPath() || resolveDbPath();
+                const quota = evaluateQuota(dbPath);
+                const emergency = evaluateEmergencyThresholds(dbPath);
+                const storage = evaluateStoragePaths({ dbPath });
 
-                if (!passed) {
+                const integrityOk = intRows.length === 1 && (intRows[0].integrity_check === "ok" || intRows[0] === "ok");
+                const fkOk = fkRows.length === 0;
+                const pragmasOk = String(journalMode).toLowerCase() === "wal" && foreignKeys === 1;
+                const readOk = Boolean(readRow && readRow.probe === 1);
+                const passed = integrityOk && fkOk && pragmasOk && readOk && storage.ok;
+
+                if (!passed && (!integrityOk || !fkOk)) {
                     notifyIntegrityCorrupted(intRows, fkRows);
                 }
 
-                const schemaVer = probe?.stats?.migration?.currentVersion || db.pragma("user_version", { simple: true });
                 result = {
                     ok: passed,
                     action,
-                    probe,
                     schemaVersion: schemaVer,
-                    integrityOk: passed,
+                    integrityOk,
                     foreignKeyErrors: fkRows,
+                    pragmasOk,
+                    journalMode,
                     quota,
                     emergency,
+                    storage,
                     message: passed
-                        ? `Full Health Check ผ่าน 100%: SQLite ทำงานปกติ, Schema Version ${schemaVer}, พื้นที่ ${quota.footprint.totalMb} MB (${quota.status})`
+                        ? `Full Health Check (Read-Only) ผ่าน 100%: SQLite ทำงานปกติ, Schema Version ${schemaVer}, พื้นที่ ${quota.footprint.totalMb} MB (${quota.status})`
                         : "ตรวจพบข้อผิดพลาดหรือคำเตือนในการตรวจสอบความสมบูรณ์แบบละเอียด"
                 };
                 recordAudit(passed ? "success" : "warning", result);
@@ -570,11 +609,11 @@ async function executeDatabaseConsole(commandString, invoker = "owner") {
 
             case "migrations": {
                 const userVersion = db.pragma("user_version", { simple: true });
-                const rows = db.prepare("SELECT version, name, applied_at FROM schema_migrations ORDER BY version").all();
+                const rows = db.prepare("SELECT version, migration_id, applied_at FROM schema_migrations ORDER BY version").all();
                 output = [
                     `PRAGMA user_version: ${userVersion}`,
                     "ประวัติ Schema Migrations:",
-                    ...rows.map(r => `  [v${r.version}] ${r.name.padEnd(25)} (เมื่อ: ${r.applied_at})`)
+                    ...rows.map(r => `  [v${r.version}] ${(r.migration_id || "").padEnd(25)} (เมื่อ: ${new Date(r.applied_at).toISOString()})`)
                 ].join("\n");
                 break;
             }

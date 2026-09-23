@@ -84,7 +84,11 @@ The Phomueangtai Personal Multi-Tool Discord Bot employs a **3-Tier Hybrid Datab
 
 5. **Clean Architecture & Repository Abstraction**:
    - Feature code interacts with SQLite solely through Repositories located in `database/repositories/`.
-   - Direct SQL statements are forbidden outside `database/sqlite/repositories/`.
+   - Direct SQL statements are strictly forbidden in bot feature code and command handlers.
+   - **Administrative Exemption**: Direct SQL is explicitly permitted within administrative infrastructure files (`database/services/databaseService.js`, `database/sqlite/maintenance/*`, and `database/sqlite/migrations/*`) for maintenance, integrity checks, table inspection, schema migrations, and emergency trim actions.
+
+6. **Technical Debt & Migration Lifecycle**:
+   - **Migration 004 Note (`DROP TABLE IF EXISTS asset_cache`)**: Migration 004 dropped and recreated `asset_cache` to transition from embedded binary BLOB storage to lean disk-backed filesystem metadata. In dev/test environments, this purged stale binary entries cleanly. In future production schema migrations, all table alterations **MUST** use additive `ALTER TABLE` or multi-step migration procedures without `DROP TABLE` to prevent data loss.
 
 ---
 

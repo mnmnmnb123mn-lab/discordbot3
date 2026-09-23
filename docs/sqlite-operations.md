@@ -12,15 +12,15 @@ Updated: 2026-09-23
 
 | ระดับสถานะ | ขนาด Footprint | พฤติกรรมและการตอบสนองของระบบ |
 | :--- | :--- | :--- |
-| **🟢 ปกติ (Normal)** | `< 3.0 GB` | ทำงานตามปกติ รอบการคลีนนิ่งและ Checkpoint ทำตามคาบเวลาปกติ |
-| **🟡 ควรตรวจสอบ (Soft Limit)** | `≥ 3.0 GB` | เพิ่มความถี่ในการทำ Bounded Cleanup เบื้องหลัง พร้อมบันทึกแจ้งเตือน |
-| **🟠 ใกล้ถึงขีดจำกัด (Critical)** | `≥ 3.6 GB` | ระงับการเขียนแคชใหม่ (Cache Throttled) ล้างข้อมูลแคชและประวัติเก่าเข้มข้นขึ้น |
-| **🔴 แตะเพดาน (Hard Limit)** | `≥ 4.0 GB` | **Emergency Write Brake**: ระงับการเขียนแคชและประวัติที่ไม่สำคัญ เพื่อป้องกันดิสก์เต็ม **(ห้ามลบหรือบล็อกข้อมูลหลัก Core Data เด็ดขาด)** |
+| **🟢 ปกติ (Normal)** | `< 3,072 MB (3.0 GB)` | ทำงานตามปกติ รอบการคลีนนิ่งและ Checkpoint ทำตามคาบเวลาปกติ |
+| **🟡 ควรตรวจสอบ (Soft Limit)** | `≥ 3,072 MB` | เพิ่มความถี่ในการทำ Bounded Cleanup เบื้องหลัง พร้อมบันทึกแจ้งเตือน |
+| **🟠 ใกล้ถึงขีดจำกัด (Critical)** | `≥ 3,686 MB` | ระงับการเขียนแคชใหม่ (Cache Throttled) ล้างข้อมูลแคชและประวัติเก่าเข้มข้นขึ้น |
+| **🔴 แตะเพดาน (Hard Limit)** | `≥ 4,096 MB (4.0 GB)` | **Emergency Write Brake**: ระงับการเขียนแคชและประวัติที่ไม่สำคัญ เพื่อป้องกันดิสก์เต็ม **(ห้ามลบหรือบล็อกข้อมูลหลัก Core Data เด็ดขาด)** |
 
 สามารถปรับแต่งขนาดได้ผ่าน Environment Variables ใน `.env`:
-- `SQLITE_QUOTA_SOFT_MB` (ค่าเริ่มต้น: `3000`)
-- `SQLITE_QUOTA_CRIT_MB` (ค่าเริ่มต้น: `3600`)
-- `SQLITE_QUOTA_HARD_MB` (ค่าเริ่มต้น: `4000`)
+- `SQLITE_QUOTA_SOFT_MB` (ค่าเริ่มต้น: `3072`)
+- `SQLITE_QUOTA_CRIT_MB` (ค่าเริ่มต้น: `3686`)
+- `SQLITE_QUOTA_HARD_MB` (ค่าเริ่มต้น: `4096`)
 
 ---
 
@@ -107,3 +107,30 @@ Updated: 2026-09-23
      node -e "const { getDatabase } = require('./database/sqlite/connection'); const { runIncrementalVacuum } = require('./database/sqlite/maintenance/vacuum'); runIncrementalVacuum(getDatabase(), 1000);"
      ```
   3. ตรวจสอบพื้นที่อีกครั้งด้วย `npm run db:sqlite:stats`
+
+---
+
+## 6. Production Deployment Checklist (รายการตรวจสอบความพร้อมก่อนขึ้น Production)
+
+ก่อนนำขึ้น Production (เช่น Dedicated Discord Bot Hosting / Pterodactyl Container / VPS / Docker):
+
+- [ ] **1. ตั้งค่า Persistent Volume Mount**: ตรวจสอบว่าโฮสต์หรือคอนเทนเนอร์มีการ Mount โฟลเดอร์ภายนอก (เช่น `/persistent/`) เพื่อป้องกันข้อมูลสูญหายเมื่อคอนเทนเนอร์ถูก Rebuild หรือ Restart
+- [ ] **2. ตั้งค่า Environment Variables ในไฟล์ `.env` หรือ Dashboard ของโฮสติ้ง**:
+  ```env
+  SQLITE_DB_PATH=/persistent/discordbot.sqlite
+  SQLITE_BACKUP_DIR=/persistent/backups
+  SQLITE_ASSET_DIR=/persistent/cache-assets
+  SQLITE_QUOTA_SOFT_MB=3072
+  SQLITE_QUOTA_CRIT_MB=3686
+  SQLITE_QUOTA_HARD_MB=4096
+  ```
+- [ ] **3. ตรวจสอบสิทธิ์การเข้าถึงไฟล์ (File Permissions)**:
+  - โฟลเดอร์ที่ Mount ต้องมีสิทธิ์อ่านและเขียน (`R_OK | W_OK`) สำหรับ Node.js process user
+- [ ] **4. ตรวจสอบพื้นที่ว่างบนดิสก์ (Disk Free Space)**:
+  - Persistent volume ต้องมีพื้นที่ว่างขั้นต่ำอย่างน้อย **1 GB** (Storage Guard จะแจ้งเตือน `filesystemWarning` หากมีระหว่าง 100MB–1GB และจะขึ้น `filesystemCritical` หากต่ำกว่า 100MB)
+- [ ] **5. ทดสอบ Pre-flight ผ่าน CLI**:
+  ```bash
+  npm run check:storage
+  npm run db:sqlite:check
+  ```
+  - หากระบบตรวจพบ In-Source Storage ในโหมด Production ระบบจะขึ้น `[STORAGE] ⚠️ pathWarning` เพื่อแจ้งเตือน แต่จะไม่สั่ง Crash หรือขัดขวางการทำงานของบอท

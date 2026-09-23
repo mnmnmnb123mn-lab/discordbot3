@@ -329,7 +329,7 @@ registerShutdownHandlers({
     memoryMonitor,
     verificationRuntime: verificationLifecycle,
     dmService,
-    runtimeCleanups: [eventRuntime, routeRegistration, { stop: () => readyInitializationController?.stop() }, { stop: () => shutdownSystemHooks?.() }, { stop: () => shutdownRunners() }]
+    runtimeCleanups: [eventRuntime, routeRegistration, { stop: () => readyInitializationController?.stop() }, { stop: () => shutdownSystemHooks?.() }, { stop: () => shutdownRunners() }, { stop: () => require("../database/index").shutdown() }]
 });
 
 if (isFeatureEnabled("memoryMonitor")) {
@@ -383,11 +383,11 @@ async function connectDatabaseForBoot() {
 
 async function connectSqliteForBoot() {
     const database = require("../database/index");
-    const result = database.sqlite.initialize();
+    const result = await database.initialize({ connectMongo: false, startScheduler: true });
     return {
-        schemaVersion: result.stats?.migration?.currentVersion || 1,
-        tablesCount: result.stats?.tablesCount || 0,
-        footprintMb: result.stats?.quota?.footprint?.totalMb || 0
+        schemaVersion: result.sqlite?.stats?.migration?.currentVersion || 1,
+        tablesCount: result.sqlite?.stats?.tablesCount || 0,
+        footprintMb: result.sqlite?.stats?.quota?.footprint?.totalMb || 0
     };
 }
 

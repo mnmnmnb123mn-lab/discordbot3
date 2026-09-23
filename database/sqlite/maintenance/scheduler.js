@@ -229,7 +229,19 @@ async function runEmergencyEvaluation() {
             }
         } catch (_) {}
 
-        const evalResult = evaluateEmergencyThresholds(dbPath);
+        // Aggregate write buffer counts from history repositories
+        let totalBufferCount = 0;
+        try {
+            const { getVoiceEventRepository } = require("../repositories/history/VoiceEventRepository");
+            const { getCommandEventRepository } = require("../repositories/history/CommandEventRepository");
+            const { getSessionEventRepository } = require("../repositories/history/SessionEventRepository");
+            const vBuf = getVoiceEventRepository()?.getBufferStats()?.bufferedCount || 0;
+            const cBuf = getCommandEventRepository()?.getBufferStats()?.bufferedCount || 0;
+            const sBuf = getSessionEventRepository()?.getBufferStats()?.bufferedCount || 0;
+            totalBufferCount = vBuf + cBuf + sBuf;
+        } catch (_) {}
+
+        const evalResult = evaluateEmergencyThresholds(dbPath, { writeBufferCount: totalBufferCount });
 
         if (evalResult.isEmergency) {
             diagnostics.emergency.incidentCount++;

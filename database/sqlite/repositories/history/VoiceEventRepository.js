@@ -106,7 +106,8 @@ class VoiceEventRepository {
 
     flush() {
         if (this.buffer.length === 0) return 0;
-        const items = this.buffer.splice(0, this.buffer.length);
+        const batchSize = Math.min(this.buffer.length, 500);
+        const items = this.buffer.slice(0, batchSize);
 
         const stmt = this.db.prepare(`
             INSERT INTO voice_events (
@@ -132,8 +133,11 @@ class VoiceEventRepository {
 
         try {
             insertTx();
+            this.buffer.splice(0, batchSize);
             return items.length;
-        } catch (_) {
+        } catch (err) {
+            this.isDegraded = true;
+            console.error(`[VOICE_EVENT_BUFFER] ❌ Batch flush failed: ${err.message}`);
             return 0;
         }
     }
