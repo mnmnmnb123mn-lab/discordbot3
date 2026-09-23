@@ -138,6 +138,14 @@ Public logs เจ้าของต้องการรายละเอี�
 เอกสารนี้ไม่ได้สั่งให้สร้าง Log ของ Environment secret ที่ไม่เกี่ยวข้องกับ Event
 ขึ้นมาใหม่ แต่ห้าม Redact Field ที่เจ้าของตั้งใจให้มีอยู่ใน Log/Event schema
 
+### ความแตกต่างระหว่าง Owner Event Logs กับ Database Center Preview
+
+ตามคำสั่งชัดเจนของเจ้าของระบบ (Owner Decision):
+- **Dashboard หลัก / Verification Detail / Export / Owner Event Logs / Private Webhooks**: ต้องแสดงค่าจริง (Raw) เต็มรูปแบบตาม OI-03 และ OI-04 โดยไม่ Mask หรือซ่อนข้อมูล
+- **Database Center (หน้า Inspect Table / Query Preview)**: เป็น Administrative Browser / Preview Tool บนหน้าจอ Dashboard ไม่ใช่ Operational Incident Log เพื่อป้องกันการหลุดเวลามีการแชร์หน้าจอ (Screen Share) หรือ Credential รั่วไหลโดยไม่ตั้งใจ จึงกำหนดให้ **Mask ข้อมูล Token, Secret, Password, และ Raw IP เป็น Default** ในหน้าตาราง Preview
+- หากเจ้าของต้องการดูค่า Raw ใน Database Center สามารถกด Reveal ทีละฟิลด์ หรือดูผ่าน Verification Detail ตาม Flow ปกติได้
+- การ Mask เป็นค่า Default ใน Database Center นี้ **ไม่ถือว่าละเมิด OI-04** เพราะเป็น UI สำหรับ Browse ข้อมูลทั่วไปในฐานข้อมูล ไม่ใช่ Owner Event Log
+
 ---
 
 ## กฎการแก้ไขสำหรับ AI และผู้พัฒนา

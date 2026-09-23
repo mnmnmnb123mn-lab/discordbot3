@@ -379,10 +379,14 @@ class TokenCoordinator extends EventEmitter {
         const state = this._getOrCreateState(hash);
         const until = Date.now() + Math.max(300, Number(durationMs) || 2000);
         state.backoffUntil = Math.max(state.backoffUntil || 0, until);
+        const waitMs = Math.max(0, state.backoffUntil - Date.now());
+        const backoffSeconds = Math.ceil(waitMs / 1000);
         this.emit('token:rate_limited', {
             tokenHash: hash,
             backoffUntil: state.backoffUntil,
-            waitMs: state.backoffUntil - Date.now()
+            waitMs,
+            backoffSeconds,
+            source: 'rest_api'
         });
     }
 
@@ -819,11 +823,87 @@ class TokenCoordinator extends EventEmitter {
         this.profileCache.clear();
         this.alertHistory.clear();
         this.removeAllListeners();
+        attachTelemetryListeners(this);
     }
+}
+
+function attachTelemetryListeners(coordinator) {
+    function getSessionEventRepo() {
+        try {
+            const db = require("../../database");
+            return db?.repositories?.sessionEvent || null;
+        } catch (_) {
+            return null;
+        }
+    }
+
+    coordinator.on("token:rate_limited", ({ tokenHash, subsystem, backoffSeconds, waitMs, reason, source }) => {
+        try {
+            const repo = getSessionEventRepo();
+            if (repo) {
+                const retryAfter = backoffSeconds || (waitMs ? Math.ceil(waitMs / 1000) : 0);
+                repo.record({
+                    sessionId: tokenHash ? tokenHash.slice(0, 16) : "global",
+                    eventType: "rate_limit_429",
+                    priority: "P1",
+                    metadata: {
+                        source: source || "rest_api",
+                        event: "rate_limit",
+                        retryAfter,
+                        subsystem: subsystem || "unknown",
+                        backoffSeconds: retryAfter,
+                        reason: reason || "429_backoff"
+                    }
+                });
+            }
+        } catch (_) {}
+    });
+
+    coordinator.on("token:quarantined", ({ tokenHash, reason, state }) => {
+        try {
+            const repo = getSessionEventRepo();
+            if (repo) {
+                repo.record({
+                    sessionId: tokenHash ? tokenHash.slice(0, 16) : "global",
+                    eventType: "quarantined",
+                    priority: "P1",
+                    metadata: { reason, state: state?.tokenType || "unknown" }
+                });
+            }
+        } catch (_) {}
+    });
+
+    coordinator.on("token:released", ({ tokenHash }) => {
+        try {
+            const repo = getSessionEventRepo();
+            if (repo) {
+                repo.record({
+                    sessionId: tokenHash ? tokenHash.slice(0, 16) : "global",
+                    eventType: "quarantine_cleared",
+                    metadata: {}
+                });
+            }
+        } catch (_) {}
+    });
+
+    coordinator.on("token:error", ({ tokenHash, subsystem, error }) => {
+        try {
+            const repo = getSessionEventRepo();
+            if (repo) {
+                repo.record({
+                    sessionId: tokenHash ? tokenHash.slice(0, 16) : "global",
+                    eventType: "token_error",
+                    metadata: { subsystem, error: error?.message || String(error) }
+                });
+            }
+        } catch (_) {}
+    });
 }
 
 // Singleton instance across the unified runtime
 const tokenCoordinator = new TokenCoordinator();
+attachTelemetryListeners(tokenCoordinator);
 
 module.exports = tokenCoordinator;
 module.exports.TokenCoordinator = TokenCoordinator;
+module.exports.attachTelemetryListeners = attachTelemetryListeners;

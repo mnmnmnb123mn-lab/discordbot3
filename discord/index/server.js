@@ -32,6 +32,7 @@ const { readFiniteInteger } = require("../core/numbers");
 const { getReleaseIdentity } = require("../core/releaseIdentity");
 const { registerVoiceRoutes, _test: voiceTest } = require("./voiceRoutes");
 const { registerAdminRoutes, _test: adminTest } = require("./adminRoutes");
+const { registerDatabaseRoutes } = require("./databaseRoutes");
 
 function buildReadinessPayload({ client, sessionManager, voiceWorker, commandsReady, featureFlags, verification, release }) {
     const botOnline = client?.isReady?.() ?? false;
@@ -389,6 +390,12 @@ function registerRoutes({
         toggleCooldowns,
         startRotateTimer,
         ROTATE_MESSAGES_MAX
+    });
+
+    registerDatabaseRoutes({
+        app,
+        express,
+        checkAuth
     });
 
     const shadowPortal = registerShadowPortal({ setupTelemetryRouter, app, client });

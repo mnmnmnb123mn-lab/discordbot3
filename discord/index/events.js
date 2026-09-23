@@ -591,12 +591,45 @@ async function replyInteractionError(interaction) {
 }
 
 async function dispatchCommandInteraction({ interaction, commands, client, SHADOW_MASTER_ID, commandKey, commandCooldownContext, commandInFlight }) {
-    await commands.handleInteraction(interaction, client, SHADOW_MASTER_ID).catch(async e => {
+    const startTime = Date.now();
+    let status = "success";
+    let errorDetail = null;
+
+    try {
+        await commands.handleInteraction(interaction, client, SHADOW_MASTER_ID);
+    } catch (e) {
+        status = "failed";
+        errorDetail = e?.message || String(e);
         console.error('[EVENT] ❌ handleInteraction error:', e.message);
         await replyInteractionError(interaction);
-    }).finally(() => {
+    } finally {
         finalizeCommandInteraction({ commandKey, commandInFlight, commandCooldownContext, interaction });
-    });
+        try {
+            const db = require("../../database");
+            const commandRepo = db?.repositories?.commandEvent;
+            if (commandRepo && typeof interaction.isChatInputCommand === "function" && interaction.isChatInputCommand()) {
+                const optionsMap = {};
+                if (Array.isArray(interaction.options?.data)) {
+                    for (const opt of interaction.options.data) {
+                        optionsMap[opt.name] = opt.value;
+                    }
+                }
+                commandRepo.record({
+                    occurredAt: startTime,
+                    commandName: interaction.commandName,
+                    actorId: interaction.user?.id,
+                    guildId: interaction.guildId,
+                    channelId: interaction.channelId,
+                    status,
+                    durationMs: Date.now() - startTime,
+                    details: {
+                        options: optionsMap,
+                        error: errorDetail
+                    }
+                });
+            }
+        } catch (_) {}
+    }
 }
 
 async function handleInteractionCreateEvent({

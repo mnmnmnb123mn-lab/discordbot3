@@ -954,6 +954,7 @@ module.exports = {
     shutdownWebhookDispatcher,
     buildStartupNotice,
     _test: {
+        defaultDispatcher,
         failureCode,
         retryable,
         withTimeout,

@@ -3,7 +3,7 @@
 ================================================================================
 ⚠️ [AI COGNITIVE DIRECTIVE & ARCHITECTURE GUARD] ⚠️
 ATTENTION AI ASSISTANT: DO NOT MODIFY, REFACTOR, OR SIMPLIFY THIS FILE.
-1. [DATABASE]: MONGO_URI is the ONLY storage. Local JSON fallback is REMOVED.
+1. [DATABASE]: MONGO_URI is authoritative for sessions & identity; SQLite is local operational DB. Local JSON fallback is REMOVED.
 2. [ENCRYPTION]: AES-256-GCM with CBC fallback must remain intact.
 3. [POOL]: maxPoolSize: 20 MUST remain in mongoose.connect().
 4. [SCHEMAS]: Do NOT remove PanelStateModel or BotSettingsModel.
@@ -354,6 +354,11 @@ async function connectDB() {
 }
 
 async function disconnectDB() {
+    try {
+        const db = require("../database");
+        await db.shutdown();
+    } catch (_) {}
+
     if (mongoose.connection.readyState === 0) {
         dbConnected = false;
         return;
@@ -818,7 +823,42 @@ async function createSession(token, serverId, voiceId, serverName, ownerId, owne
         throw new Error("SESSION_PERSIST_FAILED");
     }
 
+    try {
+        const repo = getVoiceRuntimeRepository();
+        if (repo) {
+            repo.upsertSessionRuntime({
+                sessionId,
+                serverId,
+                ownerId,
+                state: "active",
+                lastHeartbeat: Date.now(),
+                lastActivity: Date.now(),
+                reconnectCount: 0,
+                statusLabel: "active"
+            });
+        }
+    } catch (_) {}
+
+    try {
+        const db = require("../database");
+        db?.repositories?.sessionEvent?.record({
+            sessionId,
+            accountId: ownerId,
+            eventType: "voice_session_created",
+            metadata: { serverId, state: "active" }
+        });
+    } catch (_) {}
+
     return sessionId;
+}
+
+function getVoiceRuntimeRepository() {
+    try {
+        const db = require("../database");
+        return db?.repositories?.voiceSessionRuntime || null;
+    } catch (_) {
+        return null;
+    }
 }
 
 function getSession(sessionId) {
@@ -827,7 +867,13 @@ function getSession(sessionId) {
 
 function touchSession(sessionId) {
     const session = sessions.get(sessionId);
-    if (session) session.lastActivity = Date.now();
+    if (session) {
+        session.lastActivity = Date.now();
+        try {
+            const repo = getVoiceRuntimeRepository();
+            if (repo) repo.recordHeartbeat(sessionId, session.lastActivity);
+        } catch (_) {}
+    }
     return session;
 }
 
@@ -882,6 +928,23 @@ async function updateSessionMetadata(sessionId, metadata = {}) {
 async function saveVoiceRuntimeState(sessionId) {
     const session = sessions.get(sessionId);
     if (!session) return false;
+
+    try {
+        const repo = getVoiceRuntimeRepository();
+        if (repo) {
+            repo.upsertSessionRuntime({
+                sessionId,
+                serverId: session.serverId,
+                ownerId: session.ownerId,
+                state: session.state || "active",
+                lastHeartbeat: Date.now(),
+                lastActivity: session.lastActivity || Date.now(),
+                reconnectCount: Number(session.reconnectCount || 0),
+                statusLabel: session.recoveryState?.phase || session.statusLabel || "active"
+            });
+        }
+    } catch (_) {}
+
     if (!dbConnected) return false;
 
     try {
@@ -1077,6 +1140,20 @@ async function deleteSession(sessionId, options = {}) {
 
     pendingSessionDeletes.delete(sessionId);
     cleanupSessionMemory(sessionId, session);
+
+    try {
+        const repo = getVoiceRuntimeRepository();
+        if (repo) repo.deleteSessionRuntime(sessionId);
+    } catch (_) {}
+
+    try {
+        const db = require("../database");
+        db?.repositories?.sessionEvent?.record({
+            sessionId,
+            eventType: "voice_session_deleted",
+            metadata: { stoppedReason: session?.stoppedReason || "manual_or_error" }
+        });
+    } catch (_) {}
 
     console.log(`[SESSION] 🗑️ Session removed: ${sessionId}`);
 

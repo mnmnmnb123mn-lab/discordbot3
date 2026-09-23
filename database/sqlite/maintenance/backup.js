@@ -1,0 +1,123 @@
+"use strict";
+
+const fs = require("node:fs");
+const path = require("node:path");
+const crypto = require("node:crypto");
+const { getFilesystemFreeSpace } = require("./quota");
+
+const DEFAULT_MAX_BACKUPS = 2;
+
+function computeFileSha256(filePath) {
+    return new Promise((resolve, reject) => {
+        try {
+            const hash = crypto.createHash("sha256");
+            const stream = fs.createReadStream(filePath);
+            stream.on("data", chunk => hash.update(chunk));
+            stream.on("end", () => resolve(hash.digest("hex")));
+            stream.on("error", err => reject(err));
+        } catch (err) {
+            reject(err);
+        }
+    });
+}
+
+function resolveBackupDir(customDir = null) {
+    if (customDir) return path.resolve(customDir);
+    if (process.env.SQLITE_BACKUP_DIR && process.env.SQLITE_BACKUP_DIR.trim()) {
+        return path.resolve(process.env.SQLITE_BACKUP_DIR.trim());
+    }
+    return path.resolve(process.cwd(), "backups");
+}
+
+function listBackups(customDir = null) {
+    const backupDir = resolveBackupDir(customDir);
+    if (!fs.existsSync(backupDir)) return [];
+
+    return fs.readdirSync(backupDir)
+        .filter(f => f.startsWith("sqlite_backup_") && f.endsWith(".sqlite"))
+        .map(f => {
+            const p = path.join(backupDir, f);
+            const stat = fs.statSync(p);
+            return {
+                filename: f,
+                path: p,
+                sizeBytes: stat.size,
+                sizeMb: parseFloat((stat.size / (1024 * 1024)).toFixed(2)),
+                createdAt: new Date(stat.mtimeMs).toISOString(),
+                mtime: stat.mtimeMs
+            };
+        })
+        .sort((a, b) => b.mtime - a.mtime);
+}
+
+async function createBackup(db, options = {}) {
+    if (!db) throw new TypeError("createBackup requires an active database");
+
+    const startTime = Date.now();
+    const backupDir = resolveBackupDir(options.backupDir);
+    if (!fs.existsSync(backupDir)) {
+        fs.mkdirSync(backupDir, { recursive: true });
+    }
+
+    // Safety check: ensure sufficient filesystem free space
+    if (db.name && fs.existsSync(db.name)) {
+        const dbSize = fs.statSync(db.name).size;
+        const requiredBytes = Math.max(dbSize * 1.5, 50 * 1024 * 1024); // at least 1.5x DB size or 50MB
+        const freeSpace = getFilesystemFreeSpace(backupDir);
+
+        if (freeSpace.availableBytes !== null && freeSpace.availableBytes < requiredBytes) {
+            const neededMb = (requiredBytes / (1024 * 1024)).toFixed(1);
+            const availMb = freeSpace.availableMb;
+            throw new Error(`พื้นที่ดิสก์คงเหลือไม่เพียงพอสำหรับการสำรองข้อมูล (ต้องการพื้นที่ว่างอย่างน้อย ${neededMb} MB, มีอยู่ ${availMb} MB)`);
+        }
+    }
+
+    const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
+    const filename = options.filename || `sqlite_backup_${timestamp}.sqlite`;
+    const targetPath = path.join(backupDir, filename);
+
+    // better-sqlite3 provides native online async backup API
+    await db.backup(targetPath);
+
+    const stat = fs.statSync(targetPath);
+    const sha256 = await computeFileSha256(targetPath);
+    const durationMs = Date.now() - startTime;
+
+    // Apply rotation to keep storage bounded (default: 2 sets)
+    const maxBackups = options.maxBackups || DEFAULT_MAX_BACKUPS;
+    rotateBackups(backupDir, maxBackups);
+
+    return {
+        ok: true,
+        path: targetPath,
+        filename,
+        sizeBytes: stat.size,
+        sizeMb: parseFloat((stat.size / (1024 * 1024)).toFixed(2)),
+        sha256,
+        durationMs,
+        timestamp
+    };
+}
+
+function rotateBackups(backupDir, maxToKeep = DEFAULT_MAX_BACKUPS) {
+    if (!fs.existsSync(backupDir)) return;
+    const backups = listBackups(backupDir);
+
+    if (backups.length > maxToKeep) {
+        const toDelete = backups.slice(maxToKeep);
+        for (const item of toDelete) {
+            try {
+                fs.unlinkSync(item.path);
+            } catch (_) {}
+        }
+    }
+}
+
+module.exports = {
+    createBackup,
+    rotateBackups,
+    resolveBackupDir,
+    listBackups,
+    computeFileSha256,
+    DEFAULT_MAX_BACKUPS
+};

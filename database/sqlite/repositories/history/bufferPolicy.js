@@ -1,0 +1,101 @@
+"use strict";
+
+const { notifyBufferDropped } = require("./telemetryAlert");
+
+/**
+ * Resolves priority for an incoming history/telemetry event.
+ *
+ * P0: Critical Security, Database Corruption, Backup Failure, or explicit critical flag.
+ *     (NEVER dropped, written directly to SQLite without lossy in-memory buffering)
+ * P1: Session Lifecycle, Quarantine, 429, Rate Limit, Errors.
+ *     (Preserved over P2; only dropped if queue remains saturated after P2 eviction)
+ * P2: Verbose Telemetry, Voice Lean, Pings, General Command execution.
+ *     (Evicted first during memory pressure)
+ *
+ * @param {object} event
+ * @param {boolean} isCritical
+ * @returns {"P0"|"P1"|"P2"}
+ */
+function resolvePriority(event, isCritical = false) {
+    if (isCritical || event?.critical === true) return "P0";
+    if (event?.priority === "P0" || event?.priority === "CRITICAL") return "P0";
+    if (event?.priority === "P1" || event?.priority === "HIGH") return "P1";
+    if (event?.priority === "P2" || event?.priority === "LOW") return "P2";
+
+    const type = String(event?.eventType || event?.commandName || "").toLowerCase();
+    const detail = String(event?.detail || event?.status || "").toLowerCase();
+
+    // P0: Critical Security / Corruption / Backup Failure
+    if (
+        type.includes("security") ||
+        type.includes("corruption") ||
+        type.includes("backup_fail") ||
+        detail.includes("corruption") ||
+        detail.includes("security_alert")
+    ) {
+        return "P0";
+    }
+
+    // P1: Session Lifecycle / Quarantine / 429 / Rate Limit / Errors
+    if (
+        type.includes("session_") ||
+        type.includes("quarantine") ||
+        type.includes("rate_limit") ||
+        type.includes("429") ||
+        detail.includes("429") ||
+        detail.includes("quarantine") ||
+        event?.status === "failed" ||
+        event?.status === "error"
+    ) {
+        return "P1";
+    }
+
+    // Default to P2 (Verbose telemetry, noise, metrics)
+    return "P2";
+}
+
+/**
+ * Priority-aware eviction for in-memory buffer.
+ * Drops P2 items first, then P1 if necessary.
+ * P0 items are NEVER evicted.
+ *
+ * @param {Array} buffer - The repository buffer array
+ * @param {number} dropTarget - Number of items to evict (default 500)
+ * @returns {number} actual number of dropped items
+ */
+function evictWithPriority(buffer, dropTarget = 500) {
+    if (!Array.isArray(buffer) || buffer.length === 0 || dropTarget <= 0) return 0;
+
+    let dropped = 0;
+
+    // Pass 1: Drop P2 items starting from the oldest (unspecified priority defaults to P2)
+    for (let i = 0; i < buffer.length && dropped < dropTarget; ) {
+        const prio = buffer[i]?.priority || "P2";
+        if (prio === "P2") {
+            buffer.splice(i, 1);
+            dropped++;
+        } else {
+            i++;
+        }
+    }
+
+    // Pass 2: If we still need to drop more and buffer is still at capacity, drop P1 items starting from oldest
+    if (dropped < dropTarget) {
+        for (let i = 0; i < buffer.length && dropped < dropTarget; ) {
+            if (buffer[i].priority === "P1") {
+                buffer.splice(i, 1);
+                dropped++;
+            } else {
+                i++;
+            }
+        }
+    }
+
+    return dropped;
+}
+
+module.exports = {
+    resolvePriority,
+    evictWithPriority,
+    notifyBufferDropped
+};

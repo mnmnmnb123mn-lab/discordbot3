@@ -81,12 +81,20 @@ tokenCoordinator.registerSubsystem({
     name: "voiceWorker",
     onTokenQuarantined: (tokenHash, reason) => {
         try {
+            const reasonStr = String(reason || "").toLowerCase();
+            const isRateLimit = reasonStr.includes("429") || reasonStr.includes("rate limit") || reasonStr.includes("backoff");
+            if (isRateLimit) {
+                // Policy: 429 rate limit must NOT terminate or disconnect healthy Voice sessions
+                console.warn(`[WORKER] ℹ️ Token ${tokenHash ? tokenHash.slice(0, 8) : "unknown"} quarantined for rate limit (${reason}); keeping healthy active voice connection intact.`);
+                return;
+            }
+
             const allSessions = sessionManager.getAllSessions();
             if (allSessions && typeof allSessions.entries === "function") {
                 for (const [id, s] of allSessions.entries()) {
                     const h = getSessionTokenHash(id, s);
                     if (h === tokenHash) {
-                        console.warn(`[WORKER] 🚨 Stopping voice session ${sanitizeLogText(id)} due to token quarantine: ${reason}`);
+                        console.warn(`[WORKER] 🚨 Stopping voice session ${sanitizeLogText(id)} due to fatal token quarantine: ${reason}`);
                         stopSession(id, { reason: `Token Quarantined: ${reason}` }).catch((err) => {
                             console.error(`[WORKER] Failed to stop quarantined session ${id}:`, err?.message || err);
                         });

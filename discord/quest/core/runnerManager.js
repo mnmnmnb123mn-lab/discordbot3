@@ -70,7 +70,7 @@ const {
     sendQuestSummaryDM,
     sendQuestAuthFailureDM
 } = require('./questDm');
-const QuestLog = require('../models/QuestLog');
+const { getQuestLogRepository } = require('../../../database/repositories/quest');
 const { sendWebhookEvent } = require('../../core/webhooks');
 
 const jobs = new Map(); // key: jobKey -> jobRecord
@@ -1046,24 +1046,26 @@ async function startUserQuestSession({
         const results = [];
         let startIndex = Date.now();
 
-        // Create QuestLog document in MongoDB
-        const questLog = new QuestLog({
-            invokerId,
-            invokerTag,
-            guildId,
-            channelId,
-            totalTokens: tokens.length,
-            overallStatus: 'in_progress',
-            accounts: tokens.map((t) => {
-                const encrypted = encryptToken(t, invokerId);
-                return {
-                    maskedToken: maskToken(t),
-                    encryptedToken: encrypted.packed,
-                    status: 'pending'
-                };
-            })
-        });
-        await questLog.save().catch(() => {});
+        // Create QuestLog in SQLite
+        let questLog = null;
+        try {
+            questLog = getQuestLogRepository().create({
+                invokerId,
+                invokerTag,
+                guildId,
+                channelId,
+                totalTokens: tokens.length,
+                overallStatus: 'in_progress',
+                accounts: tokens.map((t) => {
+                    const encrypted = encryptToken(t, invokerId);
+                    return {
+                        maskedToken: maskToken(t),
+                        encryptedToken: encrypted.packed,
+                        status: 'pending'
+                    };
+                })
+            });
+        } catch (_) {}
 
         // Emit startup webhook event
         sendWebhookEvent({

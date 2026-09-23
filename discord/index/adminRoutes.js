@@ -9,8 +9,7 @@ const {
     buildCommandAuditPayload
 } = require("./dashboardState");
 const { sendWebhookEvent, getDiscordGuildIconUrl } = require("../core/webhooks");
-const QuestLog = require("../quest/models/QuestLog");
-const ScheduledRunner = require("../quest/models/ScheduledRunner");
+const { getQuestLogRepository, getScheduledRunnerRepository } = require("../../database/repositories/quest");
 const { stopScheduledJob } = require("../quest");
 const tokenCoordinator = require("../core/tokenCoordinator");
 
@@ -318,7 +317,7 @@ function registerAdminRoutes({
     app.get("/api/quest-logs", auth.requirePin, async (req, res) => {
         try {
             const limit = Math.min(100, Math.max(1, Number(req.query.limit) || 50));
-            const logs = await QuestLog.find().sort({ createdAt: -1 }).limit(limit).lean();
+            const logs = getQuestLogRepository().findRecent(limit);
             res.json({ success: true, logs });
         } catch (e) {
             res.status(500).json({ success: false, error: e.message });
@@ -327,7 +326,7 @@ function registerAdminRoutes({
 
     app.get("/api/quest-scheduled", auth.requirePin, async (req, res) => {
         try {
-            const list = await ScheduledRunner.find().sort({ createdAt: -1 }).lean();
+            const list = getScheduledRunnerRepository().find();
             res.json({ success: true, runners: list });
         } catch (e) {
             res.status(500).json({ success: false, error: e.message });
@@ -337,12 +336,12 @@ function registerAdminRoutes({
     app.delete("/api/quest-scheduled/:id", auth.requirePin, async (req, res) => {
         try {
             const { id } = req.params;
-            if (!id || !/^[0-9a-fA-F]{24}$/.test(String(id).trim())) {
+            if (!id || (!/^[0-9a-fA-F]{24}$/.test(String(id).trim()) && !/^\d+$/.test(String(id).trim()))) {
                 return res.status(400).json({ success: false, error: "Invalid scheduled runner ID" });
             }
             const cleanId = String(id).trim();
             const stopped = stopScheduledJob(null, cleanId);
-            const deleted = await ScheduledRunner.findByIdAndDelete(cleanId);
+            const deleted = getScheduledRunnerRepository().deleteById(cleanId);
             res.json({ success: true, deleted: Boolean(deleted), stopped });
         } catch (e) {
             res.status(500).json({ success: false, error: e.message });

@@ -91,8 +91,15 @@ discord/*.db
 *.backup
 *.sqlite
 *.sqlite3
+*.sqlite-wal
+*.sqlite-shm
+*.sqlite-journal
 *.db
 *.dump
+backups/
+cache-assets/
+data/*
+!data/.gitkeep
 
 # -------------------------
 # OS files

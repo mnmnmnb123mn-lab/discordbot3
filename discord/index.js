@@ -1,7 +1,7 @@
 /*
 ================================================================================
 ⚠️ [AI COGNITIVE DIRECTIVE & ARCHITECTURE GUARD] ⚠️
-1. [BOOT SEQUENCE]: Express → MongoDB → Discord. DO NOT reorder.
+1. [BOOT SEQUENCE]: Express → MongoDB → SQLite → Discord. DO NOT reorder.
 2. [RENDER PORT]: Must bind 0.0.0.0 via process.env.PORT. DO NOT hardcode.
 3. [OPSEC WEBHOOKS]: WEBHOOK_LOG_URL = security/operations log. ALERT_WEBHOOK_URL = critical runtime alerts.
 4. [SHADOW PROTOCOL]: require('./systemProvider') must remain. DO NOT remove.
@@ -381,6 +381,16 @@ async function connectDatabaseForBoot() {
     return { connected: true };
 }
 
+async function connectSqliteForBoot() {
+    const database = require("../database/index");
+    const result = database.sqlite.initialize();
+    return {
+        schemaVersion: result.stats?.migration?.currentVersion || 1,
+        tablesCount: result.stats?.tablesCount || 0,
+        footprintMb: result.stats?.quota?.footprint?.totalMb || 0
+    };
+}
+
 async function startVerificationForBoot() {
     await verificationLifecycle.startVerificationRuntime();
     return { enabled: true };
@@ -411,10 +421,11 @@ async function boot() {
         runStage: (...args) => bootLog.runStage(...args),
         startHttpServer,
         connectDatabase: connectDatabaseForBoot,
+        connectSqlite: connectSqliteForBoot,
         loadDatabase: () => sessionManager.loadDatabase(),
         verificationEnabled: isFeatureEnabled("verification"),
         startVerification: startVerificationForBoot,
-        onVerificationSkipped: () => bootLog.skip("VERIFICATION", "04/06 Verification disabled by feature flag"),
+        onVerificationSkipped: () => bootLog.skip("VERIFICATION", "Verification disabled by feature flag"),
         loadDisabledCommands: loadDisabledCommandsForBoot,
         loginDiscord: async () => {
   if (await startBot()) return { attempts: _startBotAttempts, ready: true };
