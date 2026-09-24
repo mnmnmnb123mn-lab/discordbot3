@@ -466,6 +466,9 @@ function startScheduler() {
         const intervalMs = backupHours * 60 * 60 * 1000;
         const backups = listBackups();
         const now = Date.now();
+        // Baseline safety policy: Even if SQLITE_AUTO_BACKUP_INITIAL is not explicitly "true",
+        // if no previous backup exists at all (backups.length === 0), run an initial baseline backup
+        // after 5s to guarantee we always have a restore point before runtime mutations accumulate.
         const shouldRunInitialBackup = process.env.SQLITE_AUTO_BACKUP_INITIAL === "true" || backups.length === 0;
 
         let delayUntilFirstBackup = intervalMs;

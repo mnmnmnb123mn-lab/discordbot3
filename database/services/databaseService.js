@@ -142,8 +142,8 @@ async function getDatabaseOverview() {
     let assetBytes = 0;
     try {
         const assetMgr = getAssetCacheManager(db);
-        const assetStats = assetMgr.getCacheStats();
-        assetBytes = assetStats.totalSizeBytes || 0;
+        const assetStats = assetMgr.getStats();
+        assetBytes = assetStats.totalBytes || assetStats.totalSizeBytes || 0;
     } catch (_) {}
 
     const dbBytes = quota.footprint.totalBytes || 0;
@@ -199,7 +199,7 @@ async function getDatabaseOverview() {
                     persistentMountVerified: storage.persistentMountVerified,
                     allowInSource: storage.allowInSource,
                     persistentLabel: storage.persistentMountVerified
-                        ? "✅ Owner-Confirmed External Volume"
+                        ? "✅ Owner-Confirmed Persistent Path"
                         : storage.configuredPersistentPath
                             ? "🟡 Persistent Path Configured (Mount Unverified)"
                             : storage.allowInSource
@@ -296,70 +296,23 @@ async function getSqliteDetailedStatus() {
         };
     };
 
-    const coreTables = {
-        quest_logs: buildTableMeta("quest_logs", "ประวัติการรัน Quest"),
-        quest_accounts: buildTableMeta("quest_accounts", "บัญชี Quest"),
-        quest_details: buildTableMeta("quest_details", "รายละเอียด Quest Step"),
-        scheduled_runners: buildTableMeta("scheduled_runners", "ตัวตั้งเวลา Auto Daily"),
-        dm_notifications: buildTableMeta("dm_notifications", "คิวแจ้งเตือน DM"),
-        verification_recovery: buildTableMeta("verification_recovery", "จุดกู้คืนสถานะยืนยันตัวตน"),
-        voice_session_runtime: buildTableMeta("voice_session_runtime", "สถานะ Voice Session Runtime"),
-        schema_migrations: buildTableMeta("schema_migrations", "ประวัติการ Migration โครงสร้าง"),
-        maintenance_runs: buildTableMeta("maintenance_runs", "บันทึกการบำรุงรักษาระบบ")
-    };
-    const coreAgg = sumCategory(coreTables);
-
-    const tempTables = {
-        verification_state_nonce: buildTableMeta("verification_state_nonce", "OAuth State Nonces (มีอายุ)"),
-        database_meta: buildTableMeta("database_meta", "ค่าสถานะระบบภายใน")
-    };
-    const tempAgg = sumCategory(tempTables);
-
-    const historyTables = {
-        voice_events: buildTableMeta("voice_events", "ประวัติเหตุการณ์ห้องเสียง"),
-        command_events: buildTableMeta("command_events", "ประวัติการใช้คำสั่ง Slash"),
-        session_events: buildTableMeta("session_events", "ประวัติ Token Coordinator"),
-        runtime_events: buildTableMeta("runtime_events", "ประวัติการทำงานของระบบ")
-    };
-    const historyAgg = sumCategory(historyTables);
-
-    const cacheTables = {
-        cache_entries: buildTableMeta("cache_entries", "แคชทั่วไป (KV Store)"),
-        asset_cache: buildTableMeta("asset_cache", "แคชรูปภาพ/ไอคอน (Filesystem Metadata)")
-    };
-    const cacheAgg = sumCategory(cacheTables);
-
-    // Category Aggregates with row counts and estimated disk bytes
-    const categories = {
-        core: {
-            label: "ข้อมูลหลัก (Core Operational)",
-            count: coreAgg.count,
-            bytes: coreAgg.bytes,
-            sizeMb: coreAgg.sizeMb,
-            tables: coreTables
-        },
-        temporary: {
-            label: "ข้อมูลชั่วคราว (Temporary / Nonces)",
-            count: tempAgg.count,
-            bytes: tempAgg.bytes,
-            sizeMb: tempAgg.sizeMb,
-            tables: tempTables
-        },
-        history: {
-            label: "บันทึกประวัติ (History & Telemetry - 30 วัน)",
-            count: historyAgg.count,
-            bytes: historyAgg.bytes,
-            sizeMb: historyAgg.sizeMb,
-            tables: historyTables
-        },
-        cache: {
-            label: "ข้อมูลแคช (Cache Subsystem)",
-            count: cacheAgg.count,
-            bytes: cacheAgg.bytes,
-            sizeMb: cacheAgg.sizeMb,
-            tables: cacheTables
+    // Build categories dynamically from central TABLE_CATEGORIES to ensure 100% architectural alignment
+    const categories = {};
+    for (const catDef of Object.values(TABLE_CATEGORIES)) {
+        const catKey = catDef.key;
+        const tablesObj = {};
+        for (const [tblName, tblLabel] of Object.entries(catDef.tables)) {
+            tablesObj[tblName] = buildTableMeta(tblName, tblLabel);
         }
-    };
+        const agg = sumCategory(tablesObj);
+        categories[catKey] = {
+            label: catDef.label,
+            count: agg.count,
+            bytes: agg.bytes,
+            sizeMb: agg.sizeMb,
+            tables: tablesObj
+        };
+    }
 
     // Maintenance runs log (last 5)
     let maintenanceHistory = [];
@@ -409,8 +362,8 @@ async function getSqliteDetailedStatus() {
     let assetBytes = 0;
     try {
         const assetMgr = getAssetCacheManager(db);
-        const assetStats = assetMgr.getCacheStats();
-        assetBytes = assetStats.totalSizeBytes || 0;
+        const assetStats = assetMgr.getStats();
+        assetBytes = assetStats.totalBytes || assetStats.totalSizeBytes || 0;
     } catch (_) {}
 
     const dbBytes = quota.footprint.totalBytes || 0;
@@ -453,7 +406,7 @@ async function getSqliteDetailedStatus() {
             pathWarning: storageCheck.pathWarning,
             allowInSource: storageCheck.allowInSource,
             persistentLabel: storageCheck.persistentMountVerified
-                ? "✅ Owner-Confirmed External Volume"
+                ? "✅ Owner-Confirmed Persistent Path"
                 : storageCheck.configuredPersistentPath
                     ? "🟡 Persistent Path Configured (Mount Unverified)"
                     : storageCheck.allowInSource

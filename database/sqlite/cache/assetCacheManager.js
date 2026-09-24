@@ -182,42 +182,54 @@ class AssetCacheManager {
                 this.evictIfOverQuota(this.maxQuotaBytes - sizeBytes);
             }
 
-            // 2. Ensure dir & write file
+            // 2. Ensure dir & write file safely
             this._ensureDirectory();
-            if (!fs.existsSync(fullPath)) {
-                fs.writeFileSync(fullPath, buffer);
+            const fileExistedBefore = fs.existsSync(fullPath);
+            let newlyCreatedFile = false;
+            if (!fileExistedBefore) {
+                const tempPath = `${fullPath}.${Date.now()}.${Math.random().toString(36).slice(2)}.tmp`;
+                fs.writeFileSync(tempPath, buffer);
+                fs.renameSync(tempPath, fullPath);
+                newlyCreatedFile = true;
             }
 
             // 3. Upsert SQLite metadata
-            const stmt = this.db.prepare(`
-                INSERT INTO asset_cache (
-                    asset_key, asset_type, relative_path, mime_type,
-                    size_bytes, sha256, source_url, created_at,
-                    last_used_at, expires_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                ON CONFLICT(asset_key) DO UPDATE SET
-                    asset_type = excluded.asset_type,
-                    relative_path = excluded.relative_path,
-                    mime_type = excluded.mime_type,
-                    size_bytes = excluded.size_bytes,
-                    sha256 = excluded.sha256,
-                    source_url = excluded.source_url,
-                    last_used_at = excluded.last_used_at,
-                    expires_at = excluded.expires_at
-            `);
+            try {
+                const stmt = this.db.prepare(`
+                    INSERT INTO asset_cache (
+                        asset_key, asset_type, relative_path, mime_type,
+                        size_bytes, sha256, source_url, created_at,
+                        last_used_at, expires_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ON CONFLICT(asset_key) DO UPDATE SET
+                        asset_type = excluded.asset_type,
+                        relative_path = excluded.relative_path,
+                        mime_type = excluded.mime_type,
+                        size_bytes = excluded.size_bytes,
+                        sha256 = excluded.sha256,
+                        source_url = excluded.source_url,
+                        last_used_at = excluded.last_used_at,
+                        expires_at = excluded.expires_at
+                `);
 
-            stmt.run(
-                String(assetKey),
-                String(assetType),
-                relativePath,
-                mimeType,
-                sizeBytes,
-                sha256,
-                options.sourceUrl ? String(options.sourceUrl) : null,
-                now,
-                now,
-                expiresAt
-            );
+                stmt.run(
+                    String(assetKey),
+                    String(assetType),
+                    relativePath,
+                    mimeType,
+                    sizeBytes,
+                    sha256,
+                    options.sourceUrl ? String(options.sourceUrl) : null,
+                    now,
+                    now,
+                    expiresAt
+                );
+            } catch (dbErr) {
+                if (newlyCreatedFile && fs.existsSync(fullPath)) {
+                    try { fs.unlinkSync(fullPath); } catch (_) {}
+                }
+                throw dbErr;
+            }
 
             return {
                 key: assetKey,
@@ -381,20 +393,24 @@ class AssetCacheManager {
             };
         }
     }
+
+    getCacheStats() {
+        return this.getStats();
+    }
 }
 
 const assetManagerInstances = new WeakMap();
 let defaultAssetCacheManager = null;
 
-function getAssetCacheManager(db = null) {
+function getAssetCacheManager(db = null, options = {}) {
     if (db) {
         if (!assetManagerInstances.has(db)) {
-            assetManagerInstances.set(db, new AssetCacheManager(db));
+            assetManagerInstances.set(db, new AssetCacheManager(db, options));
         }
         return assetManagerInstances.get(db);
     }
     if (!defaultAssetCacheManager) {
-        defaultAssetCacheManager = new AssetCacheManager();
+        defaultAssetCacheManager = new AssetCacheManager(null, options);
     }
     return defaultAssetCacheManager;
 }

@@ -1,31 +1,9 @@
 "use strict";
 
 const { getDatabase } = require("../../connection");
-const { resolvePriority, evictWithPriority, notifyBufferDropped, notifyP1Dropped } = require("./bufferPolicy");
+const { resolvePriority, evictWithPriority, notifyBufferDropped, notifyP1Dropped, sanitizeDetails, SENSITIVE_KEY_REGEX } = require("./bufferPolicy");
 const { spoolP0Event, drainP0Spool } = require("./p0Journal");
 const writePolicy = require("../../maintenance/writePolicy");
-
-const SENSITIVE_KEY_REGEX = /(token|password|pin|secret|credential|auth|bearer|cookie|salt|private|api_?key|access_?key|secret_?key|^key$)/i;
-
-function sanitizeDetails(obj, depth = 0) {
-    if (!obj || typeof obj !== "object" || depth > 5) return obj;
-    if (Array.isArray(obj)) {
-        return obj.slice(0, 50).map(item => sanitizeDetails(item, depth + 1));
-    }
-    const clean = {};
-    for (const [key, value] of Object.entries(obj)) {
-        if (SENSITIVE_KEY_REGEX.test(key)) {
-            clean[key] = "[REDACTED]";
-        } else if (value && typeof value === "object") {
-            clean[key] = sanitizeDetails(value, depth + 1);
-        } else if (typeof value === "string" && value.length > 500) {
-            clean[key] = value.slice(0, 500) + "...";
-        } else {
-            clean[key] = value;
-        }
-    }
-    return clean;
-}
 
 class CommandEventRepository {
     constructor(db = null) {

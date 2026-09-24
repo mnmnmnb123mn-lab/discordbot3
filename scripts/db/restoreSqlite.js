@@ -150,16 +150,65 @@ async function restoreDatabase({ sourceBackup, targetDb, force = false }) {
             console.log(`[RESTORE-SQLITE]     Pre-restore safety backup created: ${rollbackBakPath}`);
             prunePreRestoreBackups(targetPath, 1);
 
-            // Clean stale WAL and SHM files to prevent WAL corruption
+            // Clean stale WAL, SHM, and journal files to prevent WAL/rollback corruption
             const walPath = `${targetPath}-wal`;
             const shmPath = `${targetPath}-shm`;
-            if (fs.existsSync(walPath)) fs.unlinkSync(walPath);
-            if (fs.existsSync(shmPath)) fs.unlinkSync(shmPath);
+            const journalPath = `${targetPath}-journal`;
+            if (fs.existsSync(walPath)) try { fs.unlinkSync(walPath); } catch (_) {}
+            if (fs.existsSync(shmPath)) try { fs.unlinkSync(shmPath); } catch (_) {}
+            if (fs.existsSync(journalPath)) try { fs.unlinkSync(journalPath); } catch (_) {}
         }
 
-        // Step 3: Copy source backup to target
-        console.log("[RESTORE-SQLITE] 3/4 Copying backup to target location...");
-        fs.copyFileSync(sourcePath, targetPath);
+        // Step 3: Copy source backup to temporary staging file & verify before atomic replace
+        console.log("[RESTORE-SQLITE] 3/4 Copying backup to staging file & verifying integrity...");
+        const stagingPath = `${targetPath}.restore-staging-${Date.now()}.tmp`;
+        try {
+            fs.copyFileSync(sourcePath, stagingPath);
+
+            // Verify staging file integrity
+            const stagingDb = new Database(stagingPath, { readonly: true, fileMustExist: true });
+            try {
+                const sInt = stagingDb.pragma("integrity_check");
+                const sOk = sInt.length === 1 && (sInt[0].integrity_check === "ok" || sInt[0] === "ok");
+                if (!sOk) {
+                    throw new Error(`Staged backup integrity check failed: ${JSON.stringify(sInt)}`);
+                }
+            } finally {
+                stagingDb.close();
+            }
+
+            // Remove target auxiliary files before replace
+            const walPath = `${targetPath}-wal`;
+            const shmPath = `${targetPath}-shm`;
+            const journalPath = `${targetPath}-journal`;
+            if (fs.existsSync(walPath)) try { fs.unlinkSync(walPath); } catch (_) {}
+            if (fs.existsSync(shmPath)) try { fs.unlinkSync(shmPath); } catch (_) {}
+            if (fs.existsSync(journalPath)) try { fs.unlinkSync(journalPath); } catch (_) {}
+
+            // Atomic replace
+            fs.renameSync(stagingPath, targetPath);
+        } catch (copyErr) {
+            console.error(`[RESTORE-SQLITE] ❌ Staging copy or atomic replace failed: ${copyErr.message}`);
+            if (fs.existsSync(stagingPath)) {
+                try { fs.unlinkSync(stagingPath); } catch (_) {}
+            }
+            if (rollbackBakPath && fs.existsSync(rollbackBakPath)) {
+                console.warn(`[RESTORE-SQLITE] ⚠️ Copy/Staging failure detected. Initiating immediate auto-rollback from ${rollbackBakPath}...`);
+                try {
+                    fs.copyFileSync(rollbackBakPath, targetPath);
+                    const walPath = `${targetPath}-wal`;
+                    const shmPath = `${targetPath}-shm`;
+                    const journalPath = `${targetPath}-journal`;
+                    if (fs.existsSync(walPath)) try { fs.unlinkSync(walPath); } catch (_) {}
+                    if (fs.existsSync(shmPath)) try { fs.unlinkSync(shmPath); } catch (_) {}
+                    if (fs.existsSync(journalPath)) try { fs.unlinkSync(journalPath); } catch (_) {}
+                    console.log("[RESTORE-SQLITE] 🔄 Immediate auto-rollback completed successfully.");
+                } catch (rbErr) {
+                    console.error(`[RESTORE-SQLITE] 🚨 Immediate auto-rollback failed: ${rbErr.message}`);
+                }
+            }
+            throw copyErr;
+        }
 
         // Step 4: Post-flight integrity verification on restored target
         console.log("[RESTORE-SQLITE] 4/4 Verifying restored database integrity...");
@@ -185,8 +234,10 @@ async function restoreDatabase({ sourceBackup, targetDb, force = false }) {
                     fs.copyFileSync(rollbackBakPath, targetPath);
                     const walPath = `${targetPath}-wal`;
                     const shmPath = `${targetPath}-shm`;
+                    const journalPath = `${targetPath}-journal`;
                     if (fs.existsSync(walPath)) try { fs.unlinkSync(walPath); } catch (_) {}
                     if (fs.existsSync(shmPath)) try { fs.unlinkSync(shmPath); } catch (_) {}
+                    if (fs.existsSync(journalPath)) try { fs.unlinkSync(journalPath); } catch (_) {}
                     console.log("[RESTORE-SQLITE] 🔄 Auto-rollback completed successfully. Original database state restored.");
                 } catch (rbErr) {
                     console.error(`[RESTORE-SQLITE] 🚨 Auto-rollback failed: ${rbErr.message}`);

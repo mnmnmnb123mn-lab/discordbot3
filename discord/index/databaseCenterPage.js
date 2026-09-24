@@ -462,7 +462,7 @@ async function loadDbOverview() {
         const persistEl = document.getElementById('ov-sqlite-persistent');
         if (persistEl) {
             if (sq.storage && sq.storage.persistentMountVerified) {
-                persistEl.textContent = 'Persistent Storage: ✅ Confirmed External Mount';
+                persistEl.textContent = 'Persistent Storage: ✅ Owner-Confirmed Persistent Path';
                 persistEl.style.color = 'var(--green2)';
             } else if (sq.storage && sq.storage.configuredPersistentPath) {
                 persistEl.textContent = 'Persistent Storage: 🟡 Path Configured (Mount Unverified)';
@@ -504,7 +504,7 @@ async function loadSqliteDetails() {
         const persistBadge = document.getElementById('badge-persistent');
         if (persistBadge) {
             if (st.persistentMountVerified) {
-                persistBadge.textContent = 'Storage: ✅ Confirmed External Mount';
+                persistBadge.textContent = 'Storage: ✅ Owner-Confirmed Persistent Path';
                 persistBadge.style.color = 'var(--green2)';
                 persistBadge.style.borderColor = 'var(--green2)';
             } else if (st.configuredPersistentPath) {

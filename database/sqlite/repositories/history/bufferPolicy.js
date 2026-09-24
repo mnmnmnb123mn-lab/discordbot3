@@ -105,9 +105,21 @@ function evictWithPriority(buffer, dropTarget = 500, outStats = null) {
 }
 
 const SENSITIVE_KEY_REGEX = /(token|password|pin|secret|credential|auth|bearer|cookie|salt|private|api_?key|access_?key|secret_?key|^key$)/i;
+const SENSITIVE_VALUE_REGEX = /(token\s*[:=]\s*[^\s&,;]+|bearer\s+[a-zA-Z0-9_\-\.]+|bot\s+[a-zA-Z0-9_\-\.]+|mfa\.[a-zA-Z0-9_\-]{20,}|[a-zA-Z0-9_\-]{24,}\.[a-zA-Z0-9_\-]{6}\.[a-zA-Z0-9_\-]{20,}|password\s*[:=]\s*[^\s&,;]+|api_?key\s*[:=]\s*[^\s&,;]+|secret\s*[:=]\s*[^\s&,;]+)/gi;
+
+function sanitizeString(str) {
+    if (typeof str !== "string") return str;
+    const result = str.replace(SENSITIVE_VALUE_REGEX, "[REDACTED_CREDENTIAL]");
+    return result.length > 500 ? result.slice(0, 500) + "..." : result;
+}
 
 function sanitizeDetails(obj, depth = 0) {
-    if (!obj || typeof obj !== "object" || depth > 5) return obj;
+    if (!obj || typeof obj !== "object") {
+        return sanitizeString(obj);
+    }
+    if (depth >= 5) {
+        return "[REDACTED_NESTED]";
+    }
     if (Array.isArray(obj)) {
         return obj.slice(0, 50).map(item => sanitizeDetails(item, depth + 1));
     }
@@ -117,8 +129,8 @@ function sanitizeDetails(obj, depth = 0) {
             clean[key] = "[REDACTED]";
         } else if (value && typeof value === "object") {
             clean[key] = sanitizeDetails(value, depth + 1);
-        } else if (typeof value === "string" && value.length > 500) {
-            clean[key] = value.slice(0, 500) + "...";
+        } else if (typeof value === "string") {
+            clean[key] = sanitizeString(value);
         } else {
             clean[key] = value;
         }
