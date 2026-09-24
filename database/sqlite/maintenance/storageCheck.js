@@ -13,9 +13,22 @@ function evaluateStoragePaths(options = {}) {
     const isProduction = (options.env || process.env.NODE_ENV) === "production";
     const repoRoot = path.resolve(process.cwd());
 
-    const rawDbPath = options.dbPath || process.env.SQLITE_DB_PATH || path.join(repoRoot, "data", "discordbot.sqlite");
-    const rawBackupDir = options.backupDir || process.env.SQLITE_BACKUP_DIR || path.join(repoRoot, "backups");
-    const rawAssetDir = options.assetDir || process.env.SQLITE_ASSET_DIR || path.join(repoRoot, "data", "cache-assets");
+    // Auto-detect physical /persistent volume mount on host
+    let hasPhysicalPersistentMount = false;
+    try {
+        if (fs.existsSync("/persistent")) {
+            fs.accessSync("/persistent", fs.constants.R_OK | fs.constants.W_OK);
+            hasPhysicalPersistentMount = true;
+        }
+    } catch (_) {}
+
+    const defaultDbPath = hasPhysicalPersistentMount ? "/persistent/discordbot.sqlite" : path.join(repoRoot, "data", "discordbot.sqlite");
+    const defaultBackupDir = hasPhysicalPersistentMount ? "/persistent/backups" : path.join(repoRoot, "backups");
+    const defaultAssetDir = hasPhysicalPersistentMount ? "/persistent/cache-assets" : path.join(repoRoot, "data", "cache-assets");
+
+    const rawDbPath = options.dbPath || process.env.SQLITE_DB_PATH || defaultDbPath;
+    const rawBackupDir = options.backupDir || process.env.SQLITE_BACKUP_DIR || defaultBackupDir;
+    const rawAssetDir = options.assetDir || process.env.SQLITE_ASSET_DIR || defaultAssetDir;
 
     const resolvedDbPath = path.resolve(rawDbPath);
     const resolvedDbDir = path.dirname(resolvedDbPath);
@@ -32,14 +45,24 @@ function evaluateStoragePaths(options = {}) {
     const explicitAssetDir = Boolean(options.assetDir || (process.env.SQLITE_ASSET_DIR && process.env.SQLITE_ASSET_DIR.trim()));
     const allowInSource = process.env.ALLOW_IN_SOURCE_STORAGE === "true";
 
-    const missingExplicitEnvs = [];
-    if (!explicitDbPath) missingExplicitEnvs.push("SQLITE_DB_PATH");
-    if (!explicitBackupDir) missingExplicitEnvs.push("SQLITE_BACKUP_DIR");
-    if (!explicitAssetDir) missingExplicitEnvs.push("SQLITE_ASSET_DIR");
+    const isAutoDetectedPersistent = hasPhysicalPersistentMount && !hasInSource && (
+        resolvedDbPath.startsWith("/persistent") &&
+        resolvedBackupDir.startsWith("/persistent") &&
+        resolvedAssetDir.startsWith("/persistent")
+    );
 
-    // Persistent storage path is configured when no paths reside inside source tree and explicit external paths are configured
-    const configuredPersistentPath = !hasInSource && (missingExplicitEnvs.length === 0 || !isProduction);
-    const persistenceConfirmed = Boolean(process.env.SQLITE_PERSISTENCE_CONFIRMED === "true" || process.env.PERSISTENT_STORAGE_CONFIRMED === "true");
+    const missingExplicitEnvs = [];
+    if (!explicitDbPath && !isAutoDetectedPersistent) missingExplicitEnvs.push("SQLITE_DB_PATH");
+    if (!explicitBackupDir && !isAutoDetectedPersistent) missingExplicitEnvs.push("SQLITE_BACKUP_DIR");
+    if (!explicitAssetDir && !isAutoDetectedPersistent) missingExplicitEnvs.push("SQLITE_ASSET_DIR");
+
+    // Persistent storage path is configured when no paths reside inside source tree and explicit external paths or auto-detected mount is configured
+    const configuredPersistentPath = !hasInSource && (missingExplicitEnvs.length === 0 || isAutoDetectedPersistent || !isProduction);
+    const persistenceConfirmed = Boolean(
+        isAutoDetectedPersistent ||
+        process.env.SQLITE_PERSISTENCE_CONFIRMED === "true" ||
+        process.env.PERSISTENT_STORAGE_CONFIRMED === "true"
+    );
     const persistentMountVerified = configuredPersistentPath && persistenceConfirmed;
     const isPersistent = configuredPersistentPath; // backward-compatibility flag
 

@@ -27,6 +27,13 @@ function resolveBackupDir(customDir = null) {
     if (process.env.SQLITE_BACKUP_DIR && process.env.SQLITE_BACKUP_DIR.trim()) {
         return path.resolve(process.env.SQLITE_BACKUP_DIR.trim());
     }
+    // Auto-detection: If host has mounted a writable /persistent volume, use it automatically
+    try {
+        if (fs.existsSync("/persistent")) {
+            fs.accessSync("/persistent", fs.constants.R_OK | fs.constants.W_OK);
+            return path.resolve("/persistent", "backups");
+        }
+    } catch (_) {}
     return path.resolve(process.cwd(), "backups");
 }
 

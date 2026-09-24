@@ -26,7 +26,17 @@ function resolveTtlForType(assetType, customTtlMs = null) {
 }
 
 function resolveAssetDir() {
-    return process.env.SQLITE_ASSET_DIR || path.join(process.cwd(), "data", "cache-assets");
+    if (process.env.SQLITE_ASSET_DIR && process.env.SQLITE_ASSET_DIR.trim()) {
+        return path.resolve(process.env.SQLITE_ASSET_DIR.trim());
+    }
+    // Auto-detection: If host has mounted a writable /persistent volume, use it automatically
+    try {
+        if (fs.existsSync("/persistent")) {
+            fs.accessSync("/persistent", fs.constants.R_OK | fs.constants.W_OK);
+            return path.resolve("/persistent", "cache-assets");
+        }
+    } catch (_) {}
+    return path.join(process.cwd(), "data", "cache-assets");
 }
 
 function resolveMaxQuotaBytes() {
@@ -417,5 +427,6 @@ function getAssetCacheManager(db = null, options = {}) {
 
 module.exports = {
     AssetCacheManager,
-    getAssetCacheManager
+    getAssetCacheManager,
+    resolveAssetDir
 };

@@ -23,6 +23,13 @@ function resolveDbPath(customPath = null) {
         if (envPath === ":memory:") return ":memory:";
         return path.resolve(envPath);
     }
+    // Auto-detection: If host has mounted a writable /persistent volume, use it automatically
+    try {
+        if (fs.existsSync("/persistent")) {
+            fs.accessSync("/persistent", fs.constants.R_OK | fs.constants.W_OK);
+            return path.resolve("/persistent", "discordbot.sqlite");
+        }
+    } catch (_) {}
     // Fallback: dedicated data directory in workspace root (avoiding source code collisions)
     return path.resolve(process.cwd(), "data", "discordbot.sqlite");
 }
