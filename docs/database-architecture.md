@@ -61,10 +61,16 @@ The Phomueangtai Personal Multi-Tool Discord Bot employs a **3-Tier Hybrid Datab
 ## 2. Invariants & Storage Boundaries
 
 1. **Storage Isolation**:
-   - SQLite database files **MUST NOT** reside in source code directories.
-   - Default path: `./data/discordbot.sqlite` (configurable via `SQLITE_DB_PATH`).
-   - Backup directory: `./backups` (configurable via `SQLITE_BACKUP_DIR`).
-   - Both `./data/` and `./backups/` are strictly ignored by version control (`.gitignore`).
+   - SQLite database files and operational assets **MUST NOT** reside in source code directories.
+   - **Production Architecture**: Mounts to external persistent storage volume:
+     - Database: `/persistent/discordbot.sqlite` (via `SQLITE_DB_PATH`)
+     - Backups: `/persistent/backups/` (via `SQLITE_BACKUP_DIR`)
+     - Asset Cache: `/persistent/cache-assets/` (via `SQLITE_ASSET_DIR`)
+   - **Development Fallback**: In local non-production environments, defaults to workspace directories:
+     - Database: `./data/discordbot.sqlite`
+     - Backups: `./backups/`
+     - Asset Cache: `./data/cache-assets/`
+   - Both `./data/` and `./backups/` are strictly ignored by version control (`.gitignore`), while production paths are validated by `storageCheck.js`.
 
 2. **PRAGMA Order Dependency**:
    - `PRAGMA auto_vacuum = INCREMENTAL` **MUST** be applied before `PRAGMA journal_mode = WAL` on database creation. SQLite writes `auto_vacuum` configuration into the root page header upon initial page allocation.

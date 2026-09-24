@@ -27,6 +27,30 @@ function notifyBufferDropped(repoName, dropCount, maxCap, totalDropped) {
     } catch (_) {}
 }
 
+function notifyP1Dropped(repoName, p1DropCount, totalDropped) {
+    const alertKey = `sqlite_buffer_p1_dropped_${repoName}`;
+    if (!canSendAlert(alertKey)) return;
+    recordAlertSent(alertKey);
+
+    try {
+        sendWebhookEvent({
+            target: "ALERT",
+            severity: "CRITICAL",
+            category: "DATA",
+            code: "sqlite.telemetry.p1_dropped",
+            title: `🚨 วิกฤตคิวพักข้อมูล: ประวัติสำคัญ (P1) สูญหาย (${repoName})`,
+            description: `คิวพักข้อมูล Write-Behind ของ ${repoName} เต็มความจุและพื้นที่จัดเก็บถูกระงับการเขียน ระบบจำเป็นต้องตัดทิ้งข้อมูลสำคัญระดับ P1 (Session/Quarantine/429/Error) จำนวน ${p1DropCount} รายการเพื่อความอยู่รอดของโปรเซส`,
+            context: {
+                "Repository": repoName,
+                "จำนวน P1 ที่สูญหาย": `${p1DropCount} รายการ`,
+                "ยอดรวมที่ตัดทิ้งสะสม": `${totalDropped} รายการ`,
+                "เวลาที่เกิด": new Date().toISOString()
+            }
+        }).catch(() => {});
+    } catch (_) {}
+}
+
 module.exports = {
-    notifyBufferDropped
+    notifyBufferDropped,
+    notifyP1Dropped
 };

@@ -1,9 +1,9 @@
 "use strict";
 
 const { getDatabase } = require("../../connection");
-const { resolvePriority, evictWithPriority, notifyBufferDropped } = require("./bufferPolicy");
+const { resolvePriority, evictWithPriority, notifyBufferDropped, notifyP1Dropped } = require("./bufferPolicy");
 const { sanitizeDetails } = require("./CommandEventRepository");
-const { canWrite } = require("../../maintenance/writePolicy");
+const writePolicy = require("../../maintenance/writePolicy");
 
 class SessionEventRepository {
     constructor(db = null) {
@@ -36,7 +36,10 @@ class SessionEventRepository {
             clearInterval(this.flushInterval);
             this.flushInterval = null;
         }
-        this.flush();
+        let flushed = 0;
+        do {
+            flushed = this.flush();
+        } while (flushed > 0 && this.buffer.length > 0);
     }
 
     getBufferStats() {
@@ -72,24 +75,33 @@ class SessionEventRepository {
 
         // P0: Critical Security / Corruption / Backup Failure - NEVER drop, insert immediately
         if (priority === "P0") {
-            this._insertSingle(item);
+            try {
+                this._insertSingle(item);
+            } catch (err) {
+                this.isDegraded = true;
+                console.error(`[SESSION_EVENT_BUFFER] 🚨 CRITICAL P0 event insert failed: ${err.message}`);
+            }
             return;
         }
 
         // P2 drop early when telemetry is degraded under quota pressure
-        if (priority === "P2" && !canWrite("telemetry", { priority: "P2" })) {
+        if (priority === "P2" && !writePolicy.canWrite("telemetry", { priority: "P2" })) {
             return;
         }
 
         // Bounded queue overflow guard with priority eviction
         if (this.buffer.length >= this.maxQueueCap) {
             const dropTarget = Math.min(500, Math.max(1, Math.floor(this.maxQueueCap / 4)));
-            const dropCount = evictWithPriority(this.buffer, dropTarget);
+            const stats = {};
+            const dropCount = evictWithPriority(this.buffer, dropTarget, stats);
             if (dropCount > 0) {
                 this.droppedEventsCount += dropCount;
                 this.isDegraded = true;
                 console.warn(`[SESSION_EVENT_BUFFER] ⚠️ Queue reached capacity (${this.maxQueueCap}). Dropped ${dropCount} low-priority events.`);
                 notifyBufferDropped("SessionEventRepository", dropCount, this.maxQueueCap, this.droppedEventsCount);
+                if (stats.p1 > 0) {
+                    notifyP1Dropped("SessionEventRepository", stats.p1, this.droppedEventsCount);
+                }
             }
         }
 
@@ -119,8 +131,15 @@ class SessionEventRepository {
         const batchSize = Math.min(this.buffer.length, 500);
         const items = this.buffer.slice(0, batchSize);
 
-        if (!canWrite("history")) {
-            this.buffer.splice(0, batchSize);
+        if (!writePolicy.canWrite("history")) {
+            const initialLen = this.buffer.length;
+            this.buffer = this.buffer.filter(i => (i.priority || "P2") !== "P2");
+            const droppedP2 = initialLen - this.buffer.length;
+            if (droppedP2 > 0) {
+                this.droppedEventsCount += droppedP2;
+                this.isDegraded = true;
+                console.warn(`[SESSION_EVENT_BUFFER] ⚠️ Storage hard limit active. Dropped ${droppedP2} P2 events; preserved P1 events in memory.`);
+            }
             return 0;
         }
 

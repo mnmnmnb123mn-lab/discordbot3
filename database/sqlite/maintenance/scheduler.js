@@ -300,50 +300,35 @@ async function runEmergencyEvaluation() {
 
         if (evalResult.isEmergency) {
             diagnostics.emergency.incidentCount++;
-            diagnostics.emergency.lastStatus = "critical";
 
-            const eventKey = "sqlite_emergency_storage";
-            const alertAllowed = canSendAlert(eventKey);
-
-            if (alertAllowed) {
-                recordAlertSent(eventKey);
-                try {
-                    sendWebhookEvent({
-                        target: "ALERT",
-                        severity: "CRITICAL",
-                        category: "DATA",
-                        code: "sqlite.emergency.critical",
-                        title: "🚨 ตรวจพบภาวะวิกฤตระบบฐานข้อมูล SQLite",
-                        description: `ระบบตรวจพบเงื่อนไขวิกฤต กำลังเริ่ม Emergency Auto-Trim อัตโนมัติ:\n${evalResult.reasons.map(r => `• ${r}`).join("\n")}`,
-                        context: {
-                            "ขนาด Footprint": `${evalResult.quota.footprint.totalMb} MB`,
-                            "เพดานวิกฤต": `${evalResult.quota.limits.critMb} MB`,
-                            "ขนาดไฟล์ WAL": `${evalResult.walMb} MB`,
-                            "สถานะระบบ": evalResult.quota.status.toUpperCase()
-                        }
-                    }).catch(() => {});
-                } catch (_) {}
-            }
-
-            // Policy B: Telemetry Write-Behind Buffer Pressure Handling (RAM / Writer Pressure)
-            // Attempt to drain pending events from write-behind buffers via active flush.
-            // Bounded queue priority eviction and webhook alerting are managed within the repositories.
-            // Note: Does NOT trigger Emergency Trim on physical disk assets, because buffer pressure is RAM/writer pressure.
-            if (evalResult.isBufferEmergency) {
-                try {
-                    const { getVoiceEventRepository } = require("../repositories/history/VoiceEventRepository");
-                    const { getCommandEventRepository } = require("../repositories/history/CommandEventRepository");
-                    const { getSessionEventRepository } = require("../repositories/history/SessionEventRepository");
-                    getVoiceEventRepository()?.flush();
-                    getCommandEventRepository()?.flush();
-                    getSessionEventRepository()?.flush();
-                } catch (flushErr) {
-                    console.warn(`[DB_SCHEDULER] ⚠️ Buffer drain flush warning: ${flushErr.message}`);
-                }
-            }
-
-            // Execute Emergency Auto-Trim strictly on physical storage emergency
+            // 1. Storage Emergency Alert & Auto-Trim Execution (Physical Disk Exhaustion)
             if (evalResult.isStorageEmergency) {
+                diagnostics.emergency.lastStatus = "storage_critical";
+                const eventKey = "sqlite_emergency_storage";
+                const alertAllowed = canSendAlert(eventKey);
+
+                if (alertAllowed) {
+                    recordAlertSent(eventKey);
+                    try {
+                        const storageReasons = evalResult.reasons.filter(r => !r.includes("Write-behind"));
+                        sendWebhookEvent({
+                            target: "ALERT",
+                            severity: "CRITICAL",
+                            category: "DATA",
+                            code: "sqlite.emergency.critical",
+                            title: "🚨 ตรวจพบภาวะวิกฤตพื้นที่จัดเก็บ SQLite (Storage Critical)",
+                            description: `ระบบตรวจพบพื้นที่จัดเก็บบนดิสก์เกินเกณฑ์วิกฤต กำลังเริ่ม Emergency Auto-Trim อัตโนมัติ เพื่อล้างข้อมูลหมดอายุและคืนพื้นที่ดิสก์:\n${storageReasons.map(r => `• ${r}`).join("\n")}`,
+                            context: {
+                                "ขนาด Footprint": `${evalResult.quota.footprint.totalMb} MB`,
+                                "เพดานวิกฤต": `${evalResult.quota.limits.critMb} MB`,
+                                "ขนาดไฟล์ WAL": `${evalResult.walMb} MB`,
+                                "สถานะระบบ": evalResult.quota.status.toUpperCase()
+                            }
+                        }).catch(() => {});
+                    } catch (_) {}
+                }
+
+                // Execute Emergency Auto-Trim strictly on physical storage emergency
                 const trimResult = await executeSqliteAction("emergency_trim", {
                     reason: evalResult.reasons.join("; ")
                 }, "system_auto_emergency");
@@ -395,6 +380,46 @@ async function runEmergencyEvaluation() {
                     } else {
                         diagnostics.emergency.lastStatus = "degraded";
                     }
+                }
+            }
+
+            // 2. Policy B: Telemetry Write-Behind Buffer Pressure Alert & Drain (RAM / Writer Pressure)
+            // Attempt to drain pending events from write-behind buffers via active flush.
+            // Bounded queue priority eviction and webhook alerting are managed within the repositories.
+            // Note: Does NOT trigger Emergency Trim on physical disk assets, because buffer pressure is RAM/writer pressure.
+            if (evalResult.isBufferEmergency) {
+                if (!evalResult.isStorageEmergency) {
+                    diagnostics.emergency.lastStatus = "buffer_pressure";
+                }
+                const bufferKey = "sqlite_emergency_buffer";
+                if (canSendAlert(bufferKey)) {
+                    recordAlertSent(bufferKey);
+                    try {
+                        sendWebhookEvent({
+                            target: "ALERT",
+                            severity: "WARNING",
+                            category: "DATA",
+                            code: "sqlite.buffer.critical",
+                            title: "🟠 ตรวจพบภาวะแรงกดดันคิวพักข้อมูล Telemetry Buffer (Buffer Pressure)",
+                            description: `คิวพักข้อมูล Write-Behind ใน RAM มีขนาดสะสมเกินเกณฑ์วิกฤต (${evalResult.writeBufferCount} รายการ) ระบบดำเนินการระบายข้อมูล (Drain Flush) และเปิดใช้งาน Priority Eviction โดยไม่แตะต้องหรือลบแคชไฟล์บนดิสก์`,
+                            context: {
+                                "จำนวน Buffer ใน RAM": `${evalResult.writeBufferCount} รายการ`,
+                                "เพดานวิกฤต": `${evalResult.bufferThreshold} รายการ`,
+                                "มาตรการ": "Active Queue Drain Flush + Priority Eviction (No Disk Trim)"
+                            }
+                        }).catch(() => {});
+                    } catch (_) {}
+                }
+
+                try {
+                    const { getVoiceEventRepository } = require("../repositories/history/VoiceEventRepository");
+                    const { getCommandEventRepository } = require("../repositories/history/CommandEventRepository");
+                    const { getSessionEventRepository } = require("../repositories/history/SessionEventRepository");
+                    getVoiceEventRepository()?.flush();
+                    getCommandEventRepository()?.flush();
+                    getSessionEventRepository()?.flush();
+                } catch (flushErr) {
+                    console.warn(`[DB_SCHEDULER] ⚠️ Buffer drain flush warning: ${flushErr.message}`);
                 }
             }
         } else {

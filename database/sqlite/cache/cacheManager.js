@@ -255,10 +255,14 @@ class CacheManager {
 }
 
 let defaultCacheManager = null;
+const dbCacheManagers = new WeakMap();
 
 function getCacheManager(db = null) {
     if (db) {
-        return new CacheManager(db);
+        if (!dbCacheManagers.has(db)) {
+            dbCacheManagers.set(db, new CacheManager(db));
+        }
+        return dbCacheManagers.get(db);
     }
     if (!defaultCacheManager) {
         defaultCacheManager = new CacheManager();

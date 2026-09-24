@@ -599,14 +599,15 @@ async function executeSqliteAction(action, options = {}, invoker = "owner") {
             }
 
             case "checkpoint": {
-                const chk = checkpointWal(db, options.mode || "PASSIVE");
+                const rawMode = String(options.mode || "PASSIVE").trim().toUpperCase();
+                const chk = checkpointWal(db, rawMode);
                 const ok = Boolean(chk && chk.ok);
                 result = {
                     ok,
                     action,
                     checkpoint: chk,
                     message: ok
-                        ? `ดำเนินการ Checkpoint WAL สำเร็จ (Mode: ${options.mode || "PASSIVE"}, Checkpointed: ${chk.checkpointedPages || 0}, Logged: ${chk.logPages || 0})`
+                        ? `ดำเนินการ Checkpoint WAL สำเร็จ (Mode: ${chk.mode || rawMode}, Checkpointed: ${chk.checkpointedPages || chk.result?.[0]?.checkpointed || 0}, Logged: ${chk.logPages || chk.result?.[0]?.log || 0})`
                         : `ดำเนินการ Checkpoint WAL ล้มเหลว: ${chk?.error || "Unknown error"}`
                 };
                 if (ok) {
@@ -618,14 +619,15 @@ async function executeSqliteAction(action, options = {}, invoker = "owner") {
             }
 
             case "vacuum": {
-                const vac = runIncrementalVacuum(db, options.pages || 500);
+                const safePages = Math.min(10000, Math.max(1, parseInt(options.pages, 10) || 500));
+                const vac = runIncrementalVacuum(db, safePages);
                 const ok = Boolean(vac && vac.ok);
                 result = {
                     ok,
                     action,
                     vacuum: vac,
                     message: ok
-                        ? `ดำเนินการ Incremental Vacuum สำเร็จ (คืนหน้าได้: ${vac.freedPages || 0} หน้า, ขนาดก่อน/หลัง: ${vac.preTotalMb} MB ➔ ${vac.postTotalMb} MB)`
+                        ? `ดำเนินการ Incremental Vacuum สำเร็จ (คืนหน้าได้: ${vac.pagesVacuumed || 0} หน้า, ขนาดก่อน/หลัง: ${vac.preTotalMb || 0} MB ➔ ${vac.postTotalMb || 0} MB)`
                         : `ดำเนินการ Incremental Vacuum ล้มเหลว: ${vac?.error || "Unknown error"}`
                 };
                 recordAudit(ok ? "success" : "failure", result, ok ? null : (vac?.error || "Vacuum failed"));
@@ -687,14 +689,30 @@ async function executeSqliteAction(action, options = {}, invoker = "owner") {
                 const fkOk = fkRows.length === 0;
                 const pragmasOk = String(journalMode).toLowerCase() === "wal" && foreignKeys === 1;
                 const readOk = Boolean(readRow && readRow.probe === 1);
-                const passed = integrityOk && fkOk && pragmasOk && readOk && storage.ok;
 
-                if (!passed && (!integrityOk || !fkOk)) {
-                    notifyIntegrityCorrupted(intRows, fkRows);
+                const hasErrors = !integrityOk || !fkOk || !pragmasOk || !readOk || !storage.ok || storage.filesystemCritical || quota.status === "hard";
+                const hasWarnings = !hasErrors && (storage.warnings.length > 0 || storage.filesystemWarning || storage.pathWarning || quota.status === "soft" || quota.status === "critical" || emergency.isEmergency);
+
+                let status = "ok";
+                let message = "";
+
+                if (hasErrors) {
+                    status = "error";
+                    message = "ตรวจพบข้อผิดพลาดร้ายแรงในการตรวจสอบความสมบูรณ์แบบละเอียด (Integrity/Pragmas/Storage Failure)";
+                    if (!integrityOk || !fkOk) {
+                        notifyIntegrityCorrupted(intRows, fkRows);
+                    }
+                } else if (hasWarnings) {
+                    status = "warning";
+                    message = `Diagnostic Check ผ่านการตรวจสอบหลัก แต่พบคำเตือน (WARNING): Storage/Quota เฝ้าระวัง (${quota.status}), พื้นที่ว่าง ${storage.freeSpace?.availableMb ?? "N/A"} MB`;
+                } else {
+                    status = "ok";
+                    message = `Diagnostic Check ผ่าน 100% (PASS): SQLite ทำงานปกติสมบูรณ์, Schema Version ${schemaVer}, พื้นที่ ${quota.footprint.totalMb} MB (${quota.status})`;
                 }
 
                 result = {
-                    ok: passed,
+                    ok: !hasErrors,
+                    status,
                     action,
                     schemaVersion: schemaVer,
                     integrityOk,
@@ -704,11 +722,9 @@ async function executeSqliteAction(action, options = {}, invoker = "owner") {
                     quota,
                     emergency,
                     storage,
-                    message: passed
-                        ? `Diagnostic Check (No Operational Data Mutation) ผ่าน 100%: SQLite ทำงานปกติ, Schema Version ${schemaVer}, พื้นที่ ${quota.footprint.totalMb} MB (${quota.status})`
-                        : "ตรวจพบข้อผิดพลาดหรือคำเตือนในการตรวจสอบความสมบูรณ์แบบละเอียด"
+                    message
                 };
-                recordAudit(passed ? "success" : "warning", result);
+                recordAudit(status === "ok" ? "success" : status === "warning" ? "warning" : "failure", result);
                 break;
             }
 

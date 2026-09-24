@@ -36,7 +36,7 @@ All 17 models are centralized in `database/mongo/models/`.
 
 All tables are defined in `database/sqlite/migrations/` and accessed via `database/repositories/`.
 
-### Core Operational Tables (`001_initial_core.sql`)
+### Core Operational Tables (`001_initial_core.sql` & `004_session_runtime_and_assets.sql`)
 | Table Name | Entity / Subsystem | Description | Indexes / Constraints |
 | :--- | :--- | :--- | :--- |
 | `schema_migrations` | System | Tracks executed migration versions and checksums. | `PRIMARY KEY (version)` |
@@ -46,23 +46,24 @@ All tables are defined in `database/sqlite/migrations/` and accessed via `databa
 | `quest_accounts` | Quests | Per-account run details within a quest execution. | Foreign key to `quest_logs(id)` ON DELETE CASCADE |
 | `quest_details` | Quests | Step-by-step progress tracking for quest accounts. | Foreign key to `quest_accounts(id)` ON DELETE CASCADE |
 | `scheduled_runners` | Quests | Cron/interval schedules for automated quest execution. | `UNIQUE (name)`, `idx_scheduled_runners_status` |
-| `dm_notifications` | Notification Queue | Queue worker for DM dispatch with atomic leasing. | `idx_dm_notifications_queue`, `UNIQUE (notification_key)` |
-| `verification_recovery`| Verification Temp | Multi-stage verification session recovery state. | `idx_verif_recovery_guild_user`, `UNIQUE (session_id)` |
-| `verification_state_nonce`| Ephemeral Auth | Short-lived nonces validating OAuth callback authenticity. | `idx_verif_state_nonce_expires`, `UNIQUE (hash)` |
+| `dm_notifications` | Notification Queue | Queue worker for DM dispatch with atomic leasing. | `idx_dm_notifications_queue`, `idx_dm_notifications_recipient`, `idx_dm_notifications_expires_at`, `UNIQUE (event_key)` |
+| `verification_recovery`| Verification Temp | Multi-stage verification session recovery state. | `idx_verification_recovery_status_updated`, `idx_verification_recovery_guild_user`, `UNIQUE (request_id)` |
+| `verification_state_nonce`| Ephemeral Auth | Short-lived nonces validating OAuth callback authenticity. | `idx_verification_nonce_expires`, `idx_verification_nonce_guild`, `UNIQUE (nonce_hash)` |
+| `voice_session_runtime`| Voice Runtime | Offloads 60s heartbeats and active runtime state from Atlas. | `PRIMARY KEY (session_id)`, `idx_voice_session_runtime_server_owner`, `idx_voice_session_runtime_heartbeat` |
 
 ### History & Telemetry Tables (`002_history_events.sql`)
 | Table Name | Entity / Subsystem | Description | Retention |
 | :--- | :--- | :--- | :--- |
-| `voice_events` | Voice Subsystem | Voice worker transitions, join/leave, AutoDeaf events. | 30 days (auto-cleaned) |
-| `command_events` | Slash Commands | Execution metrics and timing of slash interactions. | 30 days (auto-cleaned) |
-| `session_events` | Token Coordinator | Concurrency, backoff, and quarantine lifecycle events. | 30 days (auto-cleaned) |
-| `runtime_events` | System Lifecycle | Startup, shutdown, shard resumes, and health alerts. | 30 days (auto-cleaned) |
+| `voice_events` | Voice Subsystem | Voice worker transitions, join/leave, AutoDeaf events. | Dynamic: `SQLITE_HISTORY_RETENTION_DAYS` (default 30 days) |
+| `command_events` | Slash Commands | Execution metrics and timing of slash interactions. | Dynamic: `SQLITE_HISTORY_RETENTION_DAYS` (default 30 days) |
+| `session_events` | Token Coordinator | Concurrency, backoff, and quarantine lifecycle events. | Dynamic: `SQLITE_HISTORY_RETENTION_DAYS` (default 30 days) |
+| `runtime_events` | System Lifecycle | Startup, shutdown, shard resumes, and health alerts. | Dynamic: `SQLITE_HISTORY_RETENTION_DAYS` (default 30 days) |
 
-### Cache Subsystem Tables (`003_cache_subsystem.sql`)
-| Table Name | Namespace | Description | TTL / Max Rows |
+### Cache Subsystem Tables (`003_cache_subsystem.sql` & `004_session_runtime_and_assets.sql`)
+| Table Name | Namespace | Description | Retention / Quota Policy |
 | :--- | :--- | :--- | :--- |
-| `cache_entries` | Generic Cache | Fast key-value store with namespace isolation & priority. | Policy-based (1h - 24h) |
-| `asset_cache` | Assets & Files | Binary blobs and metadata for avatars and panel icons. | 7 days / Quota-bounded |
+| `cache_entries` | Generic Cache | Fast key-value store with namespace isolation & priority. | Policy-based (1h - 24h, maxRows bounded) |
+| `asset_cache` | Assets & Files | Filesystem metadata for binary assets stored in `SQLITE_ASSET_DIR`. | **Avatar**: 3 days<br>**Server Icon**: 14 days<br>**Default**: 7 days<br>**Max Directory Size**: 500 MB (LRU evicted when exceeding limit) |
 
 ---
 

@@ -85,15 +85,30 @@ async function executeEmergencyTrim(dbInstance = null, options = {}) {
         console.warn(`[EMERGENCY_TRIM] ⚠️ Asset cache trim warning: ${err.message}`);
     }
 
-    // Phase 2: Expired Cache & Nonces + Generic Cache LRU (Never touches valid core data)
+    // Phase 2: Expired Cache & Nonces + Generic Cache LRU (Only when quota remains critical/hard)
     try {
         noncesDeleted = cleanExpiredNonces(db, startTime, 10);
         dmsDeleted = cleanExpiredDmNotifications(db, startTime, 10);
         cacheDeleted = cleanExpiredCacheEntries(db, startTime, 10);
-        // Evict oldest 30% of generic cache entries across all namespaces if cache is substantial
-        const cacheMgr = getCacheManager(db);
-        lruCacheDeleted = cacheMgr.evictAllLru(0.3);
-        cacheDeleted += lruCacheDeleted;
+
+        // Check quota after expired items cleanup:
+        // Only evict generic LRU cache if database is still at CRITICAL or HARD quota,
+        // or if explicitly requested via options.forceLru / test reason
+        const midQuota = evaluateQuota(db.name);
+        const shouldEvictLru = options.forceLru === true || options.reason === "test_trim" ||
+            ((preQuota.status === "critical" || preQuota.status === "hard") && (midQuota.status === "critical" || midQuota.status === "hard"));
+
+        if (shouldEvictLru) {
+            const cacheMgr = getCacheManager(db);
+            // Evict in progressive increments: 20% batch first
+            lruCacheDeleted = cacheMgr.evictAllLru(0.2);
+            const afterLru1 = evaluateQuota(db.name);
+            // If still critical/hard after initial eviction, evict up to another 15%
+            if (options.reason === "test_trim" || afterLru1.status === "critical" || afterLru1.status === "hard") {
+                lruCacheDeleted += cacheMgr.evictAllLru(0.15);
+            }
+            cacheMgr.flushTouches();
+        }
     } catch (err) {
         console.warn(`[EMERGENCY_TRIM] ⚠️ Expired cache cleanup warning: ${err.message}`);
     }
@@ -137,7 +152,7 @@ async function executeEmergencyTrim(dbInstance = null, options = {}) {
         cacheEntries: cacheDeleted,
         cacheEntriesEvicted: lruCacheDeleted,
         expiredHistory: historyDeleted,
-        totalItems: assetExpiredCount + assetLruCount + noncesDeleted + dmsDeleted + cacheDeleted + historyDeleted
+        totalItems: assetExpiredCount + assetLruCount + noncesDeleted + dmsDeleted + cacheDeleted + lruCacheDeleted + historyDeleted
     };
 
     // Phase 5: Durably record emergency trim audit in maintenance_runs

@@ -329,7 +329,7 @@ registerShutdownHandlers({
     memoryMonitor,
     verificationRuntime: verificationLifecycle,
     dmService,
-    runtimeCleanups: [eventRuntime, routeRegistration, { stop: () => readyInitializationController?.stop() }, { stop: () => shutdownSystemHooks?.() }, { stop: () => shutdownRunners() }, { stop: () => require("../database/index").shutdown() }]
+    runtimeCleanups: [eventRuntime, routeRegistration, { stop: () => readyInitializationController?.stop() }, { stop: () => shutdownSystemHooks?.() }, { stop: () => shutdownRunners() }]
 });
 
 if (isFeatureEnabled("memoryMonitor")) {

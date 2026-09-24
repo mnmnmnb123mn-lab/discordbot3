@@ -63,10 +63,12 @@ function resolvePriority(event, isCritical = false) {
  * @param {number} dropTarget - Number of items to evict (default 500)
  * @returns {number} actual number of dropped items
  */
-function evictWithPriority(buffer, dropTarget = 500) {
+function evictWithPriority(buffer, dropTarget = 500, outStats = null) {
     if (!Array.isArray(buffer) || buffer.length === 0 || dropTarget <= 0) return 0;
 
     let dropped = 0;
+    let p2Dropped = 0;
+    let p1Dropped = 0;
 
     // Pass 1: Drop P2 items starting from the oldest (unspecified priority defaults to P2)
     for (let i = 0; i < buffer.length && dropped < dropTarget; ) {
@@ -74,6 +76,7 @@ function evictWithPriority(buffer, dropTarget = 500) {
         if (prio === "P2") {
             buffer.splice(i, 1);
             dropped++;
+            p2Dropped++;
         } else {
             i++;
         }
@@ -82,13 +85,20 @@ function evictWithPriority(buffer, dropTarget = 500) {
     // Pass 2: If we still need to drop more and buffer is still at capacity, drop P1 items starting from oldest
     if (dropped < dropTarget) {
         for (let i = 0; i < buffer.length && dropped < dropTarget; ) {
-            if (buffer[i].priority === "P1") {
+            if (buffer[i]?.priority === "P1") {
                 buffer.splice(i, 1);
                 dropped++;
+                p1Dropped++;
             } else {
                 i++;
             }
         }
+    }
+
+    if (outStats && typeof outStats === "object") {
+        outStats.p2 = p2Dropped;
+        outStats.p1 = p1Dropped;
+        outStats.total = dropped;
     }
 
     return dropped;
@@ -116,10 +126,13 @@ function sanitizeDetails(obj, depth = 0) {
     return clean;
 }
 
+const { notifyP1Dropped } = require("./telemetryAlert");
+
 module.exports = {
     resolvePriority,
     evictWithPriority,
     notifyBufferDropped,
+    notifyP1Dropped,
     sanitizeDetails,
     SENSITIVE_KEY_REGEX
 };

@@ -4,6 +4,11 @@ const fs = require("node:fs");
 const path = require("node:path");
 const Database = require("better-sqlite3");
 const { applyPragmas } = require("./pragmas");
+const {
+    acquireProcessLock,
+    releaseProcessLock,
+    isRestoreLockActive
+} = require("./maintenance/processLock");
 
 let activeDb = null;
 let currentDbPath = null;
@@ -25,6 +30,11 @@ function openDatabase(options = {}) {
     }
 
     const dbPath = resolveDbPath(options.path);
+    const restoreLock = isRestoreLockActive(dbPath);
+    if (restoreLock.active && restoreLock.pid !== process.pid) {
+        throw new Error(`[SQLITE] ❌ Database is currently locked for maintenance/restore by PID ${restoreLock.pid}`);
+    }
+
     const parentDir = path.dirname(dbPath);
 
     // Ensure parent directory exists and is writable
@@ -53,6 +63,7 @@ function openDatabase(options = {}) {
 
     activeDb = db;
     currentDbPath = dbPath;
+    acquireProcessLock(dbPath);
 
     return activeDb;
 }
@@ -77,6 +88,9 @@ function closeDatabase() {
                 console.warn(`[SQLITE] ⚠️ Error closing active database: ${err.message}`);
             }
         } finally {
+            if (currentDbPath) {
+                releaseProcessLock(currentDbPath);
+            }
             activeDb = null;
             currentDbPath = null;
         }

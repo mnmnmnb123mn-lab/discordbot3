@@ -355,6 +355,12 @@ async function connectDB() {
 
 async function disconnectDB() {
     try {
+        if (mongoose.connection.readyState !== 0) {
+            await flushPendingSessionDeletes();
+        }
+    } catch (_) {}
+
+    try {
         const db = require("../database");
         await db.shutdown();
     } catch (_) {}
@@ -364,13 +370,9 @@ async function disconnectDB() {
         return;
     }
     try {
-        await flushPendingSessionDeletes();
+        await mongoose.disconnect();
     } finally {
-        try {
-            await mongoose.disconnect();
-        } finally {
-            dbConnected = false;
-        }
+        dbConnected = false;
     }
 }
 
