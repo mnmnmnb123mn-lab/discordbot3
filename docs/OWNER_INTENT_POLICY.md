@@ -142,9 +142,9 @@ Public logs เจ้าของต้องการรายละเอี�
 
 ตามคำสั่งชัดเจนของเจ้าของระบบ (Owner Decision):
 - **Dashboard หลัก / Verification Detail / Export / Owner Event Logs / Private Webhooks**: ต้องแสดงค่าจริง (Raw) เต็มรูปแบบตาม OI-03 และ OI-04 โดยไม่ Mask หรือซ่อนข้อมูล
-- **Database Center (หน้า Inspect Table / Query Preview)**: เป็น Administrative Browser / Preview Tool บนหน้าจอ Dashboard ไม่ใช่ Operational Incident Log เพื่อป้องกันการหลุดเวลามีการแชร์หน้าจอ (Screen Share) หรือ Credential รั่วไหลโดยไม่ตั้งใจ จึงกำหนดให้ **Mask ข้อมูล Token, Secret, Password, และ Raw IP เป็น Default** ในหน้าตาราง Preview
-- หากเจ้าของต้องการดูค่า Raw ใน Database Center สามารถกด Reveal ทีละฟิลด์ หรือดูผ่าน Verification Detail ตาม Flow ปกติได้
-- การ Mask เป็นค่า Default ใน Database Center นี้ **ไม่ถือว่าละเมิด OI-04** เพราะเป็น UI สำหรับ Browse ข้อมูลทั่วไปในฐานข้อมูล ไม่ใช่ Owner Event Log
+- **Database Center (หน้า Inspect Table / Query Preview)**: เป็น Administrative Browser / Preview Tool บนหน้าจอ Dashboard ไม่ใช่ Operational Incident Log เพื่อป้องกันการหลุดเวลามีการแชร์หน้าจอ (Screen Share) หรือ Credential รั่วไหลโดยไม่ตั้งใจ จึงกำหนดให้ **Mask ข้อมูล Token, Secret, Password, และ Raw IP ทั้งหมด** ในหน้าตาราง Preview (Masked Preview Only)
+- หากเจ้าของต้องการดูข้อมูล Raw Sensitive Data (เช่น Token, Raw IP) ให้เข้าดูผ่าน **Verification Detail** หรือ **Dedicated Owner Detail Flow** ตาม Flow ปกติ โดยใน Database Center จะไม่มีการเปิด Raw Reveal Flow
+- การ Mask ข้อมูลใน Database Center นี้ **ไม่ถือว่าละเมิด OI-04** เพราะเป็น UI สำหรับ Browse ข้อมูลทั่วไปในฐานข้อมูล ไม่ใช่ Owner Event Log
 
 ---
 
