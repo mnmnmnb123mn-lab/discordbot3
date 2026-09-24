@@ -55,4 +55,22 @@ describe("Voice Worker Telemetry Integration", () => {
         assert.equal(recent[0].sessionId, sessionId);
         assert.equal(recent[0].detail, "Connecting to voice channel");
     });
+
+    test("restart simulation: history persists in SQLite across database close and re-open", () => {
+        const restartSessionId = `test_sess_restart_${Date.now()}`;
+        pushVoiceLog("TEST_VOICE_DISCONNECT", restartSessionId, "Disconnected safely");
+        const repo = database.repositories.voiceEvent;
+        repo.flush();
+
+        // Simulate process shutdown / DB restart
+        closeDatabase();
+        const reopenedDb = openDatabase({ path: TEST_DB_PATH });
+        assert.ok(reopenedDb.open);
+
+        // Verify row still exists in persistent SQLite
+        const rows = reopenedDb.prepare("SELECT * FROM voice_events WHERE session_id = ?").all(restartSessionId);
+        assert.equal(rows.length, 1);
+        assert.equal(rows[0].event_type, "TEST_VOICE_DISCONNECT");
+        assert.equal(rows[0].detail, "Disconnected safely");
+    });
 });

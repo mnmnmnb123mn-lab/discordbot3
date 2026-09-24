@@ -57,13 +57,18 @@ function getFilesystemFreeSpace(targetDir) {
         if (typeof fs.statfsSync === "function") {
             const stats = fs.statfsSync(targetDir);
             const freeBytes = stats.bavail * stats.bsize;
+            const totalBytes = stats.blocks * stats.bsize;
+            const percentFree = totalBytes > 0 ? parseFloat(((freeBytes / totalBytes) * 100).toFixed(1)) : null;
             return {
                 availableBytes: freeBytes,
-                availableMb: parseFloat((freeBytes / (1024 * 1024)).toFixed(2))
+                availableMb: parseFloat((freeBytes / (1024 * 1024)).toFixed(2)),
+                totalBytes,
+                totalMb: parseFloat((totalBytes / (1024 * 1024)).toFixed(2)),
+                percentFree
             };
         }
     } catch (_) {}
-    return { availableBytes: null, availableMb: null };
+    return { availableBytes: null, availableMb: null, totalBytes: null, totalMb: null, percentFree: null };
 }
 
 function evaluateQuota(dbPath) {

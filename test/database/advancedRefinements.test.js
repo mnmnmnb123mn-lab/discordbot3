@@ -150,9 +150,16 @@ describe("Advanced Refinements Suite (Migration 004, Runtime, Buffer, AssetCache
         assert.ok(schedulerDiag.diagnostics);
         assert.equal(typeof schedulerDiag.diagnostics.wal.runCount, "number");
 
-        // Start and stop scheduler
+        // Start and verify all 5 timers are active
         scheduler.startScheduler();
-        assert.equal(scheduler.getSchedulerDiagnostics().active, true);
+        const activeDiag = scheduler.getSchedulerDiagnostics();
+        assert.equal(activeDiag.active, true);
+        assert.equal(activeDiag.timers.wal, true, "WAL timer should be created");
+        assert.equal(activeDiag.timers.cleanup, true, "Cleanup timer should be created");
+        assert.equal(activeDiag.timers.vacuum, true, "Vacuum timer should be created");
+        assert.equal(activeDiag.timers.backup, true, "Auto-backup timer should be created");
+        assert.equal(activeDiag.timers.emergency, true, "Emergency timer should be created");
+
         scheduler.stopScheduler();
         assert.equal(scheduler.getSchedulerDiagnostics().active, false);
     });

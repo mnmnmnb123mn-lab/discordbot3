@@ -364,6 +364,13 @@ function stopScheduler() {
 function getSchedulerDiagnostics() {
     return {
         active: Boolean(walIntervalId || cleanupIntervalId || vacuumIntervalId || backupIntervalId || emergencyIntervalId),
+        timers: {
+            wal: Boolean(walIntervalId),
+            cleanup: Boolean(cleanupIntervalId),
+            vacuum: Boolean(vacuumIntervalId),
+            backup: Boolean(backupIntervalId),
+            emergency: Boolean(emergencyIntervalId)
+        },
         diagnostics
     };
 }
