@@ -2,6 +2,7 @@
 
 const { getDatabase } = require("../../connection");
 const { resolvePriority, evictWithPriority, notifyBufferDropped, notifyP1Dropped } = require("./bufferPolicy");
+const { spoolP0Event, drainP0Spool } = require("./p0Journal");
 const { sanitizeDetails } = require("./CommandEventRepository");
 const writePolicy = require("../../maintenance/writePolicy");
 
@@ -87,6 +88,8 @@ class SessionEventRepository {
                 this.isDegraded = true;
                 if (this.criticalRetryQueue.length < 100) {
                     this.criticalRetryQueue.push(item);
+                } else {
+                    spoolP0Event("session_events", item);
                 }
                 console.error(`[SESSION_EVENT_BUFFER] 🚨 CRITICAL P0 event insert failed (queued for retry): ${err.message}`);
             }
@@ -147,6 +150,10 @@ class SessionEventRepository {
                     break;
                 }
             }
+        } else {
+            try {
+                drainP0Spool(this.db, { session_events: this });
+            } catch (_) {}
         }
 
         if (this.buffer.length === 0) return 0;

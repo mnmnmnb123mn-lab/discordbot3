@@ -10,6 +10,8 @@ const { createBackup, listBackups } = require("../sqlite/maintenance/backup");
 const { runStartupCheck } = require("../sqlite/maintenance/startupCheck");
 const { evaluateStoragePaths } = require("../sqlite/maintenance/storageCheck");
 const { executeEmergencyTrim } = require("../sqlite/maintenance/emergencyTrim");
+const { TABLE_CATEGORIES, getCategoryForTable } = require("../sqlite/tableCategories");
+const { getAssetCacheManager } = require("../sqlite/cache/assetCacheManager");
 const { sendWebhookEvent } = require("../../discord/core/webhooks");
 const mongo = require("../mongo/index");
 
@@ -89,7 +91,7 @@ async function getDatabaseOverview() {
         sqliteStatusLabel = "🟡 ควรตรวจสอบ";
     }
 
-    // 2. Table counts & record totals
+    // 2. Table counts & record totals dynamically classified via central category map
     let totalRecords = 0;
     let coreCount = 0;
     let cacheCount = 0;
@@ -97,32 +99,19 @@ async function getDatabaseOverview() {
     let tempCount = 0;
 
     try {
-        const tableStats = db.prepare(`
-            SELECT 'quest_logs' AS tbl, COUNT(*) AS cnt FROM quest_logs
-            UNION ALL SELECT 'scheduled_runners', COUNT(*) FROM scheduled_runners
-            UNION ALL SELECT 'dm_notifications', COUNT(*) FROM dm_notifications
-            UNION ALL SELECT 'verification_recovery', COUNT(*) FROM verification_recovery
-            UNION ALL SELECT 'cache_entries', COUNT(*) FROM cache_entries
-            UNION ALL SELECT 'asset_cache', COUNT(*) FROM asset_cache
-            UNION ALL SELECT 'voice_events', COUNT(*) FROM voice_events
-            UNION ALL SELECT 'command_events', COUNT(*) FROM command_events
-            UNION ALL SELECT 'session_events', COUNT(*) FROM session_events
-            UNION ALL SELECT 'runtime_events', COUNT(*) FROM runtime_events
-            UNION ALL SELECT 'verification_state_nonce', COUNT(*) FROM verification_state_nonce
-            UNION ALL SELECT 'database_meta', COUNT(*) FROM database_meta
-        `).all();
-
-        for (const row of tableStats) {
-            totalRecords += row.cnt;
-            if (["quest_logs", "scheduled_runners", "dm_notifications", "verification_recovery"].includes(row.tbl)) {
-                coreCount += row.cnt;
-            } else if (["cache_entries", "asset_cache"].includes(row.tbl)) {
-                cacheCount += row.cnt;
-            } else if (["voice_events", "command_events", "session_events", "runtime_events"].includes(row.tbl)) {
-                historyCount += row.cnt;
-            } else {
-                tempCount += row.cnt;
-            }
+        const tables = db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'").all().map(t => t.name);
+        for (const tbl of tables) {
+            let cnt = 0;
+            try {
+                const r = db.prepare(`SELECT COUNT(*) AS c FROM "${tbl}"`).get();
+                cnt = r ? r.c : 0;
+            } catch (_) {}
+            totalRecords += cnt;
+            const category = getCategoryForTable(tbl);
+            if (category === "core") coreCount += cnt;
+            else if (category === "cache") cacheCount += cnt;
+            else if (category === "history") historyCount += cnt;
+            else tempCount += cnt;
         }
     } catch (_) {}
 
@@ -133,9 +122,45 @@ async function getDatabaseOverview() {
         for (const r of metaRows) metaMap[r.key] = r.value;
     } catch (_) {}
 
-    // 4. Backups list
+    // 4. Backups list & managed storage breakdown (DB, Backups, Assets, Free Disk, Total Managed)
     const backups = listBackups();
     const lastBackupInfo = backups.length > 0 ? backups[0] : null;
+
+    const allBackups = listBackups(null, { includePreMigration: true });
+    let backupBytes = allBackups.reduce((sum, b) => sum + (b.sizeBytes || 0), 0);
+    try {
+        const dbDir = path.dirname(dbPath);
+        if (fs.existsSync(dbDir)) {
+            const baks = fs.readdirSync(dbDir).filter(f => f.endsWith(".bak"));
+            for (const f of baks) {
+                const stat = fs.statSync(path.join(dbDir, f));
+                backupBytes += stat.size;
+            }
+        }
+    } catch (_) {}
+
+    let assetBytes = 0;
+    try {
+        const assetMgr = getAssetCacheManager(db);
+        const assetStats = assetMgr.getCacheStats();
+        assetBytes = assetStats.totalSizeBytes || 0;
+    } catch (_) {}
+
+    const dbBytes = quota.footprint.totalBytes || 0;
+    const totalManagedBytes = dbBytes + backupBytes + assetBytes;
+
+    const managedStorage = {
+        databaseBytes: dbBytes,
+        databaseMb: parseFloat((dbBytes / (1024 * 1024)).toFixed(2)),
+        backupBytes,
+        backupMb: parseFloat((backupBytes / (1024 * 1024)).toFixed(2)),
+        assetBytes,
+        assetMb: parseFloat((assetBytes / (1024 * 1024)).toFixed(2)),
+        totalManagedBytes,
+        totalManagedMb: parseFloat((totalManagedBytes / (1024 * 1024)).toFixed(2)),
+        freeDiskBytes: storage.freeSpace?.availableBytes ?? null,
+        freeDiskMb: storage.freeSpace?.availableMb ?? null
+    };
 
     // 5. MongoDB Overview
     const mongoStatus = mongo.getMongoStatus();
@@ -172,11 +197,15 @@ async function getDatabaseOverview() {
                     isPersistent: storage.isPersistent,
                     configuredPersistentPath: storage.configuredPersistentPath,
                     persistentMountVerified: storage.persistentMountVerified,
+                    allowInSource: storage.allowInSource,
                     persistentLabel: storage.persistentMountVerified
                         ? "✅ Owner-Confirmed External Volume"
                         : storage.configuredPersistentPath
                             ? "🟡 Persistent Path Configured (Mount Unverified)"
-                            : "❌ Ephemeral / In-Source"
+                            : storage.allowInSource
+                                ? "ℹ️ Owner-Permitted In-Source Storage"
+                                : "❌ Ephemeral / In-Source",
+                    managedStorage
                 },
                 records: {
                     total: totalRecords,
@@ -274,7 +303,9 @@ async function getSqliteDetailedStatus() {
         scheduled_runners: buildTableMeta("scheduled_runners", "ตัวตั้งเวลา Auto Daily"),
         dm_notifications: buildTableMeta("dm_notifications", "คิวแจ้งเตือน DM"),
         verification_recovery: buildTableMeta("verification_recovery", "จุดกู้คืนสถานะยืนยันตัวตน"),
-        voice_session_runtime: buildTableMeta("voice_session_runtime", "สถานะ Voice Session Runtime")
+        voice_session_runtime: buildTableMeta("voice_session_runtime", "สถานะ Voice Session Runtime"),
+        schema_migrations: buildTableMeta("schema_migrations", "ประวัติการ Migration โครงสร้าง"),
+        maintenance_runs: buildTableMeta("maintenance_runs", "บันทึกการบำรุงรักษาระบบ")
     };
     const coreAgg = sumCategory(coreTables);
 
@@ -361,6 +392,42 @@ async function getSqliteDetailedStatus() {
 
     // Backups
     const backups = listBackups();
+    // Managed storage breakdown
+    const allBackups = listBackups(null, { includePreMigration: true });
+    let backupBytes = allBackups.reduce((sum, b) => sum + (b.sizeBytes || 0), 0);
+    try {
+        const dbDir = path.dirname(dbPath);
+        if (fs.existsSync(dbDir)) {
+            const baks = fs.readdirSync(dbDir).filter(f => f.endsWith(".bak"));
+            for (const f of baks) {
+                const stat = fs.statSync(path.join(dbDir, f));
+                backupBytes += stat.size;
+            }
+        }
+    } catch (_) {}
+
+    let assetBytes = 0;
+    try {
+        const assetMgr = getAssetCacheManager(db);
+        const assetStats = assetMgr.getCacheStats();
+        assetBytes = assetStats.totalSizeBytes || 0;
+    } catch (_) {}
+
+    const dbBytes = quota.footprint.totalBytes || 0;
+    const totalManagedBytes = dbBytes + backupBytes + assetBytes;
+
+    const managedStorage = {
+        databaseBytes: dbBytes,
+        databaseMb: parseFloat((dbBytes / (1024 * 1024)).toFixed(2)),
+        backupBytes,
+        backupMb: parseFloat((backupBytes / (1024 * 1024)).toFixed(2)),
+        assetBytes,
+        assetMb: parseFloat((assetBytes / (1024 * 1024)).toFixed(2)),
+        totalManagedBytes,
+        totalManagedMb: parseFloat((totalManagedBytes / (1024 * 1024)).toFixed(2)),
+        freeDiskBytes: storageCheck.freeSpace?.availableBytes ?? null,
+        freeDiskMb: storageCheck.freeSpace?.availableMb ?? null
+    };
 
     return {
         path: dbPath,
@@ -384,11 +451,15 @@ async function getSqliteDetailedStatus() {
             configuredPersistentPath: storageCheck.configuredPersistentPath,
             persistentMountVerified: storageCheck.persistentMountVerified,
             pathWarning: storageCheck.pathWarning,
+            allowInSource: storageCheck.allowInSource,
             persistentLabel: storageCheck.persistentMountVerified
                 ? "✅ Owner-Confirmed External Volume"
                 : storageCheck.configuredPersistentPath
                     ? "🟡 Persistent Path Configured (Mount Unverified)"
-                    : "❌ Ephemeral / In-Source"
+                    : storageCheck.allowInSource
+                        ? "ℹ️ Owner-Permitted In-Source Storage"
+                        : "❌ Ephemeral / In-Source",
+            managedStorage
         },
         categories,
         maintenanceHistory,

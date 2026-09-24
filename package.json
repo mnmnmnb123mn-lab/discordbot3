@@ -60,7 +60,7 @@
     "mongoose": "^9.8.0"
   },
   "devDependencies": {
-    "@sonar/scan": "5.0.0",
+    "@sonar/scan": "^5.0.1",
     "acorn": "8.17.0",
     "expect": "^30.4.1",
     "jest-mock": "^30.4.1"

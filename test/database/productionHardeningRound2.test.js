@@ -105,7 +105,23 @@ describe("Production Hardening Round 2 Audit Fixes Suite", () => {
                     });
                 }, /Active bot process detected holding SQLite lock/);
 
-                // Attempt restore with force: true -> MUST succeed
+                // Attempt restore with force: true -> MUST ALSO reject while live process holds lock
+                await assert.rejects(async () => {
+                    await restoreDatabase({
+                        sourceBackup: backupPath,
+                        targetDb: targetPath,
+                        force: true
+                    });
+                }, /--force does not allow bypassing an active running bot process/);
+            } finally {
+                try { child.kill("SIGKILL"); } catch (_) {}
+                try { fs.unlinkSync(lockFile); } catch (_) {}
+            }
+
+            // After live process is terminated, restore with force: true succeeds (and overrides stale locks)
+            const restoreLockFile = `${targetPath}.restore.lock`;
+            fs.writeFileSync(restoreLockFile, JSON.stringify({ pid: 999999, createdAt: Date.now() }));
+            try {
                 const res = await restoreDatabase({
                     sourceBackup: backupPath,
                     targetDb: targetPath,
@@ -113,8 +129,7 @@ describe("Production Hardening Round 2 Audit Fixes Suite", () => {
                 });
                 assert.equal(res.ok, true);
             } finally {
-                try { child.kill("SIGKILL"); } catch (_) {}
-                try { fs.unlinkSync(lockFile); } catch (_) {}
+                try { fs.unlinkSync(restoreLockFile); } catch (_) {}
             }
         });
 

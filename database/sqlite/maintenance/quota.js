@@ -164,7 +164,8 @@ function evaluateEmergencyThresholds(dbPath, metrics = {}) {
         severity: (isStorageEmergency || isBufferEmergency) ? (quota.status === "hard" ? "CRITICAL" : "ERROR") : "OK",
         quota,
         walMb,
-        bufferCount
+        bufferCount,
+        bufferThreshold: 2000
     };
 }
 

@@ -192,6 +192,32 @@ function buildDatabaseCenterPage() {
                     <div style="font-weight:700;margin-top:2px;color:var(--green2);" id="sql-fs-free">-- MB</div>
                 </div>
             </div>
+
+            <div style="margin-top:16px;border-top:1px solid var(--border);padding-top:14px;">
+                <div style="font-size:0.85em;font-weight:700;margin-bottom:8px;color:var(--text1);">📦 พื้นที่จัดเก็บรวมที่จัดการ (Managed Storage Breakdown)</div>
+                <div style="display:grid;grid-template-columns:repeat(auto-fit, minmax(140px, 1fr));gap:8px;">
+                    <div style="background:var(--bg-box);padding:8px 12px;border-radius:6px;">
+                        <div style="font-size:0.75em;color:var(--text3);">ฐานข้อมูล SQLite</div>
+                        <div style="font-weight:700;margin-top:2px;" id="sql-managed-db">-- MB</div>
+                    </div>
+                    <div style="background:var(--bg-box);padding:8px 12px;border-radius:6px;">
+                        <div style="font-size:0.75em;color:var(--text3);">ไฟล์สำรอง (Backups)</div>
+                        <div style="font-weight:700;margin-top:2px;" id="sql-managed-backup">-- MB</div>
+                    </div>
+                    <div style="background:var(--bg-box);padding:8px 12px;border-radius:6px;">
+                        <div style="font-size:0.75em;color:var(--text3);">แคชรูปภาพ (Assets)</div>
+                        <div style="font-weight:700;margin-top:2px;" id="sql-managed-asset">-- MB</div>
+                    </div>
+                    <div style="background:var(--bg-box);padding:8px 12px;border-radius:6px;">
+                        <div style="font-size:0.75em;color:var(--text3);">รวมที่ใช้ (Total Managed)</div>
+                        <div style="font-weight:700;margin-top:2px;color:var(--accent3);" id="sql-managed-total">-- MB</div>
+                    </div>
+                    <div style="background:var(--bg-box);padding:8px 12px;border-radius:6px;">
+                        <div style="font-size:0.75em;color:var(--text3);">ดิสก์ว่าง (Free Disk)</div>
+                        <div style="font-weight:700;margin-top:2px;color:var(--green2);" id="sql-managed-free">-- MB</div>
+                    </div>
+                </div>
+            </div>
         </div>
 
         <!-- Categories & Table Inventory -->
@@ -441,6 +467,9 @@ async function loadDbOverview() {
             } else if (sq.storage && sq.storage.configuredPersistentPath) {
                 persistEl.textContent = 'Persistent Storage: 🟡 Path Configured (Mount Unverified)';
                 persistEl.style.color = 'var(--yellow)';
+            } else if (sq.storage && sq.storage.allowInSource) {
+                persistEl.textContent = 'Persistent Storage: ℹ️ Owner-Permitted In-Source Storage';
+                persistEl.style.color = 'var(--text2)';
             } else {
                 persistEl.textContent = 'Persistent Storage: ❌ Ephemeral / In-Source';
                 persistEl.style.color = 'var(--orange)';
@@ -482,6 +511,10 @@ async function loadSqliteDetails() {
                 persistBadge.textContent = 'Storage: 🟡 Path Configured (Unverified Mount)';
                 persistBadge.style.color = 'var(--yellow)';
                 persistBadge.style.borderColor = 'var(--yellow)';
+            } else if (st.allowInSource) {
+                persistBadge.textContent = 'Storage: ℹ️ Owner-Permitted In-Source Storage';
+                persistBadge.style.color = 'var(--text2)';
+                persistBadge.style.borderColor = 'var(--text2)';
             } else {
                 persistBadge.textContent = 'Storage: ❌ Ephemeral / In-Source';
                 persistBadge.style.color = 'var(--orange)';
@@ -496,6 +529,20 @@ async function loadSqliteDetails() {
         document.getElementById('sql-file-wal').textContent = (st.walBytes / (1024*1024)).toFixed(2) + ' MB';
         document.getElementById('sql-file-shm').textContent = (st.shmBytes / (1024*1024)).toFixed(2) + ' MB';
         document.getElementById('sql-fs-free').textContent = st.filesystem.availableMb !== null ? st.filesystem.availableMb.toLocaleString() + ' MB' : 'ไม่ระบุ';
+
+        // Managed Storage Breakdown
+        if (st.managedStorage) {
+            const ms = st.managedStorage;
+            const setVal = (id, val) => {
+                const el = document.getElementById(id);
+                if (el) el.textContent = (val !== null && val !== undefined) ? val + ' MB' : '-';
+            };
+            setVal('sql-managed-db', ms.databaseMb);
+            setVal('sql-managed-backup', ms.backupMb);
+            setVal('sql-managed-asset', ms.assetMb);
+            setVal('sql-managed-total', ms.totalManagedMb);
+            setVal('sql-managed-free', ms.freeDiskMb);
+        }
 
         // Categories Table
         const tbody = document.getElementById('sql-categories-body');

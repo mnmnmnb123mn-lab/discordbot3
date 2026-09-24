@@ -30,6 +30,7 @@ let lastQuickIntegrityCheckAt = 0;
 const QUICK_INTEGRITY_INTERVAL_MS = 20 * 60 * 1000; // 20 minutes
 
 let schedulerStartedAt = null;
+let nextScheduledBackupAt = null;
 let configuredIntervalsMs = {
     wal: 60 * 60 * 1000,
     cleanup: 360 * 60 * 1000,
@@ -462,20 +463,46 @@ function startScheduler() {
     if (vacuumIntervalId.unref) vacuumIntervalId.unref();
 
     if (autoBackupEnabled) {
-        backupIntervalId = setInterval(runAutoBackup, backupHours * 60 * 60 * 1000);
-        if (backupIntervalId.unref) backupIntervalId.unref();
+        const intervalMs = backupHours * 60 * 60 * 1000;
+        const backups = listBackups();
+        const now = Date.now();
+        const shouldRunInitialBackup = process.env.SQLITE_AUTO_BACKUP_INITIAL === "true" || backups.length === 0;
 
-        const shouldRunInitialBackup = process.env.SQLITE_AUTO_BACKUP_INITIAL === "true" || listBackups().length === 0;
+        let delayUntilFirstBackup = intervalMs;
         if (shouldRunInitialBackup) {
-            console.log("[DB_SCHEDULER] 💾 Scheduling initial automated backup (no backups exist or SQLITE_AUTO_BACKUP_INITIAL is true)...");
-            initialBackupTimeoutId = setTimeout(() => {
-                initialBackupTimeoutId = null;
-                runAutoBackup().catch(err => {
-                    console.error(`[DB_SCHEDULER] ⚠️ Initial backup failed: ${err.message}`);
-                });
-            }, 5000);
-            if (initialBackupTimeoutId.unref) initialBackupTimeoutId.unref();
+            delayUntilFirstBackup = 5000;
+        } else if (backups.length > 0) {
+            const lastBackupTime = backups[0].mtime || now;
+            const elapsed = now - lastBackupTime;
+            if (elapsed >= intervalMs) {
+                // Past interval, run promptly
+                delayUntilFirstBackup = 5000;
+            } else {
+                // Schedule for the remaining time
+                delayUntilFirstBackup = Math.max(5000, intervalMs - elapsed);
+            }
         }
+
+        nextScheduledBackupAt = now + delayUntilFirstBackup;
+        console.log(`[DB_SCHEDULER] 💾 Next auto-backup scheduled in ${Math.round(delayUntilFirstBackup / 1000)}s (${(delayUntilFirstBackup / (60 * 60 * 1000)).toFixed(1)}h)`);
+
+        initialBackupTimeoutId = setTimeout(async () => {
+            initialBackupTimeoutId = null;
+            try {
+                await runAutoBackup();
+            } catch (err) {
+                console.error(`[DB_SCHEDULER] ⚠️ Initial scheduled backup failed: ${err.message}`);
+            }
+            nextScheduledBackupAt = Date.now() + intervalMs;
+            backupIntervalId = setInterval(() => {
+                nextScheduledBackupAt = Date.now() + intervalMs;
+                runAutoBackup().catch(err => {
+                    console.error(`[DB_SCHEDULER] ⚠️ Auto-backup failed: ${err.message}`);
+                });
+            }, intervalMs);
+            if (backupIntervalId.unref) backupIntervalId.unref();
+        }, delayUntilFirstBackup);
+        if (initialBackupTimeoutId.unref) initialBackupTimeoutId.unref();
     }
 
     emergencyIntervalId = setInterval(runEmergencyEvaluation, 2 * 60 * 1000);
@@ -489,6 +516,7 @@ function stopScheduler() {
         clearTimeout(initialBackupTimeoutId);
         initialBackupTimeoutId = null;
     }
+    nextScheduledBackupAt = null;
     if (walIntervalId) {
         clearInterval(walIntervalId);
         walIntervalId = null;
@@ -578,7 +606,7 @@ function getSchedulerDiagnostics() {
         },
         backup: {
             ...diagnostics.backup,
-            nextRunAt: calcNext("backup", configuredIntervalsMs.backup, Boolean(backupIntervalId)),
+            nextRunAt: nextScheduledBackupAt || calcNext("backup", configuredIntervalsMs.backup, Boolean(backupIntervalId)),
             intervalHours: Math.round(configuredIntervalsMs.backup / 3600000)
         },
         emergency: {
@@ -595,7 +623,7 @@ function getSchedulerDiagnostics() {
             wal: Boolean(walIntervalId),
             cleanup: Boolean(cleanupIntervalId),
             vacuum: Boolean(vacuumIntervalId),
-            backup: Boolean(backupIntervalId),
+            backup: Boolean(backupIntervalId || initialBackupTimeoutId),
             emergency: Boolean(emergencyIntervalId),
             initialBackupScheduled: Boolean(initialBackupTimeoutId)
         },

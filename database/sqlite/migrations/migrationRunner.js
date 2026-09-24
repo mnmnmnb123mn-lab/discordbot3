@@ -3,6 +3,7 @@
 const fs = require("node:fs");
 const path = require("node:path");
 const crypto = require("node:crypto");
+const { getFilesystemFreeSpace, getDatabaseFootprint } = require("../maintenance/quota");
 
 const APP_VERSION = (() => {
     try {
@@ -81,10 +82,10 @@ function resolvePreMigrationRetention(customRetention = null) {
         return parseInt(customRetention, 10);
     }
     const envVal = parseInt(process.env.SQLITE_PRE_MIGRATION_BACKUP_RETENTION, 10);
-    return (!isNaN(envVal) && envVal > 0) ? envVal : 3;
+    return (!isNaN(envVal) && envVal > 0) ? envVal : 1;
 }
 
-function rotatePreMigrationBackups(backupDir, maxToKeep = 3) {
+function rotatePreMigrationBackups(backupDir, maxToKeep = 1) {
     if (!fs.existsSync(backupDir)) return;
     try {
         const files = fs.readdirSync(backupDir)
@@ -107,6 +108,22 @@ function rotatePreMigrationBackups(backupDir, maxToKeep = 3) {
     }
 }
 
+function reconcileUserVersion(db) {
+    if (!db) return 0;
+    try {
+        const row = db.prepare("SELECT MAX(version) as max_version FROM schema_migrations").get();
+        const maxVersion = row && row.max_version ? Number(row.max_version) : 0;
+        const currentPragma = Number(db.pragma("user_version", { simple: true }) || 0);
+        if (maxVersion > currentPragma) {
+            db.pragma(`user_version = ${maxVersion}`);
+            console.log(`[MIGRATION] 🔄 Reconciled PRAGMA user_version: ${currentPragma} -> ${maxVersion}`);
+        }
+        return Math.max(maxVersion, currentPragma);
+    } catch (_) {
+        return 0;
+    }
+}
+
 function createPreMigrationBackup(db, migrationItem, options = {}) {
     const isMemory = !db.name || db.name === ":memory:";
     if (isMemory && !options.backupDir) {
@@ -116,6 +133,22 @@ function createPreMigrationBackup(db, migrationItem, options = {}) {
     const backupDir = resolveBackupDir(options.backupDir);
     if (!fs.existsSync(backupDir)) {
         fs.mkdirSync(backupDir, { recursive: true });
+    }
+
+    const maxRetention = resolvePreMigrationRetention(options.preMigrationRetention);
+    // Rotate older pre-migration copies first to free space before writing
+    rotatePreMigrationBackups(backupDir, Math.max(0, maxRetention - 1));
+
+    // Space check: ensure sufficient filesystem free space
+    if (db.name && db.name !== ":memory:" && fs.existsSync(db.name)) {
+        const footprint = getDatabaseFootprint(db.name);
+        const requiredBytes = Math.max(footprint.totalBytes * 1.2, 20 * 1024 * 1024);
+        const freeSpace = getFilesystemFreeSpace(backupDir);
+        if (freeSpace.availableBytes !== null && freeSpace.availableBytes < requiredBytes) {
+            const neededMb = (requiredBytes / (1024 * 1024)).toFixed(1);
+            const availMb = freeSpace.availableMb;
+            throw new Error(`[MIGRATION] พื้นที่ดิสก์ไม่เพียงพอสำหรับการสำรองข้อมูล Pre-migration (ต้องการอย่างน้อย ${neededMb} MB, มีอยู่ ${availMb} MB)`);
+        }
     }
 
     const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
@@ -131,8 +164,7 @@ function createPreMigrationBackup(db, migrationItem, options = {}) {
         throw new Error(`[MIGRATION] Pre-migration safety backup failed before applying destructive migration ${migrationItem.migrationId}: ${err.message}`);
     }
 
-    // Apply pre-migration backup retention rotation (default: 3 sets)
-    const maxRetention = resolvePreMigrationRetention(options.preMigrationRetention);
+    // Apply pre-migration backup retention rotation (default: 1 set)
     rotatePreMigrationBackups(backupDir, maxRetention);
 
     return {
@@ -150,6 +182,7 @@ function runMigrations(db, options = {}) {
 
     const migrationsDir = options.migrationsDir || __dirname;
     ensureMigrationTable(db);
+    reconcileUserVersion(db);
 
     const appliedMap = getAppliedMigrations(db);
     const migrationFiles = loadMigrationFiles(migrationsDir);
@@ -203,6 +236,8 @@ function runMigrations(db, options = {}) {
         results.currentVersion = item.version;
     }
 
+    reconcileUserVersion(db);
+    results.currentVersion = db.pragma("user_version", { simple: true });
     return results;
 }
 
@@ -223,5 +258,6 @@ module.exports = {
     isDestructiveMigration,
     createPreMigrationBackup,
     rotatePreMigrationBackups,
-    resolvePreMigrationRetention
+    resolvePreMigrationRetention,
+    reconcileUserVersion
 };

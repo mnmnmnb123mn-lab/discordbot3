@@ -2,6 +2,7 @@
 
 const { getDatabase } = require("../../connection");
 const { resolvePriority, evictWithPriority, notifyBufferDropped, notifyP1Dropped, sanitizeDetails } = require("./bufferPolicy");
+const { spoolP0Event, drainP0Spool } = require("./p0Journal");
 const writePolicy = require("../../maintenance/writePolicy");
 
 class VoiceEventRepository {
@@ -87,6 +88,8 @@ class VoiceEventRepository {
                 this.isDegraded = true;
                 if (this.criticalRetryQueue.length < 100) {
                     this.criticalRetryQueue.push(item);
+                } else {
+                    spoolP0Event("voice_events", item);
                 }
                 console.error(`[VOICE_EVENT_BUFFER] 🚨 CRITICAL P0 event insert failed (queued for retry): ${err.message}`);
             }
@@ -151,6 +154,11 @@ class VoiceEventRepository {
                     break;
                 }
             }
+        } else {
+            try {
+                const db = this.getDb();
+                drainP0Spool(db, { voice_events: this });
+            } catch (_) {}
         }
 
         if (this.buffer.length === 0) return 0;

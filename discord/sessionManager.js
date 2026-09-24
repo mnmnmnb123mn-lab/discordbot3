@@ -617,6 +617,26 @@ async function loadDatabase() {
 
         const deleted = cleanup?.deletedCount ? `, cleaned=${cleanup.deletedCount}` : "";
         console.log(`[DATABASE] 📂 Loaded ${sessions.size} active/recoverable sessions from MongoDB${deleted}.`);
+
+        // Startup reconciliation: purge orphan SQLite voice runtimes that have no active MongoDB counterpart
+        try {
+            const voiceRepo = getVoiceRuntimeRepository();
+            if (voiceRepo && typeof voiceRepo.listActiveSessionRuntimes === "function") {
+                const activeRuntimes = voiceRepo.listActiveSessionRuntimes() || [];
+                let orphanPurged = 0;
+                for (const rt of activeRuntimes) {
+                    if (rt && rt.session_id && !sessions.has(rt.session_id)) {
+                        voiceRepo.deleteSessionRuntime(rt.session_id);
+                        orphanPurged++;
+                    }
+                }
+                if (orphanPurged > 0) {
+                    console.log(`[SESSION] 🧹 Reconciled SQLite voice runtimes: purged ${orphanPurged} orphan record(s).`);
+                }
+            }
+        } catch (reconcileErr) {
+            console.warn(`[SESSION] ⚠️ SQLite voice runtime reconciliation warning: ${reconcileErr.message}`);
+        }
     } catch (err) {
         console.error(`[DATABASE] ❌ Failed to load sessions: ${err.message}`);
         throw err;
@@ -1015,7 +1035,13 @@ async function flushPendingSessionDeletes(deps = {}) {
     const entries = [...pendingDeletes];
     try {
         await sessionModel.deleteMany(buildPendingSessionDeleteFilter(entries));
-        for (const [sessionId] of entries) pendingDeletes.delete(sessionId);
+        const voiceRepo = deps.voiceRuntimeRepo || getVoiceRuntimeRepository();
+        for (const [sessionId] of entries) {
+            pendingDeletes.delete(sessionId);
+            if (voiceRepo && typeof voiceRepo.deleteSessionRuntime === "function") {
+                try { voiceRepo.deleteSessionRuntime(sessionId); } catch (_) {}
+            }
+        }
         console.log(`[DATABASE] 🧹 Flushed ${entries.length} pending session delete(s).`);
     } catch (err) {
         console.error(`[DATABASE] ❌ Failed to flush pending session deletes: ${sanitizeLifecycleError(err.message)}`);
@@ -1115,6 +1141,10 @@ async function deleteSession(sessionId, options = {}) {
     if (!dbConnected) {
         console.warn(`[DATABASE] ⚠️ Queued session ${sessionId} delete until database reconnects`);
         queuePendingSessionDelete(sessionId, session.lifecycleGeneration);
+        try {
+            const repo = getVoiceRuntimeRepository();
+            if (repo) repo.deleteSessionRuntime(sessionId);
+        } catch (_) {}
         cleanupSessionMemory(sessionId, session);
         systemMetrics.increment("errors");
         console.log(`[SESSION] 🗑️ Session removed from memory: ${sessionId}`);
@@ -1134,6 +1164,10 @@ async function deleteSession(sessionId, options = {}) {
     } catch (err) {
         console.error(`[DATABASE] ❌ Failed to delete session ${sessionId}; queued retry: ${sanitizeLifecycleError(err.message)}`);
         queuePendingSessionDelete(sessionId, session.lifecycleGeneration);
+        try {
+            const repo = getVoiceRuntimeRepository();
+            if (repo) repo.deleteSessionRuntime(sessionId);
+        } catch (_) {}
         cleanupSessionMemory(sessionId, session);
         systemMetrics.increment("errors");
         console.log(`[SESSION] 🗑️ Session removed from memory: ${sessionId}`);

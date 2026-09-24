@@ -33,7 +33,7 @@ function parseArgs() {
     return { sourceBackup, targetDb, force };
 }
 
-function prunePreRestoreBackups(targetPath, maxKeep = 2) {
+function prunePreRestoreBackups(targetPath, maxKeep = 1) {
     try {
         const targetDir = path.dirname(targetPath);
         const baseName = path.basename(targetPath);
@@ -101,26 +101,26 @@ async function restoreDatabase({ sourceBackup, targetDb, force = false }) {
         }
     }
 
-    // Safety Gate: Refuse restore if Bot process is actively running, unless --force is given
+    // Safety Gate: Refuse restore if Bot process is actively running. --force CANNOT bypass active live process!
     const activeLock = isProcessLockActive(targetPath);
     if (activeLock.active && activeLock.pid !== process.pid) {
-        if (!force) {
-            throw new Error(
-                `Active bot process detected holding SQLite lock (PID: ${activeLock.pid}). ` +
-                `Refusing to restore while database is actively running in another process. ` +
-                `Stop the bot process before restoring, or specify --force if you are certain.`
-            );
-        } else {
-            console.warn(`[RESTORE-SQLITE] ⚠️ FORCE flag active: proceeding with restore despite active process lock (PID: ${activeLock.pid}).`);
-        }
+        throw new Error(
+            `[FATAL] Active bot process detected holding SQLite lock (PID: ${activeLock.pid}). ` +
+            `Refusing to restore while database is actively running in another process. ` +
+            `You MUST stop the bot process first before restoring (kill -TERM ${activeLock.pid} or stop the bot). ` +
+            `--force does not allow bypassing an active running bot process.`
+        );
     }
 
     const rLock = acquireRestoreLock(targetPath);
-    if (!rLock.acquired && !force) {
-        throw new Error(
-            `Another restore process is currently running on target database (PID: ${rLock.pid}). ` +
-            `Refusing concurrent restore. Specify --force if you are certain.`
-        );
+    if (!rLock.acquired) {
+        if (!force) {
+            throw new Error(
+                `Another restore process lock is currently held on target database (PID: ${rLock.pid}). ` +
+                `Refusing concurrent restore. If this is a stale lock from a crashed process, specify --force to override.`
+            );
+        }
+        console.warn(`[RESTORE-SQLITE] ⚠️ FORCE flag active: overriding previous restore lock (PID: ${rLock.pid}).`);
     }
     try {
         // Step 2: Ensure connection is closed and backup existing target
@@ -134,10 +134,21 @@ async function restoreDatabase({ sourceBackup, targetDb, force = false }) {
 
         let rollbackBakPath = null;
         if (fs.existsSync(targetPath)) {
+            prunePreRestoreBackups(targetPath, 0);
+            const targetStat = fs.statSync(targetPath);
+            const { getFilesystemFreeSpace } = require("../../database/sqlite/maintenance/quota");
+            const freeSpace = getFilesystemFreeSpace(targetDir);
+            const requiredBytes = Math.max(targetStat.size * 1.2, 20 * 1024 * 1024);
+            if (freeSpace.availableBytes !== null && freeSpace.availableBytes < requiredBytes) {
+                const neededMb = (requiredBytes / (1024 * 1024)).toFixed(1);
+                const availMb = freeSpace.availableMb;
+                throw new Error(`[RESTORE-SQLITE] พื้นที่ดิสก์ไม่เพียงพอสำหรับ Pre-restore safety backup (ต้องการอย่างน้อย ${neededMb} MB, มีอยู่ ${availMb} MB)`);
+            }
+
             rollbackBakPath = `${targetPath}.pre-restore-${Date.now()}.bak`;
             fs.copyFileSync(targetPath, rollbackBakPath);
             console.log(`[RESTORE-SQLITE]     Pre-restore safety backup created: ${rollbackBakPath}`);
-            prunePreRestoreBackups(targetPath, 2);
+            prunePreRestoreBackups(targetPath, 1);
 
             // Clean stale WAL and SHM files to prevent WAL corruption
             const walPath = `${targetPath}-wal`;

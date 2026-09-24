@@ -483,11 +483,11 @@ async function handleCommandCooldownAndInFlight({
 
     if (remaining > 0) {
         await respondCooldownExceeded(interaction, cmdName, remaining);
-        return { allowed: false };
+        return { allowed: false, reason: "rate_limited", extra: { remainingMs: remaining } };
     }
     if (commandInFlight.has(commandKey)) {
         await respondCommandInFlight(interaction, cmdName, isChannelScoped);
-        return { allowed: false };
+        return { allowed: false, reason: "in_flight", extra: { inFlight: true } };
     }
     commandInFlight.add(commandKey);
     const commandCooldownContext = { userCmds, cooldownKey, recorded: false };
@@ -644,6 +644,30 @@ async function dispatchCommandInteraction({ interaction, commands, client, SHADO
     }
 }
 
+function recordCommandAttempt(interaction, status, reason = null, extraDetails = {}) {
+    try {
+        const db = require("../../database");
+        const commandRepo = db?.repositories?.commandEvent;
+        if (commandRepo && typeof interaction.isChatInputCommand === "function" && interaction.isChatInputCommand()) {
+            const optionsMap = serializeCommandOptions(interaction.options?.data);
+            commandRepo.record({
+                occurredAt: Date.now(),
+                commandName: interaction.commandName,
+                actorId: interaction.user?.id,
+                guildId: interaction.guildId,
+                channelId: interaction.channelId,
+                status,
+                durationMs: 0,
+                details: {
+                    options: optionsMap,
+                    reason,
+                    ...extraDetails
+                }
+            });
+        }
+    } catch (_) {}
+}
+
 async function handleInteractionCreateEvent({
     interaction,
     config,
@@ -658,10 +682,16 @@ async function handleInteractionCreateEvent({
     client
 }) {
     const auth = await checkProtectedCommandAccess(interaction, config, SHADOW_MASTER_ID);
-    if (!auth.allowed) return;
+    if (!auth.allowed) {
+        recordCommandAttempt(interaction, "denied", "owner_only");
+        return;
+    }
 
     const disabled = await checkDisabledCommand(interaction, disabledCommands);
-    if (!disabled.allowed) return;
+    if (!disabled.allowed) {
+        recordCommandAttempt(interaction, "disabled", "command_disabled");
+        return;
+    }
 
     const cooldownRes = await handleCommandCooldownAndInFlight({
         interaction,
@@ -671,7 +701,10 @@ async function handleInteractionCreateEvent({
         commandCooldownMaxUsers,
         commandInFlight
     });
-    if (!cooldownRes.allowed) return;
+    if (!cooldownRes.allowed) {
+        recordCommandAttempt(interaction, cooldownRes.reason || "rate_limited", cooldownRes.reason, cooldownRes.extra || {});
+        return;
+    }
 
     if (isRoleButtonInteraction(interaction)) {
         return await handleRoleButtonInteractionSafe(interaction);

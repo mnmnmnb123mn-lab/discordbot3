@@ -10,6 +10,7 @@ const {
     cleanExpiredCacheEntries
 } = require("./cleanup");
 const { runIncrementalVacuum } = require("./vacuum");
+const { evaluateStoragePaths } = require("./storageCheck");
 
 const BATCH_SIZE = 500;
 const DEFAULT_RETENTION_DAYS = 30;
@@ -140,8 +141,20 @@ async function executeEmergencyTrim(dbInstance = null, options = {}) {
 
     const freedBytes = Math.max(0, preFootprint.totalBytes - postFootprint.totalBytes);
     const freedMb = parseFloat((freedBytes / (1024 * 1024)).toFixed(2));
-    const isResolved = postQuota.status === "ok";
-    const isSoftWarning = postQuota.status === "soft";
+
+    const maxWalBytes = parseInt(process.env.SQLITE_WAL_MAX_BYTES, 10) || (256 * 1024 * 1024);
+    const walBytes = postFootprint.walBytes || 0;
+    const isWalSafe = walBytes <= maxWalBytes;
+
+    const storageEval = evaluateStoragePaths({ dbPath: db.name });
+    const isFsSafe = !storageEval.filesystemCritical;
+    const isDbVolumeSafe = storageEval.volumes?.database?.critical !== true;
+    const isBackupVolumeSafe = storageEval.volumes?.backup?.critical !== true;
+    const isAssetVolumeSafe = storageEval.volumes?.assetCache?.critical !== true;
+    const allStorageSafe = isFsSafe && isDbVolumeSafe && isBackupVolumeSafe && isAssetVolumeSafe;
+
+    const isResolved = postQuota.status === "ok" && isWalSafe && allStorageSafe;
+    const isSoftWarning = !isResolved && (postQuota.status === "soft" || storageEval.filesystemWarning || !isWalSafe);
 
     const itemsPurged = {
         assetExpired: assetExpiredCount,

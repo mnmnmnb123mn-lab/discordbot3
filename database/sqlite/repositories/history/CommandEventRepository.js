@@ -2,6 +2,7 @@
 
 const { getDatabase } = require("../../connection");
 const { resolvePriority, evictWithPriority, notifyBufferDropped, notifyP1Dropped } = require("./bufferPolicy");
+const { spoolP0Event, drainP0Spool } = require("./p0Journal");
 const writePolicy = require("../../maintenance/writePolicy");
 
 const SENSITIVE_KEY_REGEX = /(token|password|pin|secret|credential|auth|bearer|cookie|salt|private|api_?key|access_?key|secret_?key|^key$)/i;
@@ -111,6 +112,8 @@ class CommandEventRepository {
                 this.isDegraded = true;
                 if (this.criticalRetryQueue.length < 100) {
                     this.criticalRetryQueue.push(item);
+                } else {
+                    spoolP0Event("command_events", item);
                 }
                 console.error(`[COMMAND_EVENT_BUFFER] 🚨 CRITICAL P0 event insert failed (queued for retry): ${err.message}`);
             }
@@ -175,6 +178,11 @@ class CommandEventRepository {
                     break;
                 }
             }
+        } else {
+            try {
+                const db = this.getDb();
+                drainP0Spool(db, { command_events: this });
+            } catch (_) {}
         }
 
         if (this.buffer.length === 0) return 0;

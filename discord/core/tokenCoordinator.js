@@ -2,6 +2,7 @@
 
 const { EventEmitter } = require('node:events');
 const crypto = require('node:crypto');
+const { safeError, sanitizeLogText } = require('./safeLogger');
 
 /**
  * TokenCoordinator (Universal Token Hub & Master Controller)
@@ -571,22 +572,29 @@ class TokenCoordinator extends EventEmitter {
         }
 
         let timeoutTimer;
+        let timedOut = false;
         try {
             const taskPromise = this.executeWithToken(token, subsystem, taskFn, options);
             if (timeoutMs > 0) {
                 const timeoutPromise = new Promise((_, reject) => {
                     timeoutTimer = setTimeout(() => {
+                        timedOut = true;
                         const err = new Error(`TASK_TIMEOUT: Subsystem ${subsystem} timed out after ${timeoutMs}ms`);
                         err.code = 'TASK_TIMEOUT';
                         reject(err);
                     }, timeoutMs);
+                });
+                taskPromise.catch(() => {}).finally(() => {
+                    if (timedOut && hash) {
+                        this.releaseActivity(token, subsystem);
+                    }
                 });
                 return await Promise.race([taskPromise, timeoutPromise]);
             }
             return await taskPromise;
         } finally {
             if (timeoutTimer) clearTimeout(timeoutTimer);
-            if (hash) {
+            if (!timedOut && hash) {
                 this.releaseActivity(token, subsystem);
             }
         }
@@ -602,11 +610,12 @@ class TokenCoordinator extends EventEmitter {
         const hash = this.hashToken(token);
         if (!hash) return false;
 
+        const safeReason = sanitizeLogText(String(reason || 'Token Invalid or Revoked'));
         const state = this._getOrCreateState(hash);
         const now = Date.now();
         state.quarantine = {
             quarantinedAt: now,
-            reason: String(reason)
+            reason: safeReason
         };
         state.lastActivity = now;
 
@@ -614,13 +623,13 @@ class TokenCoordinator extends EventEmitter {
         this.profileCache.delete(hash);
 
         // Emit high-speed In-Memory event to all listeners
-        this.emit('token:quarantined', { tokenHash: hash, reason, state });
+        this.emit('token:quarantined', { tokenHash: hash, reason: safeReason, state });
 
         // Notify registered subsystems to gracefully clean up
         for (const [subName, sub] of this.subsystems.entries()) {
             if (typeof sub?.onTokenQuarantined === 'function') {
                 try {
-                    sub.onTokenQuarantined(hash, reason, state);
+                    sub.onTokenQuarantined(hash, safeReason, state);
                 } catch {
                     // Safe swallow to avoid cascade
                 }
@@ -638,7 +647,7 @@ class TokenCoordinator extends EventEmitter {
                 if (typeof sendAlertWebhook === 'function') {
                     sendAlertWebhook({
                         title: '🚨 Token Quarantined (โทเคนถูกกักกัน)',
-                        description: `ตรวจพบโทเคนหมดอายุหรือไม่ถูกต้อง ระบบได้ทำการกักกัน (Quarantine) และหยุดการทำงานของเซสชันที่เกี่ยวข้องอย่างปลอดภัย\n\n**Token Hash:** \`${hash.slice(0, 16)}...\`\n**เหตุผล:** ${reason}`,
+                        description: `ตรวจพบโทเคนหมดอายุหรือไม่ถูกต้อง ระบบได้ทำการกักกัน (Quarantine) และหยุดการทำงานของเซสชันที่เกี่ยวข้องอย่างปลอดภัย\n\n**Token Hash:** \`${hash.slice(0, 16)}...\`\n**เหตุผล:** ${safeReason}`,
                         severity: WEBHOOK_SEVERITIES?.ERROR || 'ERROR',
                         category: 'SECURITY'
                     }).catch(() => {});
@@ -858,7 +867,7 @@ function attachTelemetryListeners(coordinator) {
                         retryAfter,
                         subsystem: subsystem || "unknown",
                         backoffSeconds: retryAfter,
-                        reason: reason || "429_backoff"
+                        reason: sanitizeLogText(reason || "429_backoff")
                     }
                 });
             }
@@ -873,7 +882,7 @@ function attachTelemetryListeners(coordinator) {
                     sessionId: tokenHash ? tokenHash.slice(0, 16) : "global",
                     eventType: "quarantined",
                     priority: "P1",
-                    metadata: { reason, state: state?.tokenType || "unknown" }
+                    metadata: { reason: sanitizeLogText(reason || "quarantined"), state: state?.tokenType || "unknown" }
                 });
             }
         } catch (_) {}
@@ -899,7 +908,7 @@ function attachTelemetryListeners(coordinator) {
                 repo.record({
                     sessionId: tokenHash ? tokenHash.slice(0, 16) : "global",
                     eventType: "token_error",
-                    metadata: { subsystem, error: error?.message || String(error) }
+                    metadata: { subsystem, error: safeError(error) }
                 });
             }
         } catch (_) {}
