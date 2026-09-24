@@ -160,7 +160,9 @@ function stopJob(ownerId, key, { removeSchedule = true, asAdmin = false } = {}) 
 function stopScheduledJob(ownerId, scheduleId, { asAdmin = false } = {}) {
     const key = `scheduled:${scheduleId}`;
     const stopped = stopJob(ownerId, key, { asAdmin });
-    deleteScheduledRunner(scheduleId, ownerId).catch(() => {});
+    if (!stopped) {
+        deleteScheduledRunner(scheduleId, asAdmin ? null : ownerId).catch(() => {});
+    }
     return stopped;
 }
 
@@ -931,8 +933,9 @@ async function startRunner({
                 return;
             }
         } else if (isFatalAuthError(err)) {
-            addLog(`🔒 ${username}: AUTH FAILED (Token invalid)`);
-            persistSchedule({ lastError: 'Fatal auth failure (token invalid)' });
+            const authReason = err?.code === 'TOKEN_QUARANTINED' ? 'Token quarantined' : 'Token invalid';
+            addLog(`🔒 ${username}: AUTH FAILED (${authReason})`);
+            persistSchedule({ lastError: `Fatal auth failure (${authReason.toLowerCase()})` });
             if (liveMsg) {
                 const authFailEmbed = buildQuestAuthFailureEmbed({
                     username,

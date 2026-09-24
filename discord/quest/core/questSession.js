@@ -29,7 +29,7 @@ class QuestCompatibilityError extends Error {
 }
 
 function isFatalAuthError(error) {
-    return error?.fatalAuth === true;
+    return error?.fatalAuth === true || error?.code === 'TOKEN_QUARANTINED';
 }
 
 function sleep(ms, signal) {

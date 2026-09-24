@@ -102,11 +102,12 @@ function runMigrations(db, options = {}) {
                 INSERT INTO schema_migrations (migration_id, version, checksum, applied_at, app_version)
                 VALUES (?, ?, ?, ?, ?)
             `).run(item.migrationId, item.version, item.checksum, Date.now(), APP_VERSION);
-
-            db.pragma(`user_version = ${item.version}`);
         });
 
         applyTx();
+
+        // PRAGMA user_version is non-transactional in SQLite; execute only after transaction commits
+        db.pragma(`user_version = ${item.version}`);
 
         results.applied.push(item.migrationId);
         results.currentVersion = item.version;

@@ -425,6 +425,18 @@ function stopScheduler() {
     console.log("[DB_SCHEDULER] 🛑 Background Maintenance Scheduler stopped.");
 }
 
+function hasRunningTasks() {
+    return Boolean(isWalRunning || isCleanupRunning || isVacuumRunning || isBackupRunning || isEmergencyRunning);
+}
+
+async function drainSchedulerTasks(timeoutMs = 3000) {
+    const start = Date.now();
+    while (hasRunningTasks() && (Date.now() - start) < timeoutMs) {
+        await new Promise(r => setTimeout(r, 50));
+    }
+    return !hasRunningTasks();
+}
+
 function triggerEmergencyEvaluation(reason = "event_triggered") {
     setImmediate(() => {
         runEmergencyEvaluation().catch(err => {
@@ -498,5 +510,7 @@ module.exports = {
     runAutoBackup,
     runEmergencyEvaluation,
     triggerEmergencyEvaluation,
-    getSchedulerDiagnostics
+    getSchedulerDiagnostics,
+    hasRunningTasks,
+    drainSchedulerTasks
 };

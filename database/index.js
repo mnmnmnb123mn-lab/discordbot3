@@ -60,6 +60,7 @@ async function initialize(options = {}) {
 async function shutdown() {
     try {
         scheduler.stopScheduler();
+        await scheduler.drainSchedulerTasks(2000);
     } catch (_) {}
 
     try {

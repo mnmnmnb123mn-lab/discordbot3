@@ -76,10 +76,14 @@ function decryptToken(encryptedData, ownerId = 'system', accountId = 'default') 
     );
     decipher.setAAD(Buffer.from(`${ownerId}:${accountId}`));
     decipher.setAuthTag(tag);
-    return Buffer.concat([
-        decipher.update(ciphertext),
-        decipher.final()
-    ]).toString('utf8');
+    try {
+        return Buffer.concat([
+            decipher.update(ciphertext),
+            decipher.final()
+        ]).toString('utf8');
+    } catch (err) {
+        throw new Error(`Token decryption failed: authentication tag mismatch or corrupted ciphertext (${err.message})`);
+    }
 }
 
 function maskToken(token) {

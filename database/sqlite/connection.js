@@ -34,8 +34,11 @@ function openDatabase(options = {}) {
 
     try {
         fs.accessSync(parentDir, fs.constants.R_OK | fs.constants.W_OK);
+        if (fs.existsSync(dbPath)) {
+            fs.accessSync(dbPath, fs.constants.R_OK | fs.constants.W_OK);
+        }
     } catch (err) {
-        throw new Error(`[SQLITE] ❌ Parent directory is not readable/writable: ${parentDir} (${err.message})`);
+        throw new Error(`[SQLITE] ❌ Database target or parent directory is not readable/writable: ${parentDir} (${err.message})`);
     }
 
     const isNew = !fs.existsSync(dbPath) || fs.statSync(dbPath).size === 0;
@@ -68,7 +71,11 @@ function closeDatabase() {
             try {
                 activeDb.pragma("wal_checkpoint(TRUNCATE)");
             } catch (_) {}
-            activeDb.close();
+            try {
+                activeDb.close();
+            } catch (err) {
+                console.warn(`[SQLITE] ⚠️ Error closing active database: ${err.message}`);
+            }
         } finally {
             activeDb = null;
             currentDbPath = null;

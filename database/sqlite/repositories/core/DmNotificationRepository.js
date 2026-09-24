@@ -180,6 +180,7 @@ class DmNotificationRepository {
 
         if (filter.status) {
             if (filter.status.$in) {
+                if (filter.status.$in.length === 0) return [];
                 const placeholders = filter.status.$in.map(() => "?").join(", ");
                 conditions.push(`status IN (${placeholders})`);
                 params.push(...filter.status.$in);
@@ -191,10 +192,13 @@ class DmNotificationRepository {
 
         if (filter.category) {
             if (filter.category.$nin) {
-                const placeholders = filter.category.$nin.map(() => "?").join(", ");
-                conditions.push(`category NOT IN (${placeholders})`);
-                params.push(...filter.category.$nin);
+                if (filter.category.$nin.length > 0) {
+                    const placeholders = filter.category.$nin.map(() => "?").join(", ");
+                    conditions.push(`category NOT IN (${placeholders})`);
+                    params.push(...filter.category.$nin);
+                }
             } else if (filter.category.$in) {
+                if (filter.category.$in.length === 0) return [];
                 const placeholders = filter.category.$in.map(() => "?").join(", ");
                 conditions.push(`category IN (${placeholders})`);
                 params.push(...filter.category.$in);
@@ -227,11 +231,13 @@ class DmNotificationRepository {
         const params = [];
 
         if (filter.category && filter.category.$in) {
+            if (filter.category.$in.length === 0) return { deletedCount: 0 };
             const placeholders = filter.category.$in.map(() => "?").join(", ");
             conditions.push(`category IN (${placeholders})`);
             params.push(...filter.category.$in);
         }
         if (filter.status && filter.status.$in) {
+            if (filter.status.$in.length === 0) return { deletedCount: 0 };
             const placeholders = filter.status.$in.map(() => "?").join(", ");
             conditions.push(`status IN (${placeholders})`);
             params.push(...filter.status.$in);

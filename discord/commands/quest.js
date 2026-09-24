@@ -226,16 +226,29 @@ async function handleQuestButton(interaction) {
     }
 
     if (customId === IDS.BTN_QUEST_STOP) {
+        if (typeof interaction.deferReply === 'function') {
+            await interaction.deferReply({ flags: 64 });
+            const payload = await buildStopPanelPayload(interaction.user.id);
+            return interaction.editReply(payload);
+        }
         const payload = await buildStopPanelPayload(interaction.user.id);
         return interaction.reply({ ...payload, flags: 64 });
     }
 
     if (customId === IDS.BTN_QUEST_REFRESH) {
+        if (typeof interaction.deferUpdate === 'function') {
+            await interaction.deferUpdate();
+            const payload = await buildStopPanelPayload(interaction.user.id, '🔄 อัปเดตสถานะแล้ว');
+            return interaction.editReply(payload);
+        }
         const payload = await buildStopPanelPayload(interaction.user.id, '🔄 อัปเดตสถานะแล้ว');
         return interaction.update(payload);
     }
 
     if (customId === IDS.BTN_QUEST_STOP_ALL) {
+        if (typeof interaction.deferUpdate === 'function') {
+            await interaction.deferUpdate();
+        }
         const stoppedCount = stopAllForUser(interaction.user.id);
         const scheduledList = await listScheduledRunners(interaction.user.id).catch(() => []);
         for (const r of scheduledList) {
@@ -248,6 +261,9 @@ async function handleQuestButton(interaction) {
                 ? `🛑 สั่งหยุด Runner ทั้งหมดแล้ว **${totalStopped}** รายการ`
                 : 'ℹ️ ไม่มี Runner ที่กำลังทำงาน'
         );
+        if (typeof interaction.editReply === 'function' && interaction.deferred) {
+            return interaction.editReply(payload);
+        }
         return interaction.update(payload);
     }
 
@@ -259,6 +275,10 @@ async function handleQuestButton(interaction) {
 
 async function handleQuestSelect(interaction) {
     if (interaction.customId !== IDS.SELECT_QUEST_STOP) return;
+
+    if (typeof interaction.deferUpdate === 'function') {
+        await interaction.deferUpdate();
+    }
 
     const selectedIds = interaction.values || [];
     let stopped = 0;
@@ -274,6 +294,9 @@ async function handleQuestSelect(interaction) {
             ? `🛑 สั่งหยุด Auto Daily Runner ที่เลือกแล้ว **${stopped}** บัญชี`
             : 'ℹ️ ดำเนินการหยุดรายการที่เลือกเรียบร้อยแล้ว'
     );
+    if (typeof interaction.editReply === 'function' && interaction.deferred) {
+        return interaction.editReply(payload);
+    }
     return interaction.update(payload);
 }
 

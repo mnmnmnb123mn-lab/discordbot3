@@ -9,6 +9,7 @@ const {
     cleanExpiredDmNotifications,
     cleanExpiredCacheEntries
 } = require("./cleanup");
+const { runIncrementalVacuum } = require("./vacuum");
 
 const BATCH_SIZE = 500;
 const DEFAULT_RETENTION_DAYS = 30;
@@ -104,7 +105,13 @@ async function executeEmergencyTrim(dbInstance = null, options = {}) {
         console.warn(`[EMERGENCY_TRIM] ⚠️ Expired history cleanup warning: ${err.message}`);
     }
 
-    // Phase 4: Non-blocking WAL Checkpoint to flush WAL pages to main DB file
+    // Phase 4: Reclaim physical disk space via incremental vacuum & non-blocking WAL Checkpoint
+    try {
+        runIncrementalVacuum(db, 500);
+    } catch (err) {
+        console.warn(`[EMERGENCY_TRIM] ⚠️ Incremental vacuum pass warning: ${err.message}`);
+    }
+
     try {
         db.pragma("wal_checkpoint(PASSIVE)");
     } catch (err) {

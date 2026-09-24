@@ -78,7 +78,14 @@ async function createBackup(db, options = {}) {
     const targetPath = path.join(backupDir, filename);
 
     // better-sqlite3 provides native online async backup API
-    await db.backup(targetPath);
+    try {
+        await db.backup(targetPath);
+    } catch (err) {
+        if (fs.existsSync(targetPath)) {
+            try { fs.unlinkSync(targetPath); } catch (_) {}
+        }
+        throw new Error(`การสำรองข้อมูล SQLite ล้มเหลวระหว่างเขียนไฟล์: ${err.message}`);
+    }
 
     const stat = fs.statSync(targetPath);
     const sha256 = await computeFileSha256(targetPath);
