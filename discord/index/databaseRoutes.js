@@ -6,7 +6,7 @@ function resolveActor(req) {
     if (!req) return "owner:dashboard";
     if (req.user?.id) return `owner:${req.user.id}`;
     if (req.session?.ownerId) return `owner:${req.session.ownerId}`;
-    if (req.headers && req.headers["x-owner-id"]) return `owner:${String(req.headers["x-owner-id"]).slice(0, 32)}`;
+    if (req.session?.user?.id) return `owner:${req.session.user.id}`;
     const primaryOwner = (process.env.OWNER_ID || "").split(",")[0]?.trim();
     if (primaryOwner) return `owner:${primaryOwner}`;
     return "owner:dashboard";

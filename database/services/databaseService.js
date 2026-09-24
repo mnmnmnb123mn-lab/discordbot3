@@ -169,7 +169,9 @@ async function getDatabaseOverview() {
                     percentFree: storage.freeSpace?.percentFree ?? null,
                     filesystemCritical: storage.filesystemCritical,
                     filesystemWarning: storage.filesystemWarning,
-                    pathWarning: storage.pathWarning
+                    pathWarning: storage.pathWarning,
+                    isPersistent: storage.isPersistent,
+                    persistentLabel: storage.isPersistent ? "✅ Persistent Storage" : "❌ Ephemeral / In-Source"
                 },
                 records: {
                     total: totalRecords,
@@ -206,6 +208,7 @@ async function getSqliteDetailedStatus() {
     const dbPath = getCurrentDbPath() || resolveDbPath();
     const db = getDatabase();
     const quota = evaluateQuota(dbPath);
+    const storageCheck = evaluateStoragePaths({ dbPath });
 
     // Pragmas
     const journalMode = db.pragma("journal_mode", { simple: true });
@@ -213,8 +216,9 @@ async function getSqliteDetailedStatus() {
     const foreignKeys = db.pragma("foreign_keys", { simple: true });
     const synchronous = db.pragma("synchronous", { simple: true });
 
-    // Table Detailed Row Counts
+    // Table Detailed Row Counts & Disk Page Bytes
     const tableCounts = {};
+    const tableBytes = {};
     const tables = db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'").all().map(t => t.name);
 
     for (const tbl of tables) {
@@ -226,45 +230,98 @@ async function getSqliteDetailedStatus() {
         }
     }
 
-    // Category Aggregates
+    try {
+        const dbstatRows = db.prepare("SELECT name, SUM(pgsize) AS b FROM dbstat GROUP BY name").all();
+        for (const row of dbstatRows) {
+            tableBytes[row.name] = Number(row.b) || 0;
+        }
+    } catch (_) {}
+
+    const buildTableMeta = (name, label) => {
+        const count = tableCounts[name] || 0;
+        const bytes = tableBytes[name] || 0;
+        return {
+            count,
+            bytes,
+            sizeMb: parseFloat((bytes / (1024 * 1024)).toFixed(2)),
+            label
+        };
+    };
+
+    const sumCategory = (tablesMap) => {
+        let count = 0;
+        let bytes = 0;
+        for (const meta of Object.values(tablesMap)) {
+            count += meta.count || 0;
+            bytes += meta.bytes || 0;
+        }
+        return {
+            count,
+            bytes,
+            sizeMb: parseFloat((bytes / (1024 * 1024)).toFixed(2))
+        };
+    };
+
+    const coreTables = {
+        quest_logs: buildTableMeta("quest_logs", "ประวัติการรัน Quest"),
+        quest_accounts: buildTableMeta("quest_accounts", "บัญชี Quest"),
+        quest_details: buildTableMeta("quest_details", "รายละเอียด Quest Step"),
+        scheduled_runners: buildTableMeta("scheduled_runners", "ตัวตั้งเวลา Auto Daily"),
+        dm_notifications: buildTableMeta("dm_notifications", "คิวแจ้งเตือน DM"),
+        verification_recovery: buildTableMeta("verification_recovery", "จุดกู้คืนสถานะยืนยันตัวตน"),
+        voice_session_runtime: buildTableMeta("voice_session_runtime", "สถานะ Voice Session Runtime")
+    };
+    const coreAgg = sumCategory(coreTables);
+
+    const tempTables = {
+        verification_state_nonce: buildTableMeta("verification_state_nonce", "OAuth State Nonces (มีอายุ)"),
+        database_meta: buildTableMeta("database_meta", "ค่าสถานะระบบภายใน")
+    };
+    const tempAgg = sumCategory(tempTables);
+
+    const historyTables = {
+        voice_events: buildTableMeta("voice_events", "ประวัติเหตุการณ์ห้องเสียง"),
+        command_events: buildTableMeta("command_events", "ประวัติการใช้คำสั่ง Slash"),
+        session_events: buildTableMeta("session_events", "ประวัติ Token Coordinator"),
+        runtime_events: buildTableMeta("runtime_events", "ประวัติการทำงานของระบบ")
+    };
+    const historyAgg = sumCategory(historyTables);
+
+    const cacheTables = {
+        cache_entries: buildTableMeta("cache_entries", "แคชทั่วไป (KV Store)"),
+        asset_cache: buildTableMeta("asset_cache", "แคชรูปภาพ/ไอคอน (Filesystem Metadata)")
+    };
+    const cacheAgg = sumCategory(cacheTables);
+
+    // Category Aggregates with row counts and estimated disk bytes
     const categories = {
         core: {
             label: "ข้อมูลหลัก (Core Operational)",
-            count: (tableCounts.quest_logs || 0) + (tableCounts.quest_accounts || 0) + (tableCounts.quest_details || 0) + (tableCounts.scheduled_runners || 0) + (tableCounts.dm_notifications || 0) + (tableCounts.verification_recovery || 0),
-            tables: {
-                quest_logs: { count: tableCounts.quest_logs || 0, label: "ประวัติการรัน Quest" },
-                quest_accounts: { count: tableCounts.quest_accounts || 0, label: "บัญชี Quest" },
-                quest_details: { count: tableCounts.quest_details || 0, label: "รายละเอียด Quest Step" },
-                scheduled_runners: { count: tableCounts.scheduled_runners || 0, label: "ตัวตั้งเวลา Auto Daily" },
-                dm_notifications: { count: tableCounts.dm_notifications || 0, label: "คิวแจ้งเตือน DM" },
-                verification_recovery: { count: tableCounts.verification_recovery || 0, label: "จุดกู้คืนสถานะยืนยันตัวตน" }
-            }
+            count: coreAgg.count,
+            bytes: coreAgg.bytes,
+            sizeMb: coreAgg.sizeMb,
+            tables: coreTables
         },
         temporary: {
             label: "ข้อมูลชั่วคราว (Temporary / Nonces)",
-            count: (tableCounts.verification_state_nonce || 0) + (tableCounts.database_meta || 0),
-            tables: {
-                verification_state_nonce: { count: tableCounts.verification_state_nonce || 0, label: "OAuth State Nonces (มีอายุ)" },
-                database_meta: { count: tableCounts.database_meta || 0, label: "ค่าสถานะระบบภายใน" }
-            }
+            count: tempAgg.count,
+            bytes: tempAgg.bytes,
+            sizeMb: tempAgg.sizeMb,
+            tables: tempTables
         },
         history: {
             label: "บันทึกประวัติ (History & Telemetry - 30 วัน)",
-            count: (tableCounts.voice_events || 0) + (tableCounts.command_events || 0) + (tableCounts.session_events || 0) + (tableCounts.runtime_events || 0),
-            tables: {
-                voice_events: { count: tableCounts.voice_events || 0, label: "ประวัติเหตุการณ์ห้องเสียง" },
-                command_events: { count: tableCounts.command_events || 0, label: "ประวัติการใช้คำสั่ง Slash" },
-                session_events: { count: tableCounts.session_events || 0, label: "ประวัติ Token Coordinator" },
-                runtime_events: { count: tableCounts.runtime_events || 0, label: "ประวัติการทำงานของระบบ" }
-            }
+            count: historyAgg.count,
+            bytes: historyAgg.bytes,
+            sizeMb: historyAgg.sizeMb,
+            tables: historyTables
         },
         cache: {
             label: "ข้อมูลแคช (Cache Subsystem)",
-            count: (tableCounts.cache_entries || 0) + (tableCounts.asset_cache || 0),
-            tables: {
-                cache_entries: { count: tableCounts.cache_entries || 0, label: "แคชทั่วไป (KV Store)" },
-                asset_cache: { count: tableCounts.asset_cache || 0, label: "แคชรูปภาพ/ไอคอน" }
-            }
+            count: cacheAgg.count,
+            bytes: cacheAgg.bytes,
+            sizeMb: cacheAgg.sizeMb,
+            tables: cacheTables
         }
     };
 
@@ -316,7 +373,10 @@ async function getSqliteDetailedStatus() {
             shmBytes: quota.footprint.shmBytes,
             totalMb: quota.footprint.totalMb,
             limits: quota.limits,
-            filesystem: quota.filesystem
+            filesystem: quota.filesystem,
+            isPersistent: storageCheck.isPersistent,
+            pathWarning: storageCheck.pathWarning,
+            persistentLabel: storageCheck.isPersistent ? "✅ Persistent Storage" : "❌ Ephemeral / In-Source"
         },
         categories,
         maintenanceHistory,
@@ -537,8 +597,10 @@ async function executeSqliteAction(action, options = {}, invoker = "owner") {
                     action,
                     trimResult: trim,
                     message: trim.isResolved
-                        ? `Emergency Trim สำเร็จ: คืนพื้นที่ได้ ${trim.freedMb} MB (ลบทั้งหมด ${trim.itemsPurged.totalItems} รายการ) สภาวะกลับสู่ปกติ`
-                        : `Emergency Trim เสร็จสิ้น: คืนพื้นที่ได้ ${trim.freedMb} MB แต่ระบบยังอยู่ในเกณฑ์เฝ้าระวัง (${trim.postStatus})`
+                        ? `Emergency Trim สำเร็จ: คืนพื้นที่ได้ ${trim.freedMb} MB (ลบทั้งหมด ${trim.itemsPurged.totalItems} รายการ) สภาวะกลับสู่ปกติสมบูรณ์ (OK)`
+                        : trim.postStatus === "soft" || trim.isSoftWarning
+                            ? `Emergency Trim เสร็จสิ้น: คืนพื้นที่ได้ ${trim.freedMb} MB ระบบพ้นขีดวิกฤตแต่ยังอยู่ในเกณฑ์เฝ้าระวัง (Soft Warning)`
+                            : `Emergency Trim เสร็จสิ้น: คืนพื้นที่ได้ ${trim.freedMb} MB แต่ระบบยังอยู่ในเกณฑ์อันตราย (${trim.postStatus})`
                 };
                 recordAudit(trim.ok ? "success" : "failure", result);
                 break;
@@ -849,6 +911,26 @@ async function getMongoDetailedStatus() {
         });
     }
 
+    // Database Stats (storageSize, dataSize, indexSize, objects)
+    let stats = null;
+    try {
+        const rawStats = await mongo.mongoose.connection.db.stats();
+        stats = {
+            collections: rawStats.collections || 0,
+            objects: rawStats.objects || 0,
+            avgObjSize: rawStats.avgObjSize || 0,
+            dataSizeBytes: rawStats.dataSize || 0,
+            storageSizeBytes: rawStats.storageSize || 0,
+            indexSizeBytes: rawStats.indexSize || 0,
+            totalSizeBytes: (rawStats.storageSize || 0) + (rawStats.indexSize || 0),
+            dataSizeMb: parseFloat(((rawStats.dataSize || 0) / (1024 * 1024)).toFixed(2)),
+            storageSizeMb: parseFloat(((rawStats.storageSize || 0) / (1024 * 1024)).toFixed(2)),
+            indexSizeMb: parseFloat(((rawStats.indexSize || 0) / (1024 * 1024)).toFixed(2))
+        };
+    } catch (_) {}
+
+    const topCollections = [...collections].sort((a, b) => b.count - a.count).slice(0, 5);
+
     return {
         connected: true,
         statusLabel: "🟢 ปกติ",
@@ -857,6 +939,8 @@ async function getMongoDetailedStatus() {
         pingMs,
         pool: mongoStatus.pool,
         collectionsCount: collections.length,
+        stats,
+        topCollections,
         collections
     };
 }

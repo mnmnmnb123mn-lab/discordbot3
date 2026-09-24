@@ -89,6 +89,14 @@ Updated: 2026-09-23
    - `004_session_runtime_and_assets.sql`: Voice session runtime heartbeats & lean filesystem asset cache metadata.
    - ทุกครั้งที่รัน migration สำเร็จ ระบบจะบันทึก checksum และกำหนด `PRAGMA user_version = 4` เพื่อรับประกันความเข้ากันได้ของสถาปัตยกรรม (Bootstrap Lineage)
 
+> [!WARNING]
+> ### ข้อควรระวังเชิงประวัติศาสตร์ของการ Migration (Migration 004 Hazard Note)
+> ในไฟล์ `004_session_runtime_and_assets.sql` มีการใช้คำสั่ง `DROP TABLE IF EXISTS asset_cache;` เพื่ออัปเกรดโครงสร้างจากแคชแบบ Binary BLOB ในตัวฐานข้อมูลเดิม ไปเป็นโครงสร้างชี้ไฟล์บนดิสก์ (Filesystem Metadata Pointer)  
+> **นโยบายการ Migration ของโปรเจกต์ (Immutable Forward-Only Migrations):**
+> 1. คำสั่ง `DROP TABLE` อนุญาตให้ใช้ได้เฉพาะกับตารางแคชชั่วคราว (Ephemeral Cache) ที่สามารถสร้างใหม่ได้อัตโนมัติเท่านั้น
+> 2. **ห้ามใช้ `DROP TABLE` กับตารางข้อมูลหลัก (Core Tables)** เช่น `quest_logs`, `scheduled_runners`, `dm_notifications`, `verification_recovery` หรือตารางประวัติเด็ดขาด
+> 3. การปรับปรุงโครงสร้างในอนาคตทั้งหมดต้องเป็น **Immutable Forward-Only** โดยใช้ `ALTER TABLE ADD COLUMN` หรือสร้างตารางใหม่แล้วโอนย้ายข้อมูลผ่าน Transaction ที่มี Rollback ปลอดภัย
+
 ---
 
 ## 5. การแก้ปัญหาเมื่อเกิดเหตุฉุกเฉิน (Troubleshooting)

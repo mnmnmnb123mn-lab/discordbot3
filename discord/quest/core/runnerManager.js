@@ -143,24 +143,29 @@ function findAnyJobByAccount(accountId) {
     return null;
 }
 
-function stopJob(ownerId, key, { removeSchedule = true } = {}) {
+function stopJob(ownerId, key, { removeSchedule = true, asAdmin = false } = {}) {
     const job = jobs.get(key);
-    if (!job || job.ownerId !== ownerId) return false;
+    if (!job) return false;
+    if (!asAdmin && job.ownerId !== ownerId) return false;
     if (job.lifecycle !== 'stopping') {
         job.lifecycle = 'stopping';
         job.controller.abort();
     }
     if (removeSchedule && job.scheduleId != null) {
-        deleteScheduledRunner(job.scheduleId, ownerId).catch(() => {});
+        deleteScheduledRunner(job.scheduleId, asAdmin ? job.ownerId : ownerId).catch(() => {});
     }
     return true;
 }
 
-function stopScheduledJob(ownerId, scheduleId) {
+function stopScheduledJob(ownerId, scheduleId, { asAdmin = false } = {}) {
     const key = `scheduled:${scheduleId}`;
-    const stopped = stopJob(ownerId, key);
+    const stopped = stopJob(ownerId, key, { asAdmin });
     deleteScheduledRunner(scheduleId, ownerId).catch(() => {});
     return stopped;
+}
+
+function stopScheduledJobAsAdmin(scheduleId) {
+    return stopScheduledJob(null, scheduleId, { asAdmin: true });
 }
 
 function stopAllForUser(ownerId, { mode = null } = {}) {
@@ -1158,6 +1163,7 @@ module.exports = {
     findAnyJobByAccount,
     stopJob,
     stopScheduledJob,
+    stopScheduledJobAsAdmin,
     stopAllForUser,
     stopRunner,
     shutdownRunners,

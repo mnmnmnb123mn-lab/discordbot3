@@ -49,6 +49,7 @@ function buildDatabaseCenterPage() {
                         <div>
                             <div style="font-weight:700;font-size:1.05em;">SQLite 3 (Local Operational)</div>
                             <div style="font-size:0.75em;color:var(--text3);" id="ov-sqlite-path">--</div>
+                            <div style="font-size:0.75em;margin-top:2px;" id="ov-sqlite-persistent">Persistent Storage: --</div>
                         </div>
                     </div>
                     <span id="ov-sqlite-badge" class="badge" style="background:var(--green2);color:#000;font-weight:700;">🟢 ปกติ</span>
@@ -146,6 +147,7 @@ function buildDatabaseCenterPage() {
                     </div>
                 </div>
                 <div style="display:flex;gap:6px;flex-wrap:wrap;">
+                    <span class="badge" style="background:#1e293b;border:1px solid #334155;color:#94a3b8;" id="badge-persistent">Storage: --</span>
                     <span class="badge" style="background:#1e293b;border:1px solid #334155;color:#94a3b8;" id="badge-wal">WAL Mode: --</span>
                     <span class="badge" style="background:#1e293b;border:1px solid #334155;color:#94a3b8;" id="badge-version">Schema: --</span>
                     <span class="badge" style="background:#1e293b;border:1px solid #334155;color:#94a3b8;" id="badge-fk">Foreign Keys: --</span>
@@ -431,6 +433,12 @@ async function loadDbOverview() {
         document.getElementById('st-history-records').textContent = sq.records.history.toLocaleString();
         document.getElementById('st-temp-records').textContent = sq.records.temp.toLocaleString();
 
+        const persistEl = document.getElementById('ov-sqlite-persistent');
+        if (persistEl) {
+            persistEl.textContent = 'Persistent Storage: ' + (sq.storage && sq.storage.isPersistent ? '✅ External Mount' : '❌ Ephemeral / In-Source');
+            persistEl.style.color = (sq.storage && sq.storage.isPersistent) ? 'var(--green2)' : 'var(--orange)';
+        }
+
         // Timestamps
         document.getElementById('ov-last-cleanup').textContent = sq.lastMaintenance.lastCleanup ? new Date(sq.lastMaintenance.lastCleanup).toLocaleString('th-TH') : 'ยังไม่มี';
         document.getElementById('ov-last-backup').textContent = sq.lastMaintenance.lastBackup ? new Date(sq.lastMaintenance.lastBackup).toLocaleString('th-TH') : 'ยังไม่มี';
@@ -456,6 +464,13 @@ async function loadSqliteDetails() {
 
         // Storage
         const st = data.storage;
+        const persistBadge = document.getElementById('badge-persistent');
+        if (persistBadge) {
+            persistBadge.textContent = 'Storage: ' + (st.isPersistent ? '✅ Persistent Volume' : '❌ In-Source');
+            persistBadge.style.color = st.isPersistent ? 'var(--green2)' : 'var(--orange)';
+            persistBadge.style.borderColor = st.isPersistent ? 'var(--green2)' : 'var(--orange)';
+        }
+
         const pct = ((st.totalMb / st.limits.hardMb) * 100).toFixed(1);
         document.getElementById('sql-footprint-text').textContent = st.totalMb + ' MB / ' + st.limits.hardMb.toLocaleString() + ' MB (' + pct + '%)';
         document.getElementById('sql-quota-bar').style.width = Math.min(pct, 100) + '%';
@@ -468,9 +483,11 @@ async function loadSqliteDetails() {
         const tbody = document.getElementById('sql-categories-body');
         let html = '';
         for (const [catKey, catVal] of Object.entries(data.categories)) {
-            html += '<tr style="background:var(--bg-box);font-weight:700;"><td colspan="3" style="padding:8px 10px;color:var(--accent3);">' + catVal.label + '</td><td style="padding:8px 10px;text-align:right;">รวม ' + catVal.count.toLocaleString() + ' รายการ</td></tr>';
+            const sizeLabel = catVal.sizeMb !== undefined ? ' (' + catVal.sizeMb + ' MB)' : '';
+            html += '<tr style="background:var(--bg-box);font-weight:700;"><td colspan="3" style="padding:8px 10px;color:var(--accent3);">' + catVal.label + sizeLabel + '</td><td style="padding:8px 10px;text-align:right;">รวม ' + catVal.count.toLocaleString() + ' รายการ</td></tr>';
             for (const [tblKey, tblVal] of Object.entries(catVal.tables)) {
-                html += '<tr style="border-bottom:1px solid var(--border);"><td style="padding:6px 10px;color:var(--text3);font-size:0.9em;">↳ ' + catKey + '</td><td style="padding:6px 10px;font-family:monospace;font-weight:600;">' + tblKey + '</td><td style="padding:6px 10px;color:var(--text2);">' + tblVal.label + '</td><td style="padding:6px 10px;text-align:right;font-weight:600;">' + tblVal.count.toLocaleString() + '</td></tr>';
+                const tblSize = tblVal.sizeMb !== undefined ? ' (' + tblVal.sizeMb + ' MB)' : '';
+                html += '<tr style="border-bottom:1px solid var(--border);"><td style="padding:6px 10px;color:var(--text3);font-size:0.9em;">↳ ' + catKey + '</td><td style="padding:6px 10px;font-family:monospace;font-weight:600;">' + tblKey + '</td><td style="padding:6px 10px;color:var(--text2);">' + tblVal.label + tblSize + '</td><td style="padding:6px 10px;text-align:right;font-weight:600;">' + tblVal.count.toLocaleString() + '</td></tr>';
             }
         }
         tbody.innerHTML = html;

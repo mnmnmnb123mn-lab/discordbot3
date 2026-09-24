@@ -50,6 +50,14 @@ class AssetCacheManager {
         this.assetDir = options.assetDir || resolveAssetDir();
         this.maxQuotaBytes = options.maxQuotaBytes || resolveMaxQuotaBytes();
         this._ensureDirectory();
+
+        // Write Amplification Protection: batch LRU touches
+        this.touchBuffer = new Map(); // assetKey -> timestamp
+        this.touchFlushIntervalMs = options.touchFlushIntervalMs || 10000;
+        this.touchFlushInterval = setInterval(() => this.flushTouches(), this.touchFlushIntervalMs);
+        if (this.touchFlushInterval.unref) {
+            this.touchFlushInterval.unref();
+        }
     }
 
     get db() {
@@ -64,6 +72,38 @@ class AssetCacheManager {
         } catch (err) {
             console.error(`[ASSET_CACHE] ⚠️ Failed to create asset directory: ${err.message}`);
         }
+    }
+
+    stopTouchFlusher() {
+        if (this.touchFlushInterval) {
+            clearInterval(this.touchFlushInterval);
+            this.touchFlushInterval = null;
+        }
+        this.flushTouches();
+    }
+
+    recordTouch(assetKey, now = Date.now()) {
+        if (!assetKey) return;
+        this.touchBuffer.set(String(assetKey), now);
+        if (this.touchBuffer.size >= 50) {
+            this.flushTouches();
+        }
+    }
+
+    flushTouches() {
+        if (!this.touchBuffer || this.touchBuffer.size === 0) return;
+        const entries = Array.from(this.touchBuffer.entries());
+        this.touchBuffer.clear();
+
+        try {
+            const stmt = this.db.prepare("UPDATE asset_cache SET last_used_at = ? WHERE asset_key = ?");
+            const updateTx = this.db.transaction(() => {
+                for (const [key, ts] of entries) {
+                    stmt.run(ts, key);
+                }
+            });
+            updateTx();
+        } catch (_) {}
     }
 
     getAsset(assetKey) {
@@ -86,10 +126,8 @@ class AssetCacheManager {
                 return null;
             }
 
-            // Update last_used_at for LRU tracking
-            try {
-                this.db.prepare("UPDATE asset_cache SET last_used_at = ? WHERE asset_key = ?").run(now, String(assetKey));
-            } catch (_) {}
+            // Record touch in buffer to prevent write amplification
+            this.recordTouch(assetKey, now);
 
             return {
                 key: row.asset_key,
@@ -192,6 +230,9 @@ class AssetCacheManager {
 
     deleteAsset(assetKey) {
         if (!assetKey) return false;
+        if (this.touchBuffer) {
+            this.touchBuffer.delete(String(assetKey));
+        }
         try {
             const row = this.db.prepare("SELECT relative_path, sha256 FROM asset_cache WHERE asset_key = ?").get(String(assetKey));
             if (!row) return false;
@@ -243,7 +284,8 @@ class AssetCacheManager {
                 }
             }
 
-            // Step 2: If still over target, evict LRU (least recently used)
+            // Step 2: If still over target, flush pending touches and evict LRU (least recently used)
+            this.flushTouches();
             let currentTotal = this.getTotalSizeBytes();
             if (currentTotal > targetMaxBytes) {
                 const lruRows = this.db.prepare("SELECT asset_key, relative_path, size_bytes FROM asset_cache ORDER BY last_used_at ASC").all();

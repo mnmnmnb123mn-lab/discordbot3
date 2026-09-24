@@ -340,7 +340,7 @@ function registerAdminRoutes({
                 return res.status(400).json({ success: false, error: "Invalid scheduled runner ID" });
             }
             const cleanId = String(id).trim();
-            const stopped = stopScheduledJob(null, cleanId);
+            const stopped = stopScheduledJob(null, cleanId, { asAdmin: true });
             const deleted = getScheduledRunnerRepository().deleteById(cleanId);
             res.json({ success: true, deleted: Boolean(deleted), stopped });
         } catch (e) {

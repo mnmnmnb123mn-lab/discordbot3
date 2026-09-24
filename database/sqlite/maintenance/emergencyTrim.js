@@ -118,7 +118,8 @@ async function executeEmergencyTrim(dbInstance = null, options = {}) {
 
     const freedBytes = Math.max(0, preFootprint.totalBytes - postFootprint.totalBytes);
     const freedMb = parseFloat((freedBytes / (1024 * 1024)).toFixed(2));
-    const isResolved = postQuota.status === "ok" || postQuota.status === "soft";
+    const isResolved = postQuota.status === "ok";
+    const isSoftWarning = postQuota.status === "soft";
 
     const itemsPurged = {
         assetExpired: assetExpiredCount,
@@ -142,10 +143,13 @@ async function executeEmergencyTrim(dbInstance = null, options = {}) {
             freedMb,
             itemsPurged,
             isResolved,
+            isSoftWarning,
             preStatus: preQuota.status,
             postStatus: postQuota.status,
             durationMs
         });
+
+        const runStatus = isResolved ? "success" : isSoftWarning ? "warning" : "degraded";
 
         db.prepare(`
             INSERT INTO maintenance_runs (run_type, started_at, finished_at, status, details_json)
@@ -154,7 +158,7 @@ async function executeEmergencyTrim(dbInstance = null, options = {}) {
             "emergency_trim",
             startTime,
             endTime,
-            isResolved ? "success" : "degraded",
+            runStatus,
             detailsJson
         );
     } catch (err) {
@@ -165,6 +169,7 @@ async function executeEmergencyTrim(dbInstance = null, options = {}) {
         ok: true,
         actor,
         isResolved,
+        isSoftWarning,
         preStatus: preQuota.status,
         postStatus: postQuota.status,
         preFootprint,
@@ -172,7 +177,7 @@ async function executeEmergencyTrim(dbInstance = null, options = {}) {
         freedMb,
         itemsPurged,
         durationMs,
-        status: isResolved ? "resolved" : "degraded"
+        status: isResolved ? "resolved" : isSoftWarning ? "soft_warning" : "degraded"
     };
 }
 

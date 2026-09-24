@@ -15,14 +15,10 @@ const VerificationStateNonceSchema = new mongoose.Schema({
     expiresAt: { type: Date, required: true, index: { expires: 0 } }
 }, { versionKey: false });
 
-const MongooseNonceModel = mongoose.models.VerificationStateNonce ||
-    mongoose.model("VerificationStateNonce", VerificationStateNonceSchema);
-
+// Note: Source of truth is SQLite VerificationStateNonceRepository.
+// We preserve schema for contract inspection without calling mongoose.model("VerificationStateNonce", schema).
 const VerificationStateNonceFacade = {
     schema: VerificationStateNonceSchema,
-    get db() {
-        return MongooseNonceModel.db;
-    },
     async create(data) {
         return getVerificationStateNonceRepository().create(data);
     },

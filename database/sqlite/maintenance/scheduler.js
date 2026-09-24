@@ -20,6 +20,15 @@ let isVacuumRunning = false;
 let isBackupRunning = false;
 let isEmergencyRunning = false;
 
+let schedulerStartedAt = null;
+let configuredIntervalsMs = {
+    wal: 60 * 60 * 1000,
+    cleanup: 360 * 60 * 1000,
+    vacuum: 1440 * 60 * 1000,
+    backup: 24 * 60 * 60 * 1000,
+    emergency: 2 * 60 * 1000
+};
+
 const diagnostics = {
     wal: { lastRunAt: null, lastDurationMs: 0, lastStatus: "idle", runCount: 0 },
     cleanup: { lastRunAt: null, lastDurationMs: 0, lastStatus: "idle", runCount: 0 },
@@ -277,26 +286,53 @@ async function runEmergencyEvaluation() {
                 reason: evalResult.reasons.join("; ")
             }, "system_auto_emergency");
 
-            if (trimResult && trimResult.ok && trimResult.trimResult?.isResolved) {
-                diagnostics.emergency.lastStatus = "resolved";
-                // Send RESOLVED Webhook alert
-                try {
-                    sendWebhookEvent({
-                        target: "ALERT",
-                        severity: "SUCCESS",
-                        category: "DATA",
-                        code: "sqlite.emergency.resolved",
-                        title: "🟢 ระบบฐานข้อมูล SQLite คืนสู่สภาวะปกติแล้ว",
-                        description: "Emergency Auto-Trim ดำเนินการสำเร็จ และระดับพื้นที่จัดเก็บกลับเข้าสู่เกณฑ์ปลอดภัยแล้ว",
-                        context: {
-                            "สาเหตุที่เกิด": evalResult.reasons[0] || "Storage critical",
-                            "พื้นที่ที่คืนได้": `${trimResult.trimResult.freedMb} MB`,
-                            "จำนวนรายการที่ลบ": `${trimResult.trimResult.itemsPurged?.totalItems || 0} รายการ`,
-                            "ขนาดก่อน ➔ หลัง": `${trimResult.trimResult.preFootprint?.totalMb} MB ➔ ${trimResult.trimResult.postFootprint?.totalMb} MB`,
-                            "ระยะเวลาดำเนินการ": `${trimResult.trimResult.durationMs} ms`
-                        }
-                    }).catch(() => {});
-                } catch (_) {}
+            if (trimResult && trimResult.ok) {
+                const trim = trimResult.trimResult || {};
+                if (trim.isResolved) {
+                    diagnostics.emergency.lastStatus = "resolved";
+                    // Send RESOLVED Webhook alert (strictly when post-quota is ok)
+                    try {
+                        sendWebhookEvent({
+                            target: "ALERT",
+                            severity: "SUCCESS",
+                            category: "DATA",
+                            code: "sqlite.emergency.resolved",
+                            title: "🟢 ระบบฐานข้อมูล SQLite คืนสู่สภาวะปกติสมบูรณ์แล้ว",
+                            description: "Emergency Auto-Trim ดำเนินการสำเร็จ และระดับพื้นที่จัดเก็บกลับเข้าสู่เกณฑ์ปลอดภัยสมบูรณ์ (Safe/OK)",
+                            context: {
+                                "สาเหตุที่เกิด": evalResult.reasons[0] || "Storage critical",
+                                "พื้นที่ที่คืนได้": `${trim.freedMb} MB`,
+                                "จำนวนรายการที่ลบ": `${trim.itemsPurged?.totalItems || 0} รายการ`,
+                                "ขนาดก่อน ➔ หลัง": `${trim.preFootprint?.totalMb} MB ➔ ${trim.postFootprint?.totalMb} MB`,
+                                "สถานะล่าสุด": "OK",
+                                "ระยะเวลาดำเนินการ": `${trim.durationMs} ms`
+                            }
+                        }).catch(() => {});
+                    } catch (_) {}
+                } else if (trim.postStatus === "soft" || trim.isSoftWarning) {
+                    diagnostics.emergency.lastStatus = "soft_warning";
+                    // Send WARNING alert: dropped out of critical but still in soft warning state
+                    try {
+                        sendWebhookEvent({
+                            target: "ALERT",
+                            severity: "WARNING",
+                            category: "DATA",
+                            code: "sqlite.emergency.warning_cleared",
+                            title: "🟡 ภาวะวิกฤตลดระดับสู่เกณฑ์เฝ้าระวัง (Soft Warning)",
+                            description: "Emergency Auto-Trim สามารถคืนพื้นที่บางส่วนได้ แต่ระดับพื้นที่จัดเก็บยังอยู่ในเกณฑ์เฝ้าระวัง (Soft Quota) ยังไม่กลับสู่สถานะปกติสมบูรณ์",
+                            context: {
+                                "สาเหตุที่เกิด": evalResult.reasons[0] || "Storage critical",
+                                "พื้นที่ที่คืนได้": `${trim.freedMb} MB`,
+                                "จำนวนรายการที่ลบ": `${trim.itemsPurged?.totalItems || 0} รายการ`,
+                                "ขนาดก่อน ➔ หลัง": `${trim.preFootprint?.totalMb} MB ➔ ${trim.postFootprint?.totalMb} MB`,
+                                "สถานะล่าสุด": "SOFT WARNING",
+                                "ระยะเวลาดำเนินการ": `${trim.durationMs} ms`
+                            }
+                        }).catch(() => {});
+                    } catch (_) {}
+                } else {
+                    diagnostics.emergency.lastStatus = "degraded";
+                }
             }
         } else {
             diagnostics.emergency.lastStatus = "normal";
@@ -318,6 +354,15 @@ function startScheduler() {
     const vacuumMinutes = parseMinutes("SQLITE_VACUUM_INTERVAL_MINUTES", 1440);
     const autoBackupEnabled = process.env.SQLITE_AUTO_BACKUP_ENABLED !== "false";
     const backupHours = parseHours("SQLITE_AUTO_BACKUP_INTERVAL_HOURS", 24);
+
+    schedulerStartedAt = Date.now();
+    configuredIntervalsMs = {
+        wal: walMinutes * 60 * 1000,
+        cleanup: cleanupMinutes * 60 * 1000,
+        vacuum: vacuumMinutes * 60 * 1000,
+        backup: backupHours * 60 * 60 * 1000,
+        emergency: 2 * 60 * 1000
+    };
 
     walIntervalId = setInterval(runWalCheckpoint, walMinutes * 60 * 1000);
     if (walIntervalId.unref) walIntervalId.unref();
@@ -376,6 +421,7 @@ function stopScheduler() {
         clearInterval(emergencyIntervalId);
         emergencyIntervalId = null;
     }
+    schedulerStartedAt = null;
     console.log("[DB_SCHEDULER] 🛑 Background Maintenance Scheduler stopped.");
 }
 
@@ -388,8 +434,49 @@ function triggerEmergencyEvaluation(reason = "event_triggered") {
 }
 
 function getSchedulerDiagnostics() {
+    const now = Date.now();
+    const baseTime = schedulerStartedAt || now;
+
+    const calcNext = (timerKey, intervalMs, isRunning) => {
+        if (!isRunning) return null;
+        const lastRun = diagnostics[timerKey]?.lastRunAt;
+        if (lastRun) {
+            return lastRun + intervalMs;
+        }
+        return baseTime + intervalMs;
+    };
+
+    const diagnosticsWithNext = {
+        wal: {
+            ...diagnostics.wal,
+            nextRunAt: calcNext("wal", configuredIntervalsMs.wal, Boolean(walIntervalId)),
+            intervalMinutes: Math.round(configuredIntervalsMs.wal / 60000)
+        },
+        cleanup: {
+            ...diagnostics.cleanup,
+            nextRunAt: calcNext("cleanup", configuredIntervalsMs.cleanup, Boolean(cleanupIntervalId)),
+            intervalMinutes: Math.round(configuredIntervalsMs.cleanup / 60000)
+        },
+        vacuum: {
+            ...diagnostics.vacuum,
+            nextRunAt: calcNext("vacuum", configuredIntervalsMs.vacuum, Boolean(vacuumIntervalId)),
+            intervalMinutes: Math.round(configuredIntervalsMs.vacuum / 60000)
+        },
+        backup: {
+            ...diagnostics.backup,
+            nextRunAt: calcNext("backup", configuredIntervalsMs.backup, Boolean(backupIntervalId)),
+            intervalHours: Math.round(configuredIntervalsMs.backup / 3600000)
+        },
+        emergency: {
+            ...diagnostics.emergency,
+            nextRunAt: calcNext("emergency", configuredIntervalsMs.emergency, Boolean(emergencyIntervalId)),
+            intervalMinutes: Math.round(configuredIntervalsMs.emergency / 60000)
+        }
+    };
+
     return {
         active: Boolean(walIntervalId || cleanupIntervalId || vacuumIntervalId || backupIntervalId || emergencyIntervalId || initialBackupTimeoutId),
+        startedAt: schedulerStartedAt,
         timers: {
             wal: Boolean(walIntervalId),
             cleanup: Boolean(cleanupIntervalId),
@@ -398,7 +485,7 @@ function getSchedulerDiagnostics() {
             emergency: Boolean(emergencyIntervalId),
             initialBackupScheduled: Boolean(initialBackupTimeoutId)
         },
-        diagnostics
+        diagnostics: diagnosticsWithNext
     };
 }
 

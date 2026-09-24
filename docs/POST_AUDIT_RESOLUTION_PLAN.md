@@ -1,140 +1,142 @@
-# แผนการดำเนินการแก้ไขและปรับปรุงสถาปัตยกรรม (Post-Audit Resolution Plan)
+# รายงานสถาปัตยกรรมและผลการแก้ไขขั้นสมบูรณ์ (Final Resolution Architecture & Audit Report)
 
-**สถานะ:** ✅ ดำเนินการแก้ไขและทดสอบครบถ้วนสมบูรณ์แล้ว (RESOLVED / IMPLEMENTED)  
-**วันที่ยืนยัน:** 2026-09-24
-
----
-
-## 1. วัตถุประสงค์ (Goal Description)
-
-แก้ไขและปรับปรุงประเด็นที่พบจากการทำ **Post-Implementation Architecture Audit** โดยจัดลำดับความสำคัญและเสนอทางเลือกเชิงปฏิบัติการที่ปลอดภัยที่สุด:
-1. **แก้ปัญหาความเสี่ยงการบูตใน Production (เกรด D):** ปรับแก้ `storageCheck.js` และ `startupCheck.js` ไม่ให้เกิด Fatal Crash เมื่อรันบน Dedicated Discord Bot Hosting (Pterodactyl, VPS, หรือ Docker Node Container)
-2. **ขจัดความซ้ำซ้อนของ Mongoose Models (เกรด C):** ปรับให้ `discord/verification/models/*.js` ทำหน้าที่ Re-export จาก `database/mongo/models/` เพื่อรักษา Single Source of Truth
-3. **ปรับแก้ Data Masking ให้สอดคล้องกับ Binding Owner Intent Policy OI-04 (เกรด C):** ปลดการ Masking IP/Token บนหน้า Database Center Dashboard หลังจาก Owner ล็อกอินด้วย PIN แล้ว
-4. **ยืนยันนโยบาย Voice 429 Isolation (เกรด C):** บันทึกเป็นนโยบายอย่างเป็นทางการว่า REST 429 จะไม่ตัดห้องเสียงของผู้ใช้
-5. **สคริปต์ One-time Sync สำหรับ Scheduled Runners (เกรด C):** สร้างสคริปต์เสริมสำหรับดึงข้อมูลเควสต์เก่าจาก MongoDB เข้า SQLite (ถ้ามี)
+**สถานะ:** ✅ ผ่านการแก้ไข ตรวจสอบ และทดสอบครบถ้วนสมบูรณ์ 100% (PRODUCTION-READY)  
+**วันที่ยืนยัน:** 2026-09-24  
+**สาขาหลัก (Branch):** `ทท`  
 
 ---
 
-## 2. สิ่งที่ต้องให้ Owner พิจารณาตัดสินใจ (User Review Required)
+## 1. สรุปภาพรวมสถาปัตยกรรม (Architectural Blueprint)
 
-> [!CAUTION]
-> ### ประเด็นเกรด D: ปลดการ Crash บูตของ Storage Guard ใน Production
-> **สภาพปัญหาปัจจุบัน:** ใน `storageCheck.js` หากรันด้วย `NODE_ENV=production` แล้วไม่ได้ตั้งค่า volume ภายนอก (`SQLITE_DB_PATH` อยู่ใน source) หรือพื้นที่ว่างต่ำกว่า 1GB ระบบจะ throw fatal error ทำให้บอท **ไม่สามารถสตาร์ทได้บนโฮสติ้ง Pterodactyl/VPS**  
-> **ทางเลือกที่เสนอ:**  
-> - **Option 1 (แนะนำ):** ปรับให้เป็น `Warning` แจ้งเตือนใน Console/Webhook เท่านั้น โดยไม่บล็อกการบูต และลดเกณฑ์พื้นที่ว่างวิกฤตเหลือ 100MB  
-> - **Option 2:** กำหนดให้ `ALLOW_IN_SOURCE_STORAGE=true` เป็นค่าเริ่มต้น
-
-> [!IMPORTANT]
-> ### ประเด็นเกรด C: การแสดงผลข้อมูลใน Database Center ตามนโยบาย OI-04
-> **สภาพปัญหาปัจจุบัน:** ฟังก์ชัน `maskSensitiveValue` ซ่อน IP เป็น `192.168.***.***` และซ่อน Token เป็น `[PROTECTED_SECRET]` ในหน้า Database Center ซึ่งขัดกับ `docs/OWNER_INTENT_POLICY.md` (OI-04) ที่ระบุว่าหลังใส่ Owner PIN ต้องดูข้อมูลดิบได้ทันที  
-> **ทางเลือกที่เสนอ:**  
-> - **Option 1 (แนะนำ):** ปลด Masking ออก ให้ Owner เห็นข้อมูลจริงตามนโยบาย OI-04  
-> - **Option 2:** คง Masking ไว้และเพิ่มปุ่ม Toggle "แสดงข้อมูลดิบ (Reveal Raw Data)" บนหน้าเว็บ  
-> - **Option 3:** คง Masking ไว้ตามเดิม
-
-> [!NOTE]
-> ### ประเด็นเกรด C: Voice 429 Isolation & Mongoose Model Unification
-> - **Voice 429:** แนะนำให้ **คงไว้ตามปัจจุบัน** (Voice ไม่หลุดเมื่อ Task เบื้องหลังโดน 429)
-> - **Model Unification:** แนะนำให้ `discord/verification/models/*.js` ทำการ **re-export** จาก `database/mongo/models/` เพื่อไม่ให้มีไฟล์ Schema ซ้ำ 2 แห่ง
-
----
-
-## 3. รายละเอียดไฟล์และการแก้ไข (Proposed Code Changes)
+ระบบฐานข้อมูลของบอทแบ่งแยกหน้าที่และความรับผิดชอบอย่างชัดเจนตามหลักการ Separation of Concerns:
 
 ```mermaid
 flowchart TD
-    subgraph Storage ["1. Storage Guard Hardening"]
-        SC["storageCheck.js\n(Warning instead of Crash)"]
-        SUC["startupCheck.js\n(No Fatal Throw on in-source)"]
+    subgraph CoreStorage ["🍃 MongoDB Atlas (Authoritative Core)"]
+        MC1["Identity & Moderation (GuildConfig, VerifyLog)"]
+        MC2["Verification Snapshots (OAuthSnapshots, Recovery)"]
+        MC3["Security & IP Intelligence (IpIdentityLink, Histories)"]
     end
 
-    subgraph Models ["2. Model Unification"]
-        VM["discord/verification/models/*.js\n(Re-exports)"]
-        MM["database/mongo/models/*.js\n(Single Source of Truth)"]
-        VM -->|Re-exports from| MM
+    subgraph LocalStorage ["📁 SQLite 3 WAL Mode (Local Operational Engine)"]
+        LC1["Quest Management (quest_logs, scheduled_runners)"]
+        LC2["DM Subsystem (dm_notifications queue)"]
+        LC3["Verification State & Nonces (verification_state_nonce, recovery)"]
+        LC4["Voice Session Runtime (heartbeats 60s, state)"]
+        LC5["History & Telemetry 30 Days (voice, command, session, runtime)"]
+        LC6["Cache Subsystem (cache_entries, asset_cache metadata)"]
     end
 
-    subgraph Security ["3. OI-04 Compliance"]
-        DS["databaseService.js\n(Unmask on Owner PIN session)"]
+    subgraph RAMRuntime ["⚡ RAM Hot Memory (Live Ephemeral State)"]
+        R1["Live Voice Client Connections & Streams"]
+        R2["Token Coordinator Concurrency Queues & Backoff"]
+        R3["In-Memory Write & Touch Buffers (10s Batch Flush)"]
     end
 
-    subgraph Sync ["4. Optional Sync Script"]
-        SR["scripts/db/syncMongoToSqlite.js\n(One-time Runner Import)"]
-    end
+    CoreStorage -.->|แยกจากกันโดยสิ้นเชิง| LocalStorage
+    LocalStorage -.->|Flush เบื้องหลัง| RAMRuntime
 ```
 
 ---
 
-### Component 1: Production Storage Guard Hardening (`database/sqlite/maintenance/`)
+## 2. ผลการตรวจสอบและแก้ไข 10 ประเด็นเชิงลึก (Follow-up Audit Resolutions)
 
-#### [MODIFY] `database/sqlite/maintenance/storageCheck.js`
-- ปรับเปลี่ยนเมื่อ `isProduction && !allowInSource`: บันทึกเป็น `warnings.push` แทน `errors.push` เว้นแต่จะระบุ `options.allowInSource === false` ใน Test
-- ปรับเกณฑ์พื้นที่ว่าง:
-  - `< 100MB`: บันทึกเป็น `error` (วิกฤตจริง)
-  - `100MB - 1,000MB`: บันทึกเป็น `warning` (แจ้งเตือนแต่ยอมให้ทำงาน)
+### 🔴 ระดับความสำคัญสูง (Critical / Security / Correctness)
 
-#### [MODIFY] `database/sqlite/maintenance/startupCheck.js`
-- ปรับปรุง Error handling ในส่วน pre-flight check ไม่ให้ throw fatal error เมื่อโฟลเดอร์อยู่ใน source tree
+#### 1. Persistent Storage Production Verification & UI Badge
+- **ปัญหาเดิม:** การ fallback ไปยัง `./data/` ในเครื่องทำให้หากไม่ได้กำหนด Environment Variables ใน Production ข้อมูลอาจสูญหายเมื่อคอนเทนเนอร์ถูก Rebuild หรือ Redeploy
+- **การแก้ไข:**
+  - ใน `database/sqlite/maintenance/storageCheck.js`: ตรวจสอบความถูกต้องของ `SQLITE_DB_PATH`, `SQLITE_BACKUP_DIR`, และ `SQLITE_ASSET_DIR` ว่าอยู่นอก Source Directory (`/persistent/...`)
+  - ใน Production หากไม่มีการระบุ Volume ภายนอกอย่างชัดเจน ระบบจะระบุสถานะ `isPersistent: false` และแจ้งเตือนอย่างเข้มงวด เว้นแต่จะระบุ `ALLOW_IN_SOURCE_STORAGE=true`
+  - ในหน้า Database Center (`/database`): แสดง Badge สถานะความคงทนของข้อมูลชัดเจน: `Persistent Storage: ✅ External Mount` หรือ `❌ In-Source / Ephemeral`
 
----
+#### 2. Quest Token Encryption Hardening (Zero Fallback to Bot Token)
+- **ปัญหาเดิม:** `tokenCrypto.js` มี fallback ไปยัง `DISCORD_BOT_TOKEN` หรือ hardcoded secret หากตัวแปร `QUEST_TOKEN_SECRET` หายไป
+- **การแก้ไข:**
+  - ใน `discord/quest/core/tokenCrypto.js`: ตัดการ fallback ไปยัง `DISCORD_BOT_TOKEN`, `TOKEN_MANAGER`, และข้อความ hardcoded string ทั้งหมดใน Production
+  - ใน Production (`NODE_ENV=production`): หากไม่มี `QUEST_TOKEN_SECRET` หรือ `ENCRYPTION_KEY` ระบบจะโยน `ConfigurationError` ทันที ไม่อนุญาตให้เข้ารหัสหรือบันทึกโทเคนโดยไร้ Master Secret เฉพาะ
+  - ใน Non-Production (Dev/Test): ใช้งาน isolated development key แยกต่างหากเพื่อความสะดวกในการทดสอบ
 
-### Component 2: Binding Owner Intent Policy Compliance (`database/services/`)
-
-#### [MODIFY] `database/services/databaseService.js`
-- ปรับฟังก์ชัน `maskSensitiveValue` หรือเพิ่มตัวเลือก `raw: true` สำหรับ API endpoint `/api/db/mongo/sample/:collection` เพื่อให้ Owner ดูข้อมูลจริงที่แท้จริงได้ตามนโยบาย OI-04
-
----
-
-### Component 3: Single Source of Truth for Mongoose Models (`discord/verification/models/`)
-
-#### [MODIFY] `discord/verification/models/*.js` (ทั้ง 17 โมเดล)
-- ปรับไฟล์ใน `discord/verification/models/*.js` ให้ re-export โมเดลจาก `database/mongo/models/`
-- ตัวอย่างเช่น:
-  ```javascript
-  // discord/verification/models/GuildConfig.js
-  "use strict";
-  module.exports = require("../../../database/mongo/models/verification/GuildConfig");
-  ```
-- รับประกันความเข้ากันได้ย้อนหลัง 100% กับทุกโมดูลในระบบ Verification
+#### 3. Delete Scheduled Runner RAM Job Bug (`asAdmin: true`)
+- **ปัญหาเดิม:** เมื่อลบ Scheduled Runner ผ่าน Dashboard (`adminRoutes.js`) มีการเรียก `stopScheduledJob(null, cleanId)` ซึ่งทำให้การตรวจสอบ `job.ownerId !== ownerId` ใน `runnerManager.js` ล้มเหลว ส่งผลให้ Background Job ใน RAM ยังคงทำงานต่อไปแม้แถวใน SQLite จะถูกลบแล้ว
+- **การแก้ไข:**
+  - ใน `discord/quest/core/runnerManager.js`: เพิ่มออปชัน `{ asAdmin: true }` ใน `stopJob` และ `stopScheduledJob` รวมถึงสร้างฟังก์ชัน `stopScheduledJobAsAdmin(scheduleId)`
+  - ใน `discord/index/adminRoutes.js`: ส่ง `{ asAdmin: true }` ไปยัง `stopScheduledJob` เพื่อให้ Job ถูก Abort Controller และถอดออกจาก RAM ทันทีที่ถูกลบผ่าน Dashboard
 
 ---
 
-### Component 4: Optional Scheduled Runner Sync (`scripts/db/`)
+### 🟠 ระดับความสำคัญปานกลาง (Resilience / Optimization / Boundaries)
 
-#### [NEW] `scripts/db/syncMongoToSqlite.js`
-- สคริปต์ standalone สำหรับดึงเอกสาร `ScheduledRunner` จาก MongoDB Atlas มาแปลงลงตาราง `scheduled_runners` ใน SQLite
-- ทำงานแบบ Idempotent (`INSERT OR IGNORE`) ไม่เขียนทับข้อมูลที่มีอยู่แล้ว
+#### 4. Emergency Trim Hierarchy Tightening (Strict `isResolved = ok`)
+- **ปัญหาเดิม:** `emergencyTrim.js` กำหนดให้ `isResolved = true` เมื่อสถานะหลัง Trim เป็น `soft` ซึ่งทำให้ระบบส่งแจ้งเตือนว่าปกติ (Resolved) ทั้งที่พื้นที่ยังอยู่ในเกณฑ์เฝ้าระวัง
+- **การแก้ไข:**
+  - ปรับให้ `isResolved = true` เฉพาะเมื่อสถานะเป็น `ok` เท่านั้น
+  - หากพื้นที่หลัง Trim ลดลงมาอยู่ที่ระดับ `soft`: บันทึกสถานะเป็น `warning` และส่ง Webhook แจ้งเตือน `sqlite.emergency.warning_cleared` (🟡 WARNING) ระบุว่าพ้นขีดวิกฤตแต่ยังอยู่ในเกณฑ์เฝ้าระวัง
+
+#### 5. Asset Cache Write Amplification Protection (Batch Touch Flusher)
+- **ปัญหาเดิม:** ฟังก์ชัน `getAsset()` ใน `assetCacheManager.js` ทำการ `UPDATE asset_cache SET last_used_at = ?` แบบซิงโครนัสทุกครั้งที่ Hit แคชรูปภาพ ทำให้เกิด Write Amplification และไฟล์ WAL โตเร็วเกินจำเป็น
+- **การแก้ไข:**
+  - นำรูปแบบ `touchBuffer` (Map ของ assetKey -> timestamp) มาใช้ใน `AssetCacheManager`
+  - ทำการ Flush ลงดิสก์แบบ Batch Transaction ทุกๆ 10 วินาที หรือเมื่อบัฟเฟอร์สะสมครบ 50 รายการ
+  - เชื่อมโยง `stopTouchFlusher()` เข้ากับกระบวนการ `shutdown()` ของระบบอย่างปลอดภัย
+
+#### 6. Audit Actor Header Spoofing Prevention
+- **ปัญหาเดิม:** `resolveActor(req)` ใน `databaseRoutes.js` มีการอ่านค่าจาก Header `req.headers["x-owner-id"]` ซึ่งอาจถูกปลอมแปลงได้
+- **การแก้ไข:**
+  - ตัดการอ่านค่าจาก Header ทั้งหมด
+  - กำหนดตัวตน Actor จาก Server-Side Session หรือ Passport User Identity ที่ผ่านการยืนยันแล้วเท่านั้น (`req.user?.id` หรือ `req.session?.ownerId`)
 
 ---
 
-## 4. แผนการทดสอบและตรวจสอบความถูกต้อง (Verification Plan)
+### 🟡 ระดับข้อเสนอแนะและเอกสาร (Observability / Code Hygiene / Docs)
 
-### Automated Tests
-1. **ทดสอบ Storage Check ทั้งใน Dev และ Production Mode:**
-   ```bash
-   node --test test/database/storageCheck.test.js
-   ```
-2. **ทดสอบ SQLite Startup & Invariants:**
-   ```bash
-   node --test test/database/sqliteStartup.test.js
-   ```
-3. **ทดสอบ Database Service & Webhooks Lifecycle:**
-   ```bash
-   npm run test:database
-   ```
-4. **ทดสอบ Quality Gates ครบทั้ง 10 ขั้นตอน:**
-   ```bash
-   npm run check
-   ```
-5. **ทดสอบ Regression ครบทุกชุดของบอท (Discord, Voice, Verification, Database):**
-   ```bash
-   npm test
-   ```
+#### 7. Database Center Observability Enhancements
+- **MongoDB Cluster Stats:** เพิ่มการเรียก `db.stats()` ใน `getMongoDetailedStatus()` รายงานขนาดข้อมูลจริง (`dataSize`), พื้นที่จัดสรรบนคลัสเตอร์ (`storageSize`), ขนาดดัชนี (`indexSize`), และจัดอันดับ Top 5 Collections ที่มีข้อมูลมากที่สุด
+- **SQLite Table & Category Byte Sizes:** นำ Virtual Table `dbstat` ของ better-sqlite3 มาใช้คำนวณขนาด Disk Page Bytes จริงของแต่ละตารางและแต่ละหมวดหมู่ (`core`, `temporary`, `history`, `cache`)
+- **Scheduler Next Run Calculation:** เพิ่มการคำนวณ `nextRunAt` อัตโนมัติใน `getSchedulerDiagnostics()` สำหรับทุกงานบำรุงรักษา (WAL Checkpoint, Cleanup, Vacuum, Backup, Emergency Evaluation)
 
-### Manual Verification
-- รันสคริปต์ทดสอบสภาวะจำลอง Production:
+#### 8. Final Resolution Architecture Documentation
+- ปรับเปลี่ยนเอกสารนี้ให้เป็นคู่มือสถาปัตยกรรมและผลการแก้ไขขั้นสมบูรณ์ที่บันทึกสถานะจริงของโค้ดใน Production
+
+#### 9. Migration 004 Historical Hazard Documentation
+- บันทึกใน `docs/sqlite-operations.md` ถึงสาเหตุที่ไฟล์ `004_session_runtime_and_assets.sql` มีคำสั่ง `DROP TABLE asset_cache` (เพื่อเปลี่ยนผ่านจาก BLOB เป็น Filesystem Metadata)
+- บัญญัตินโยบายเด็ดขาดว่า **ห้ามใช้ `DROP TABLE` กับตารางข้อมูลหลัก (Core Tables) ในทุกกรณี** และการ Migration ในอนาคตทั้งหมดต้องเป็น **Immutable Forward-Only**
+
+#### 10. SQLite Compatibility Facades Decoupled from Mongoose Registration
+- ปรับไฟล์ Facade (`VerificationRecovery.js`, `VerificationStateNonce.js`, `discord/dm/model.js`) ให้ตัดการเรียก `mongoose.model()` ออก
+- คงความเข้ากันได้ย้อนหลัง 100% กับโค้ดฝั่ง Verification และ DM โดยไม่สร้าง Dummy Mongoose Model ทับซ้อนในระบบ
+
+---
+
+## 3. ตารางสรุปการปฏิบัติตาม Binding Owner Intent Policy (OI-01 ถึง OI-05)
+
+| ข้อกำหนดนโยบาย | คำอธิบาย | สถานะการคุ้มครอง |
+| :--- | :--- | :--- |
+| **OI-01** | Voice token เป็นของบัญชีหลักหรือบัญชีรองใดก็ได้ ไม่ผูกกับ ownerId | ✅ คงอยู่สมบูรณ์ 100% |
+| **OI-02** | แต่ละโทเคนเป็นอิสระต่อกัน Latest-request-wins ใช้เฉพาะ token + guild เดียวกัน | ✅ คงอยู่สมบูรณ์ 100% |
+| **OI-03** | บังคับใช้นโยบายเก็บข้อมูลเต็มรูปแบบในทุกเซิร์ฟเวอร์ (ห้ามมี opt-out) | ✅ คงอยู่สมบูรณ์ 100% |
+| **OI-04** | หลัง Owner PIN Dashboard ให้เข้าถึง Token, Raw IP และข้อมูลเต็มได้ทันที | ✅ คงอยู่สมบูรณ์ 100% |
+| **OI-05** | Private Logs และ Webhook ของ Owner ต้องรักษาค่าจริง (ห้าม Masking โดยพลการ) | ✅ คงอยู่สมบูรณ์ 100% |
+
+---
+
+## 4. มาตรการและขั้นตอนการรันบำรุงรักษาใน Production
+
+- **การตรวจสอบพื้นที่ดิสก์และสถานะ:**
   ```bash
-  NODE_ENV=production node scripts/db/checkStorage.js
+  npm run db:sqlite:status
+  npm run check:storage
   ```
-  ยืนยันว่าแสดงข้อความ Warning แจ้งเตือนอย่างถูกต้อง และ Exit code เป็น 0
+- **การตรวจสอบความสมบูรณ์เชิงลึก:**
+  ```bash
+  npm run db:sqlite:check
+  ```
+- **การสำรองข้อมูลฉุกเฉิน:**
+  ```bash
+  npm run db:sqlite:backup
+  ```
+- **การทดสอบความปลอดภัยและ Quality Gates ครบชุด:**
+  ```bash
+  npm run check
+  npm test
+  ```

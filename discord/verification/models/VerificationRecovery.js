@@ -26,14 +26,10 @@ const schema = new mongoose.Schema({
 
 schema.index({ status: 1, updatedAt: 1 });
 
-const MongooseRecoveryModel = mongoose.models.VerificationRecovery ||
-    mongoose.model("VerificationRecovery", schema);
-
+// Note: Source of truth is SQLite VerificationRecoveryRepository.
+// We preserve schema for contract inspection without calling mongoose.model("VerificationRecovery", schema).
 const VerificationRecoveryFacade = {
     schema,
-    get db() {
-        return MongooseRecoveryModel.db;
-    },
     async create(data) {
         return getVerificationRecoveryRepository().create(data);
     },

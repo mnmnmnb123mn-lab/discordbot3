@@ -64,6 +64,7 @@ async function shutdown() {
 
     try {
         getCacheManager().stopTouchFlusher();
+        getAssetCacheManager().stopTouchFlusher();
         getVoiceEventRepository().stopFlusher();
         getCommandEventRepository().stopFlusher();
         getSessionEventRepository().stopFlusher();

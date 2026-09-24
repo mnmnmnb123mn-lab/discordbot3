@@ -2,13 +2,26 @@
 
 const crypto = require('node:crypto');
 
+class ConfigurationError extends Error {
+    constructor(message) {
+        super(message);
+        this.name = 'ConfigurationError';
+    }
+}
+
 function getSecretKey() {
-    const raw = process.env.QUEST_TOKEN_SECRET ||
-        process.env.ENCRYPTION_KEY ||
-        process.env.ENCRYPTION_SECRET ||
-        process.env.TOKEN_MANAGER ||
-        process.env.DISCORD_BOT_TOKEN ||
-        'quest_secure_master_secret_key_2026';
+    const isProduction = process.env.NODE_ENV === 'production';
+    const raw = (process.env.QUEST_TOKEN_SECRET && process.env.QUEST_TOKEN_SECRET.trim()) ||
+        (process.env.ENCRYPTION_KEY && process.env.ENCRYPTION_KEY.trim()) ||
+        (process.env.ENCRYPTION_SECRET && process.env.ENCRYPTION_SECRET.trim());
+
+    if (!raw) {
+        if (isProduction) {
+            throw new ConfigurationError('[QUEST_CRYPTO] ❌ Missing QUEST_TOKEN_SECRET or ENCRYPTION_KEY in production. Encrypting or storing tokens without an explicit encryption master secret is strictly prohibited.');
+        }
+        return 'dev_quest_secret_key_non_production_only_32b!';
+    }
+
     if (raw.length < 16) {
         return raw.padEnd(16, '0');
     }
@@ -79,5 +92,6 @@ module.exports = {
     encryptToken,
     decryptToken,
     maskToken,
-    getSecretKey
+    getSecretKey,
+    ConfigurationError
 };

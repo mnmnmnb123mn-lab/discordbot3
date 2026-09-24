@@ -27,20 +27,18 @@ const dmNotificationSchema = new mongoose.Schema({
 
 dmNotificationSchema.index({ status: 1, nextAttemptAt: 1, priorityRank: 1, createdAt: 1 });
 
-const MongooseDmModel = mongoose.models.DmNotification ||
-    mongoose.model("DmNotification", dmNotificationSchema);
-
-// Delegate model operations to SQLite DmNotificationRepository
+// Note: Source of truth is SQLite DmNotificationRepository.
+// We preserve dmNotificationSchema for contract inspection without calling mongoose.model("DmNotification", ...).
 const DmNotificationFacade = {
     schema: dmNotificationSchema,
-    get db() {
-        return MongooseDmModel.db;
-    },
     async create(data) {
         return getDmNotificationRepository().create(data);
     },
     async updateOne(filter, update, options) {
         return getDmNotificationRepository().updateOne(filter, update, options);
+    },
+    async findOne(filter) {
+        return getDmNotificationRepository().findOne(filter);
     },
     async findOneAndUpdate(filter, update, options) {
         const repo = getDmNotificationRepository();

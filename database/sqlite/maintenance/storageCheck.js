@@ -27,9 +27,26 @@ function evaluateStoragePaths(options = {}) {
     const assetInSource = isPathInside(resolvedAssetDir, repoRoot);
     const hasInSource = dbInSource || backupInSource || assetInSource;
 
+    const explicitDbPath = Boolean(options.dbPath || (process.env.SQLITE_DB_PATH && process.env.SQLITE_DB_PATH.trim()));
+    const explicitBackupDir = Boolean(options.backupDir || (process.env.SQLITE_BACKUP_DIR && process.env.SQLITE_BACKUP_DIR.trim()));
+    const explicitAssetDir = Boolean(options.assetDir || (process.env.SQLITE_ASSET_DIR && process.env.SQLITE_ASSET_DIR.trim()));
+    const allowInSource = process.env.ALLOW_IN_SOURCE_STORAGE === "true";
+
+    const missingExplicitEnvs = [];
+    if (!explicitDbPath) missingExplicitEnvs.push("SQLITE_DB_PATH");
+    if (!explicitBackupDir) missingExplicitEnvs.push("SQLITE_BACKUP_DIR");
+    if (!explicitAssetDir) missingExplicitEnvs.push("SQLITE_ASSET_DIR");
+
+    // Persistent storage is verified when no paths reside inside source tree and explicit external paths are configured
+    const isPersistent = !hasInSource && (missingExplicitEnvs.length === 0 || !isProduction);
+
     const results = {
         ok: true,
         isProduction,
+        isPersistent,
+        allowInSource,
+        missingExplicitEnvs,
+        hasInSource,
         errors: [],
         warnings: [],
         pathWarning: false,
@@ -39,9 +56,9 @@ function evaluateStoragePaths(options = {}) {
         readable: true,
         writable: true,
         paths: {
-            database: { path: resolvedDbPath, dir: resolvedDbDir, inSource: dbInSource },
-            backup: { path: resolvedBackupDir, inSource: backupInSource },
-            assetCache: { path: resolvedAssetDir, inSource: assetInSource }
+            database: { path: resolvedDbPath, dir: resolvedDbDir, inSource: dbInSource, explicit: explicitDbPath },
+            backup: { path: resolvedBackupDir, inSource: backupInSource, explicit: explicitBackupDir },
+            assetCache: { path: resolvedAssetDir, inSource: assetInSource, explicit: explicitAssetDir }
         },
         permissions: {},
         freeSpace: {}
@@ -53,8 +70,8 @@ function evaluateStoragePaths(options = {}) {
         { name: "Asset Cache Directory", dir: resolvedAssetDir, key: "assetCache" }
     ];
 
-    // 1. Path Placement Assessment (Warning & Architecture Recommendation — Never Fatal Crash)
-    if (hasInSource) {
+    // 1. Path Placement & Persistence Assessment
+    if (!isPersistent) {
         results.persistentRecommended = true;
         results.pathWarning = true;
         const inSourceNames = [];
@@ -62,10 +79,19 @@ function evaluateStoragePaths(options = {}) {
         if (backupInSource) inSourceNames.push("backup");
         if (assetInSource) inSourceNames.push("asset-cache");
 
-        const msg = isProduction
-            ? `[PRODUCTION_STORAGE] ⚠️ Storage path(s) [${inSourceNames.join(", ")}] reside inside source directory (${repoRoot}). In production environments, an external persistent mount (e.g. /persistent/...) is strongly recommended to protect data during container rebuilds.`
-            : `[STORAGE] ℹ️ Storage path(s) [${inSourceNames.join(", ")}] reside in local workspace. Ensure persistent volumes are mounted before deploying to production.`;
-        results.warnings.push(msg);
+        if (isProduction) {
+            const missingDetails = missingExplicitEnvs.length > 0
+                ? `Missing explicit external path ENV(s): [${missingExplicitEnvs.join(", ")}]. `
+                : "";
+            const sourceDetails = inSourceNames.length > 0
+                ? `Storage path(s) [${inSourceNames.join(", ")}] reside inside source directory (${repoRoot}). `
+                : "";
+            const msg = `[PRODUCTION_STORAGE] ⚠️ Production storage is not using verified external persistent mount. ${missingDetails}${sourceDetails}In containerized production (Pterodactyl/Docker/VPS), data may be lost on container rebuild or redeploy unless external persistent mounts (e.g. /persistent/...) are configured or ALLOW_IN_SOURCE_STORAGE=true is explicitly set.`;
+            results.warnings.push(msg);
+        } else {
+            const msg = `[STORAGE] ℹ️ Storage path(s) [${inSourceNames.join(", ") || "default"}] reside in local workspace. Ensure persistent volumes are mounted before deploying to production.`;
+            results.warnings.push(msg);
+        }
     }
 
     // 2. Ensure directories exist & verify Read/Write permissions (Actual Filesystem Failure -> CRITICAL)
