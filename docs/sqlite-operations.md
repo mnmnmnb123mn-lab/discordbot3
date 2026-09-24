@@ -74,12 +74,20 @@ Updated: 2026-09-23
    - ใช้ SQLite Native Backup API ไม่ล็อกระบบ บอททำงานต่อได้ตามปกติ
    - **การจำกัดจำนวนชุด (Rotation)**: เก็บไฟล์สำรองในเครื่องเพียง **2 ชุดล่าสุด** เป็นค่าเริ่มต้น เพื่อประหยัดพื้นที่ดิสก์
    - **การตรวจพื้นที่ว่าง (Disk Free Space Check)**: ตรวจสอบพื้นที่ว่างของ Filesystem ก่อนเริ่ม Backup เสมอ (ต้องมีที่ว่างอย่างน้อย 1.5 เท่าของขนาดฐานข้อมูล) หากไม่พอจะยกเลิกทันทีเพื่อป้องกันดิสก์เต็ม
-2. **Safe Restore Safeguards**:
+2. **Safe Restore Safeguards & Auto-Rollback**:
    - คำสั่ง: `node scripts/db/restoreSqlite.js --source ./backups/sqlite_backup_<timestamp>.sqlite`
-   - ตรวจสอบ `PRAGMA integrity_check` ของไฟล์สำรองก่อนเริ่มแตะต้องฐานข้อมูลจริง
-   - สร้างไฟล์สำรองย้อนกลับ (`.pre-restore-<timestamp>.bak`) ของฐานข้อมูลเดิมอัตโนมัติ
+   - ตรวจสอบ `PRAGMA integrity_check` ของไฟล์สำรองก่อนเริ่มแตะต้องฐานข้อมูลจริง (Pre-flight Verification)
+   - สร้างไฟล์สำรองย้อนกลับ (`.pre-restore-<timestamp>.bak`) ของฐานข้อมูลเดิมอัตโนมัติ โดยหมุนเวียนเก็บไว้ไม่เกิน 2 ชุดล่าสุด (Auto-pruning)
+   - **Auto-Rollback**: หากการกู้คืนล้มเหลว หรือตรวจสอบ `PRAGMA integrity_check` ของไฟล์ปลายทางไม่ผ่าน ระบบจะกู้คืนข้อมูลกลับจากไฟล์ `.bak` ทันทีโดยอัตโนมัติ เพื่อป้องกันฐานข้อมูลเสียหาย
    - ลบไฟล์ `-wal` และ `-shm` เดิมทิ้งเพื่อป้องกันการ Replay Log ทับไฟล์ใหม่
-   - ตรวจสอบความสมบูรณ์หลังการกู้คืนเสร็จสิ้น
+   - ตรวจสอบความสมบูรณ์หลังการกู้คืนเสร็จสิ้น (Post-flight Verification)
+
+3. **Schema Migrations Lineage (`PRAGMA user_version = 4`)**:
+   - `001_initial_core.sql`: Core state tables, tokens, DMs, nonces, settings.
+   - `002_history_events.sql`: Telemetry & history tables (voice, commands, sessions).
+   - `003_cache_subsystem.sql`: Generic key-value cache tables with namespace.
+   - `004_session_runtime_and_assets.sql`: Voice session runtime heartbeats & lean filesystem asset cache metadata.
+   - ทุกครั้งที่รัน migration สำเร็จ ระบบจะบันทึก checksum และกำหนด `PRAGMA user_version = 4` เพื่อรับประกันความเข้ากันได้ของสถาปัตยกรรม (Bootstrap Lineage)
 
 ---
 

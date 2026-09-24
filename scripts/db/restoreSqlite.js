@@ -28,13 +28,39 @@ function parseArgs() {
     return { sourceBackup, targetDb, force };
 }
 
-async function main() {
+function prunePreRestoreBackups(targetPath, maxKeep = 2) {
+    try {
+        const targetDir = path.dirname(targetPath);
+        const baseName = path.basename(targetPath);
+        if (!fs.existsSync(targetDir)) return;
+        const prefix = `${baseName}.pre-restore-`;
+        const files = fs.readdirSync(targetDir)
+            .filter(f => f.startsWith(prefix) && f.endsWith(".bak"))
+            .map(f => {
+                const fullPath = path.join(targetDir, f);
+                const stat = fs.statSync(fullPath);
+                return { fullPath, mtimeMs: stat.mtimeMs };
+            })
+            .sort((a, b) => b.mtimeMs - a.mtimeMs);
+
+        if (files.length > maxKeep) {
+            for (const item of files.slice(maxKeep)) {
+                try {
+                    fs.unlinkSync(item.fullPath);
+                    console.log(`[RESTORE-SQLITE]     Pruned old pre-restore safety backup: ${path.basename(item.fullPath)}`);
+                } catch (_) {}
+            }
+        }
+    } catch (err) {
+        console.warn(`[RESTORE-SQLITE] ⚠️ Failed to prune old pre-restore backups: ${err.message}`);
+    }
+}
+
+async function restoreDatabase({ sourceBackup, targetDb, force = false }) {
     console.log("[RESTORE-SQLITE] 🔄 Starting SQLite restore procedure...");
-    const { sourceBackup, targetDb, force } = parseArgs();
 
     if (!sourceBackup) {
-        console.error("❌ Usage: node scripts/db/restoreSqlite.js --source <backup_file.sqlite> [--target <target_db.sqlite>] [--force]");
-        process.exit(1);
+        throw new Error("Missing required source backup path");
     }
 
     const sourcePath = path.resolve(sourceBackup);
@@ -44,14 +70,12 @@ async function main() {
     console.log(`[RESTORE-SQLITE] 🎯 Target Path:   ${targetPath}`);
 
     if (!fs.existsSync(sourcePath)) {
-        console.error(`[RESTORE-SQLITE] ❌ Source backup file does not exist: ${sourcePath}`);
-        process.exit(1);
+        throw new Error(`Source backup file does not exist: ${sourcePath}`);
     }
 
     const sourceStat = fs.statSync(sourcePath);
     if (sourceStat.size === 0) {
-        console.error(`[RESTORE-SQLITE] ❌ Source backup file is empty (0 bytes): ${sourcePath}`);
-        process.exit(1);
+        throw new Error(`Source backup file is empty (0 bytes): ${sourcePath}`);
     }
 
     // Step 1: Pre-flight integrity verification on source backup
@@ -66,12 +90,10 @@ async function main() {
         }
         const userVersion = sourceDb.pragma("user_version", { simple: true });
         console.log(`[RESTORE-SQLITE]     Source verified intact (PRAGMA user_version = ${userVersion}).`);
-    } catch (err) {
-        console.error(`[RESTORE-SQLITE] ❌ Source backup is corrupted or invalid: ${err.message}`);
-        if (sourceDb) sourceDb.close();
-        process.exit(1);
     } finally {
-        if (sourceDb) sourceDb.close();
+        if (sourceDb) {
+            try { sourceDb.close(); } catch (_) {}
+        }
     }
 
     // Step 2: Ensure connection is closed and backup existing target
@@ -83,10 +105,12 @@ async function main() {
         fs.mkdirSync(targetDir, { recursive: true });
     }
 
+    let rollbackBakPath = null;
     if (fs.existsSync(targetPath)) {
-        const rollbackBakPath = `${targetPath}.pre-restore-${Date.now()}.bak`;
+        rollbackBakPath = `${targetPath}.pre-restore-${Date.now()}.bak`;
         fs.copyFileSync(targetPath, rollbackBakPath);
         console.log(`[RESTORE-SQLITE]     Pre-restore safety backup created: ${rollbackBakPath}`);
+        prunePreRestoreBackups(targetPath, 2);
 
         // Clean stale WAL and SHM files to prevent WAL corruption
         const walPath = `${targetPath}-wal`;
@@ -112,19 +136,69 @@ async function main() {
         console.log("[RESTORE-SQLITE]     Target verified intact.");
     } catch (err) {
         console.error(`[RESTORE-SQLITE] ❌ Restored target verification failed: ${err.message}`);
-        if (targetCheckDb) targetCheckDb.close();
-        process.exit(1);
+        if (targetCheckDb) {
+            try { targetCheckDb.close(); } catch (_) {}
+            targetCheckDb = null;
+        }
+
+        if (rollbackBakPath && fs.existsSync(rollbackBakPath)) {
+            console.warn(`[RESTORE-SQLITE] ⚠️ Auto-rollback initiated: restoring from safety backup ${rollbackBakPath}...`);
+            try {
+                fs.copyFileSync(rollbackBakPath, targetPath);
+                const walPath = `${targetPath}-wal`;
+                const shmPath = `${targetPath}-shm`;
+                if (fs.existsSync(walPath)) try { fs.unlinkSync(walPath); } catch (_) {}
+                if (fs.existsSync(shmPath)) try { fs.unlinkSync(shmPath); } catch (_) {}
+                console.log("[RESTORE-SQLITE] 🔄 Auto-rollback completed successfully. Original database state restored.");
+            } catch (rbErr) {
+                console.error(`[RESTORE-SQLITE] 🚨 Auto-rollback failed: ${rbErr.message}`);
+            }
+        }
+        throw err;
     } finally {
-        if (targetCheckDb) targetCheckDb.close();
+        if (targetCheckDb) {
+            try { targetCheckDb.close(); } catch (_) {}
+        }
     }
 
     console.log("------------------------------------------------------------");
     console.log("[RESTORE-SQLITE] ✅ Database restored successfully!");
     console.log(`[RESTORE-SQLITE] Target: ${targetPath}`);
     console.log("------------------------------------------------------------");
+
+    return {
+        ok: true,
+        sourcePath,
+        targetPath,
+        rollbackBakPath
+    };
 }
 
-main().catch(err => {
-    console.error("[RESTORE-SQLITE] Unhandled rejection:", err);
-    process.exit(1);
-});
+async function main() {
+    const { sourceBackup, targetDb, force } = parseArgs();
+    if (!sourceBackup) {
+        console.error("❌ Usage: node scripts/db/restoreSqlite.js --source <backup_file.sqlite> [--target <target_db.sqlite>] [--force]");
+        process.exit(1);
+    }
+
+    try {
+        await restoreDatabase({ sourceBackup, targetDb, force });
+    } catch (err) {
+        console.error(`[RESTORE-SQLITE] ❌ Restore failed: ${err.message}`);
+        process.exit(1);
+    }
+}
+
+if (require.main === module) {
+    main().catch(err => {
+        console.error("[RESTORE-SQLITE] Unhandled rejection:", err);
+        process.exit(1);
+    });
+}
+
+module.exports = {
+    parseArgs,
+    prunePreRestoreBackups,
+    restoreDatabase
+};
+

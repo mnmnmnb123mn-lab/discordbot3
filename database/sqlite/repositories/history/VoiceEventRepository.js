@@ -1,7 +1,7 @@
 "use strict";
 
 const { getDatabase } = require("../../connection");
-const { resolvePriority, evictWithPriority, notifyBufferDropped } = require("./bufferPolicy");
+const { resolvePriority, evictWithPriority, notifyBufferDropped, sanitizeDetails } = require("./bufferPolicy");
 
 class VoiceEventRepository {
     constructor(db = null) {
@@ -49,6 +49,14 @@ class VoiceEventRepository {
 
     record(event, critical = false) {
         const priority = resolvePriority(event, critical);
+        let cleanMetadataJson = null;
+        if (event.metadata && typeof event.metadata === "object") {
+            const sanitized = sanitizeDetails(event.metadata);
+            cleanMetadataJson = JSON.stringify(sanitized).slice(0, 4096);
+        } else if (typeof event.metadataJson === "string") {
+            cleanMetadataJson = event.metadataJson.slice(0, 4096);
+        }
+
         const item = {
             priority,
             occurredAt: event.occurredAt ? new Date(event.occurredAt).getTime() : Date.now(),
@@ -57,8 +65,8 @@ class VoiceEventRepository {
             accountId: event.accountId ? String(event.accountId) : null,
             guildId: event.guildId ? String(event.guildId) : null,
             voiceId: event.voiceId ? String(event.voiceId) : null,
-            detail: event.detail ? String(event.detail) : null,
-            metadataJson: event.metadata ? JSON.stringify(event.metadata) : null
+            detail: event.detail ? String(event.detail).slice(0, 1000) : null,
+            metadataJson: cleanMetadataJson
         };
 
         // P0: Critical Security / Corruption / Backup Failure - NEVER drop, insert immediately

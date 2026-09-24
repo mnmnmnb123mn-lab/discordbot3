@@ -3,6 +3,7 @@
 const fs = require("node:fs");
 const path = require("node:path");
 const crypto = require("node:crypto");
+const Database = require("better-sqlite3");
 const { getFilesystemFreeSpace } = require("./quota");
 
 const DEFAULT_MAX_BACKUPS = 2;
@@ -81,6 +82,30 @@ async function createBackup(db, options = {}) {
 
     const stat = fs.statSync(targetPath);
     const sha256 = await computeFileSha256(targetPath);
+
+    // Post-backup verification: verify backup file physically opens and passes quick_check
+    let verifyDb = null;
+    let verified = false;
+    let quickCheckOutput = null;
+    try {
+        verifyDb = new Database(targetPath, { readonly: true, fileMustExist: true });
+        const checkRows = verifyDb.pragma("quick_check(1)");
+        verified = checkRows.length === 1 && (checkRows[0].quick_check === "ok" || checkRows[0] === "ok");
+        quickCheckOutput = checkRows;
+    } catch (err) {
+        verified = false;
+        quickCheckOutput = [err.message];
+    } finally {
+        if (verifyDb) {
+            try { verifyDb.close(); } catch (_) {}
+        }
+    }
+
+    if (!verified) {
+        try { fs.unlinkSync(targetPath); } catch (_) {}
+        throw new Error(`ไฟล์สำรองข้อมูลไม่ผ่านการตรวจสอบความสมบูรณ์ (Quick Check Failed): ${JSON.stringify(quickCheckOutput)}`);
+    }
+
     const durationMs = Date.now() - startTime;
 
     // Apply rotation to keep storage bounded (default: 2 sets)
@@ -89,6 +114,7 @@ async function createBackup(db, options = {}) {
 
     return {
         ok: true,
+        verified: true,
         path: targetPath,
         filename,
         sizeBytes: stat.size,

@@ -63,17 +63,27 @@ async function getDatabaseOverview() {
     const dbPath = getCurrentDbPath() || resolveDbPath();
     const db = getDatabase();
 
-    // 1. SQLite Status & Quota
+    // 1. SQLite Status & Quota + Filesystem Health Aggregation
     const quota = evaluateQuota(dbPath);
+    const storage = evaluateStoragePaths({ dbPath });
+    const emergency = evaluateEmergencyThresholds(dbPath);
+
     let sqliteHealth = "ok"; // 'ok' | 'check' | 'warning' | 'error'
     let sqliteStatusLabel = "🟢 ปกติ";
+    let degradedReason = quota.degradedReason;
 
-    if (quota.status === "hard") {
+    if (storage.filesystemCritical || emergency.isEmergency || quota.status === "hard") {
         sqliteHealth = "error";
-        sqliteStatusLabel = "🔴 มีปัญหา (Hard Limit)";
-    } else if (quota.status === "critical") {
+        sqliteStatusLabel = "🔴 มีปัญหา (Critical / Disk)";
+        if (storage.filesystemCritical) {
+            degradedReason = storage.errors[0] || "พื้นที่จัดเก็บข้อมูลบนดิสก์วิกฤต หรือไม่สามารถเขียนไฟล์ได้";
+        }
+    } else if (storage.filesystemWarning || quota.status === "critical") {
         sqliteHealth = "warning";
         sqliteStatusLabel = "🟠 ใกล้ถึงขีดจำกัด";
+        if (storage.filesystemWarning) {
+            degradedReason = storage.warnings[0] || degradedReason;
+        }
     } else if (quota.status === "soft") {
         sqliteHealth = "check";
         sqliteStatusLabel = "🟡 ควรตรวจสอบ";
@@ -153,7 +163,14 @@ async function getDatabaseOverview() {
                 footprintMb: quota.footprint.totalMb,
                 hardLimitMb: quota.limits.hardMb,
                 usedPercent: parseFloat(((quota.footprint.totalMb / quota.limits.hardMb) * 100).toFixed(1)),
-                degradedReason: quota.degradedReason,
+                degradedReason,
+                storage: {
+                    freeSpaceMb: storage.freeSpace?.availableMb ?? null,
+                    percentFree: storage.freeSpace?.percentFree ?? null,
+                    filesystemCritical: storage.filesystemCritical,
+                    filesystemWarning: storage.filesystemWarning,
+                    pathWarning: storage.pathWarning
+                },
                 records: {
                     total: totalRecords,
                     core: coreCount,
@@ -259,17 +276,25 @@ async function getSqliteDetailedStatus() {
             FROM maintenance_runs
             ORDER BY id DESC LIMIT 5
         `).all();
-        maintenanceHistory = rows.map(r => ({
-            id: r.id,
-            type: r.run_type,
-            run_type: r.run_type,
-            status: r.status,
-            details: r.details_json ? JSON.parse(r.details_json) : null,
-            started_at: r.started_at,
-            completed_at: r.finished_at,
-            finished_at: r.finished_at,
-            duration_ms: (r.finished_at && r.started_at) ? (r.finished_at - r.started_at) : 0
-        }));
+        maintenanceHistory = rows.map(r => {
+            let parsed = null;
+            try {
+                parsed = r.details_json ? JSON.parse(r.details_json) : null;
+            } catch (_) {}
+            return {
+                id: r.id,
+                type: r.run_type,
+                run_type: r.run_type,
+                actor: parsed?.actor || "system",
+                status: r.status,
+                details: parsed?.metadata || parsed,
+                error: parsed?.error || null,
+                started_at: r.started_at,
+                completed_at: r.finished_at,
+                finished_at: r.finished_at,
+                duration_ms: (r.finished_at && r.started_at) ? (r.finished_at - r.started_at) : 0
+            };
+        });
     } catch (_) {}
 
     // Backups
@@ -324,18 +349,78 @@ function notifyIntegrityCorrupted(intRows, fkRows, dbPath = null) {
     } catch (_) {}
 }
 
+function recordMaintenanceAudit(db, {
+    action = "maintenance",
+    actor = "owner",
+    invoker = null,
+    startTime = Date.now(),
+    finishedAt = Date.now(),
+    status = "success",
+    details = {},
+    metadata = null,
+    error = null,
+    target = "sqlite",
+    durationMs = null
+} = {}) {
+    const resolvedActor = actor || invoker || "owner";
+    const duration = durationMs !== null ? durationMs : (finishedAt - startTime);
+    const auditPayload = {
+        actor: resolvedActor,
+        action,
+        target: target || "sqlite",
+        status,
+        durationMs: duration,
+        error: error ? (error.message || String(error)) : (details?.error || null),
+        metadata: metadata || details || {}
+    };
+
+    try {
+        if (!db || typeof db.prepare !== "function") {
+            throw new Error("Invalid or uninitialized database connection");
+        }
+        db.prepare(`
+            INSERT INTO maintenance_runs (run_type, started_at, finished_at, status, details_json)
+            VALUES (?, ?, ?, ?, ?)
+        `).run(action, startTime, finishedAt, status, JSON.stringify(auditPayload));
+        return { ok: true, audit: auditPayload };
+    } catch (auditErr) {
+        console.warn(`[DATABASE_AUDIT] ⚠️ Failed to persist maintenance audit for action "${action}": ${auditErr.message}`);
+        try {
+            sendWebhookEvent({
+                target: "ALERT",
+                severity: "WARNING",
+                category: "DATA",
+                code: "database.audit.write_failed",
+                title: "⚠️ บันทึก Audit Log ฐานข้อมูลไม่สำเร็จ",
+                description: `ไม่สามารถบันทึกประวัติการบำรุงรักษาลงตาราง maintenance_runs ได้:\n• Action: ${action}\n• Actor: ${resolvedActor}\n• Error: ${auditErr.message}`,
+                context: {
+                    "Action": action,
+                    "Actor": resolvedActor,
+                    "Audit Error": auditErr.message,
+                    "Status": status
+                }
+            }).catch(() => {});
+        } catch (_) {}
+        return { ok: false, error: auditErr.message };
+    }
+}
+
 async function executeSqliteAction(action, options = {}, invoker = "owner") {
     const db = getDatabase();
     const startTime = Date.now();
     let result = { ok: false, action, message: "" };
 
-    const recordAudit = (status, details) => {
-        try {
-            db.prepare(`
-                INSERT INTO maintenance_runs (run_type, started_at, finished_at, status, details_json)
-                VALUES (?, ?, ?, ?, ?)
-            `).run(action, startTime, Date.now(), status, JSON.stringify(details));
-        } catch (_) {}
+    const recordAudit = (status, details, error = null) => {
+        return recordMaintenanceAudit(db, {
+            action,
+            invoker,
+            startTime,
+            finishedAt: Date.now(),
+            status,
+            details,
+            error,
+            target: options?.target || "sqlite"
+        });
     };
 
     try {
@@ -493,7 +578,7 @@ async function executeSqliteAction(action, options = {}, invoker = "owner") {
                     emergency,
                     storage,
                     message: passed
-                        ? `Full Health Check (Read-Only) ผ่าน 100%: SQLite ทำงานปกติ, Schema Version ${schemaVer}, พื้นที่ ${quota.footprint.totalMb} MB (${quota.status})`
+                        ? `Diagnostic Check (No Operational Data Mutation) ผ่าน 100%: SQLite ทำงานปกติ, Schema Version ${schemaVer}, พื้นที่ ${quota.footprint.totalMb} MB (${quota.status})`
                         : "ตรวจพบข้อผิดพลาดหรือคำเตือนในการตรวจสอบความสมบูรณ์แบบละเอียด"
                 };
                 recordAudit(passed ? "success" : "warning", result);
@@ -505,7 +590,7 @@ async function executeSqliteAction(action, options = {}, invoker = "owner") {
         }
     } catch (err) {
         result = { ok: false, action, error: err.message, message: `เกิดข้อผิดพลาด: ${err.message}` };
-        recordAudit("error", result);
+        recordAudit("error", result, err);
     }
 
     result.durationMs = Date.now() - startTime;
@@ -857,6 +942,8 @@ module.exports = {
     getMongoCollectionSample,
     maskSensitiveValue,
     notifyIntegrityCorrupted,
+    recordMaintenanceAudit,
+    recordAudit: recordMaintenanceAudit,
     CONSOLE_COMMANDS,
     ALLOWED_MONGO_COLLECTIONS
 };

@@ -46,11 +46,24 @@ const DEFAULT_POLICIES = Object.freeze({
     }
 });
 
+const customPolicies = new Map();
+
+function setPolicy(namespace, policy) {
+    customPolicies.set(namespace, {
+        ...(DEFAULT_POLICIES[namespace] || DEFAULT_POLICIES.default),
+        ...policy
+    });
+}
+
 function getPolicy(namespace) {
+    if (customPolicies.has(namespace)) {
+        return customPolicies.get(namespace);
+    }
     return DEFAULT_POLICIES[namespace] || DEFAULT_POLICIES.default;
 }
 
 module.exports = {
     DEFAULT_POLICIES,
-    getPolicy
+    getPolicy,
+    setPolicy
 };

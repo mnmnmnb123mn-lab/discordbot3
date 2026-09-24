@@ -4,6 +4,7 @@ const { executeSqliteAction } = require("../../services/databaseService");
 const { getAssetCacheManager } = require("../cache/assetCacheManager");
 const { getCurrentDbPath, resolveDbPath } = require("../connection");
 const { evaluateEmergencyThresholds, canSendAlert, recordAlertSent } = require("./quota");
+const { listBackups } = require("./backup");
 const { sendWebhookEvent } = require("../../../discord/core/webhooks");
 
 let walIntervalId = null;
@@ -11,6 +12,7 @@ let cleanupIntervalId = null;
 let vacuumIntervalId = null;
 let backupIntervalId = null;
 let emergencyIntervalId = null;
+let initialBackupTimeoutId = null;
 
 let isWalRunning = false;
 let isCleanupRunning = false;
@@ -329,6 +331,18 @@ function startScheduler() {
     if (autoBackupEnabled) {
         backupIntervalId = setInterval(runAutoBackup, backupHours * 60 * 60 * 1000);
         if (backupIntervalId.unref) backupIntervalId.unref();
+
+        const shouldRunInitialBackup = process.env.SQLITE_AUTO_BACKUP_INITIAL === "true" || listBackups().length === 0;
+        if (shouldRunInitialBackup) {
+            console.log("[DB_SCHEDULER] 💾 Scheduling initial automated backup (no backups exist or SQLITE_AUTO_BACKUP_INITIAL is true)...");
+            initialBackupTimeoutId = setTimeout(() => {
+                initialBackupTimeoutId = null;
+                runAutoBackup().catch(err => {
+                    console.error(`[DB_SCHEDULER] ⚠️ Initial backup failed: ${err.message}`);
+                });
+            }, 5000);
+            if (initialBackupTimeoutId.unref) initialBackupTimeoutId.unref();
+        }
     }
 
     emergencyIntervalId = setInterval(runEmergencyEvaluation, 2 * 60 * 1000);
@@ -338,6 +352,10 @@ function startScheduler() {
 }
 
 function stopScheduler() {
+    if (initialBackupTimeoutId) {
+        clearTimeout(initialBackupTimeoutId);
+        initialBackupTimeoutId = null;
+    }
     if (walIntervalId) {
         clearInterval(walIntervalId);
         walIntervalId = null;
@@ -361,15 +379,24 @@ function stopScheduler() {
     console.log("[DB_SCHEDULER] 🛑 Background Maintenance Scheduler stopped.");
 }
 
+function triggerEmergencyEvaluation(reason = "event_triggered") {
+    setImmediate(() => {
+        runEmergencyEvaluation().catch(err => {
+            console.error(`[DB_SCHEDULER] ⚠️ Event-triggered emergency evaluation failed (${reason}): ${err.message}`);
+        });
+    });
+}
+
 function getSchedulerDiagnostics() {
     return {
-        active: Boolean(walIntervalId || cleanupIntervalId || vacuumIntervalId || backupIntervalId || emergencyIntervalId),
+        active: Boolean(walIntervalId || cleanupIntervalId || vacuumIntervalId || backupIntervalId || emergencyIntervalId || initialBackupTimeoutId),
         timers: {
             wal: Boolean(walIntervalId),
             cleanup: Boolean(cleanupIntervalId),
             vacuum: Boolean(vacuumIntervalId),
             backup: Boolean(backupIntervalId),
-            emergency: Boolean(emergencyIntervalId)
+            emergency: Boolean(emergencyIntervalId),
+            initialBackupScheduled: Boolean(initialBackupTimeoutId)
         },
         diagnostics
     };
@@ -383,5 +410,6 @@ module.exports = {
     runVacuum,
     runAutoBackup,
     runEmergencyEvaluation,
+    triggerEmergencyEvaluation,
     getSchedulerDiagnostics
 };

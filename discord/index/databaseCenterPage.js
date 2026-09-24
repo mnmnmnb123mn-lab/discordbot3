@@ -21,7 +21,7 @@ function buildDatabaseCenterPage() {
         <div style="display:flex;gap:8px;margin-top:8px;flex-wrap:wrap;">
             <button type="button" class="btn btn-sm btn-secondary" onclick="refreshCurrentTab()" id="btnRefresh">🔄 รีเฟรชข้อมูล</button>
             <button type="button" class="btn btn-sm btn-primary" onclick="runDbHealthCheck()" id="btnCheckAll">🩺 ตรวจสุขภาพฐานข้อมูล</button>
-            <button type="button" class="btn btn-sm btn-secondary" onclick="triggerSqliteAction('full_check')" id="btnFullCheck">🔍 Run Full Integrity & Quota Check</button>
+            <button type="button" class="btn btn-sm btn-secondary" onclick="triggerSqliteAction('full_check')" id="btnFullCheck" title="Diagnostic Check (No Operational Data Mutation)">🔍 Diagnostic Check (No Mutation)</button>
             <button type="button" class="btn btn-sm btn-danger" onclick="triggerSqliteAction('emergency_trim', 'ยืนยันเริ่ม Emergency Auto-Trim หรือไม่?\\nระบบจะลบเฉพาะ Expired Asset Cache, Expired Cache และ History พ้น Retention\\n(Core Data จะได้รับการปกป้อง 100%)')" id="btnEmergencyTrim" style="background:#da3633;border-color:#f85149;color:#fff;">🚨 Emergency Auto-Trim</button>
         </div>
     </div>
@@ -218,7 +218,7 @@ function buildDatabaseCenterPage() {
             <p style="font-size:0.82em;color:var(--text2);margin-bottom:12px;">สั่งการบำรุงรักษาฐานข้อมูล SQLite ผ่านระบบควบคุมความปลอดภัย</p>
             <div style="display:flex;gap:8px;flex-wrap:wrap;">
                 <button type="button" class="btn btn-sm btn-danger" onclick="triggerSqliteAction('emergency_trim', 'ยืนยันเริ่ม Emergency Auto-Trim หรือไม่?\\nระบบจะลบเฉพาะ Expired Asset Cache, Expired Cache และ History พ้น Retention\\n(Core Data จะได้รับการปกป้อง 100%)')" style="background:#da3633;border-color:#f85149;color:#fff;">🚨 Emergency Auto-Trim</button>
-                <button type="button" class="btn btn-sm btn-secondary" onclick="triggerSqliteAction('full_check')">🔍 Run Full Integrity & Quota Check</button>
+                <button type="button" class="btn btn-sm btn-secondary" onclick="triggerSqliteAction('full_check')" title="Diagnostic Check (No Operational Data Mutation)">🔍 Diagnostic Check (No Mutation)</button>
                 <button type="button" class="btn btn-sm btn-secondary" onclick="triggerSqliteAction('integrity')">🩺 ตรวจ Integrity</button>
                 <button type="button" class="btn btn-sm btn-secondary" onclick="triggerSqliteAction('cleanup_expired')">🧹 ล้างข้อมูลหมดอายุ</button>
                 <button type="button" class="btn btn-sm btn-warning" onclick="triggerSqliteAction('cleanup_cache', 'ต้องการล้างข้อมูลแคชทั้งหมดใช่หรือไม่?')">🗑️ ล้างแคชทั้งหมด</button>

@@ -124,7 +124,59 @@ class CacheManager {
             sizeBytes
         );
 
+        // Enforce maxRows policy with LRU eviction
+        this.enforceMaxRows(namespace);
+
         return true;
+    }
+
+    evictLru(namespace, count = 1) {
+        if (count <= 0) return 0;
+        this.flushTouches();
+        const stmt = this.db.prepare(`
+            DELETE FROM cache_entries
+            WHERE (namespace, cache_key) IN (
+                SELECT namespace, cache_key FROM cache_entries
+                WHERE namespace = ?
+                ORDER BY last_accessed_at ASC, created_at ASC, rowid ASC
+                LIMIT ?
+            )
+        `);
+        const info = stmt.run(namespace, count);
+        return info.changes;
+    }
+
+    enforceMaxRows(namespace) {
+        const policy = getPolicy(namespace);
+        const maxRows = policy.maxRows;
+        if (!maxRows || maxRows <= 0) return 0;
+
+        const countRow = this.db.prepare(`
+            SELECT COUNT(*) AS cnt FROM cache_entries WHERE namespace = ?
+        `).get(namespace);
+        const currentCount = countRow ? countRow.cnt : 0;
+
+        if (currentCount > maxRows) {
+            const excess = currentCount - maxRows;
+            return this.evictLru(namespace, excess);
+        }
+        return 0;
+    }
+
+    evictAllLru(targetRatio = 0.2) {
+        let totalEvicted = 0;
+        try {
+            const namespaces = this.db.prepare("SELECT DISTINCT namespace FROM cache_entries").all();
+            for (const { namespace } of namespaces) {
+                const countRow = this.db.prepare("SELECT COUNT(*) AS cnt FROM cache_entries WHERE namespace = ?").get(namespace);
+                const cnt = countRow ? countRow.cnt : 0;
+                if (cnt >= 3) {
+                    const toEvict = Math.max(1, Math.floor(cnt * targetRatio));
+                    totalEvicted += this.evictLru(namespace, toEvict);
+                }
+            }
+        } catch (_) {}
+        return totalEvicted;
     }
 
     delete(namespace, cacheKey) {
@@ -185,11 +237,25 @@ class CacheManager {
             totalBytes: row?.total_bytes || 0
         };
     }
+
+    count(namespace = null) {
+        return this.stats(namespace).count;
+    }
+
+    setPolicy(namespace, policy) {
+        const { setPolicy } = require("./cachePolicy");
+        if (typeof setPolicy === "function") {
+            setPolicy(namespace, policy);
+        }
+    }
 }
 
 let defaultCacheManager = null;
 
-function getCacheManager() {
+function getCacheManager(db = null) {
+    if (db) {
+        return new CacheManager(db);
+    }
     if (!defaultCacheManager) {
         defaultCacheManager = new CacheManager();
     }

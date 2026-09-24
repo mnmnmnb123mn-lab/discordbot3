@@ -3,6 +3,7 @@
 const { getDatabase } = require("../connection");
 const { getDatabaseFootprint, evaluateQuota } = require("./quota");
 const { getAssetCacheManager } = require("../cache/assetCacheManager");
+const { getCacheManager } = require("../cache/cacheManager");
 const {
     cleanExpiredNonces,
     cleanExpiredDmNotifications,
@@ -68,6 +69,7 @@ async function executeEmergencyTrim(dbInstance = null, options = {}) {
     let noncesDeleted = 0;
     let dmsDeleted = 0;
     let cacheDeleted = 0;
+    let lruCacheDeleted = 0;
     let historyDeleted = 0;
 
     // Phase 1: Asset Cache Trim (Expired Assets first, then LRU if strictly needed)
@@ -82,11 +84,15 @@ async function executeEmergencyTrim(dbInstance = null, options = {}) {
         console.warn(`[EMERGENCY_TRIM] ⚠️ Asset cache trim warning: ${err.message}`);
     }
 
-    // Phase 2: Expired Cache & Nonces (Never touches valid/active data)
+    // Phase 2: Expired Cache & Nonces + Generic Cache LRU (Never touches valid core data)
     try {
         noncesDeleted = cleanExpiredNonces(db, startTime, 10);
         dmsDeleted = cleanExpiredDmNotifications(db, startTime, 10);
         cacheDeleted = cleanExpiredCacheEntries(db, startTime, 10);
+        // Evict oldest 30% of generic cache entries across all namespaces if cache is substantial
+        const cacheMgr = getCacheManager(db);
+        lruCacheDeleted = cacheMgr.evictAllLru(0.3);
+        cacheDeleted += lruCacheDeleted;
     } catch (err) {
         console.warn(`[EMERGENCY_TRIM] ⚠️ Expired cache cleanup warning: ${err.message}`);
     }
@@ -121,6 +127,7 @@ async function executeEmergencyTrim(dbInstance = null, options = {}) {
         nonces: noncesDeleted,
         dms: dmsDeleted,
         cacheEntries: cacheDeleted,
+        cacheEntriesEvicted: lruCacheDeleted,
         expiredHistory: historyDeleted,
         totalItems: assetExpiredCount + assetLruCount + noncesDeleted + dmsDeleted + cacheDeleted + historyDeleted
     };
@@ -171,5 +178,6 @@ async function executeEmergencyTrim(dbInstance = null, options = {}) {
 
 module.exports = {
     executeEmergencyTrim,
+    runEmergencyTrim: executeEmergencyTrim,
     cleanExpiredHistory
 };

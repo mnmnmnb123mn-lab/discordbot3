@@ -2,6 +2,16 @@
 
 const databaseService = require("../../database/services/databaseService");
 
+function resolveActor(req) {
+    if (!req) return "owner:dashboard";
+    if (req.user?.id) return `owner:${req.user.id}`;
+    if (req.session?.ownerId) return `owner:${req.session.ownerId}`;
+    if (req.headers && req.headers["x-owner-id"]) return `owner:${String(req.headers["x-owner-id"]).slice(0, 32)}`;
+    const primaryOwner = (process.env.OWNER_ID || "").split(",")[0]?.trim();
+    if (primaryOwner) return `owner:${primaryOwner}`;
+    return "owner:dashboard";
+}
+
 function registerDatabaseRoutes({ app, express, checkAuth }) {
     // 1. Overview
     app.get("/api/database/overview", async (req, res) => {
@@ -33,7 +43,8 @@ function registerDatabaseRoutes({ app, express, checkAuth }) {
             if (!action || typeof action !== "string") {
                 return res.status(400).json({ success: false, error: "กรุณาระบุ action ที่ต้องการดำเนินการ" });
             }
-            const result = await databaseService.executeSqliteAction(action, options || {}, "owner-dashboard");
+            const actor = resolveActor(req);
+            const result = await databaseService.executeSqliteAction(action, options || {}, actor);
             res.json({ success: result.ok, ...result });
         } catch (err) {
             res.status(500).json({ success: false, error: err.message });
@@ -48,7 +59,8 @@ function registerDatabaseRoutes({ app, express, checkAuth }) {
             if (!command || typeof command !== "string") {
                 return res.status(400).json({ success: false, error: "กรุณาระบุคำสั่งฐานข้อมูล" });
             }
-            const result = await databaseService.executeDatabaseConsole(command, "owner-dashboard");
+            const actor = resolveActor(req);
+            const result = await databaseService.executeDatabaseConsole(command, actor);
             res.json({ success: result.ok, ...result });
         } catch (err) {
             res.status(500).json({ success: false, error: err.message });
