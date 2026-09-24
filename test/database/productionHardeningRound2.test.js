@@ -87,29 +87,57 @@ describe("Production Hardening Round 2 Audit Fixes Suite", () => {
             runMigrations(tDb);
             tDb.close();
 
-            // Simulate active lock owned by another process (PID 1 is typically init / systemd and alive in container)
-            const lockFile = `${targetPath}.lock`;
-            fs.writeFileSync(lockFile, JSON.stringify({ pid: 1, createdAt: Date.now() }));
+            // Spawn a real child process so that isPidAlive(child.pid) is 100% portable on any OS / runner
+            const { spawn } = require("node:child_process");
+            const child = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], { stdio: "ignore" });
+            const childPid = child.pid;
 
-            // Attempt restore without force -> MUST reject
-            await assert.rejects(async () => {
-                await restoreDatabase({
+            const lockFile = `${targetPath}.lock`;
+            fs.writeFileSync(lockFile, JSON.stringify({ pid: childPid, createdAt: Date.now() }));
+
+            try {
+                // Attempt restore without force -> MUST reject
+                await assert.rejects(async () => {
+                    await restoreDatabase({
+                        sourceBackup: backupPath,
+                        targetDb: targetPath,
+                        force: false
+                    });
+                }, /Active bot process detected holding SQLite lock/);
+
+                // Attempt restore with force: true -> MUST succeed
+                const res = await restoreDatabase({
                     sourceBackup: backupPath,
                     targetDb: targetPath,
-                    force: false
+                    force: true
                 });
-            }, /Active bot process detected holding SQLite lock/);
+                assert.equal(res.ok, true);
+            } finally {
+                try { child.kill("SIGKILL"); } catch (_) {}
+                try { fs.unlinkSync(lockFile); } catch (_) {}
+            }
+        });
 
-            // Attempt restore with force: true -> MUST succeed
-            const res = await restoreDatabase({
-                sourceBackup: backupPath,
-                targetDb: targetPath,
-                force: true
-            });
-            assert.equal(res.ok, true);
+        test("openDatabase rejects when process lock is held by another active process", () => {
+            const { openDatabase, closeDatabase } = require("../../database/sqlite/connection");
+            const lockDbPath = path.join(tempDir, "locked_by_other.sqlite");
 
-            // Cleanup lock file
-            try { fs.unlinkSync(lockFile); } catch (_) {}
+            const { spawn } = require("node:child_process");
+            const child = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], { stdio: "ignore" });
+            const childPid = child.pid;
+
+            const lockFile = `${lockDbPath}.lock`;
+            fs.writeFileSync(lockFile, JSON.stringify({ pid: childPid, createdAt: Date.now() }));
+
+            try {
+                assert.throws(() => {
+                    openDatabase({ path: lockDbPath });
+                }, /Failed to acquire process lock: database is already locked by active process/);
+            } finally {
+                try { child.kill("SIGKILL"); } catch (_) {}
+                try { fs.unlinkSync(lockFile); } catch (_) {}
+                closeDatabase();
+            }
         });
 
         test("isRestoreLockActive blocks concurrent database initialization", () => {
@@ -353,6 +381,85 @@ describe("Production Hardening Round 2 Audit Fixes Suite", () => {
             assert.equal(res.ok, true);
             assert.ok(["ok", "warning"].includes(res.status));
             assert.ok(typeof res.message, "string");
+        });
+    });
+
+    // ────────────────────────────────────────────────────────────────────────
+    // 6. Multi-Volume Storage Check & AssetCacheManager WeakMap
+    // ────────────────────────────────────────────────────────────────────────
+    describe("6. Multi-Volume Storage Check & WeakMap Isolation", () => {
+        const { evaluateStoragePaths } = require("../../database/sqlite/maintenance/storageCheck");
+        const { getAssetCacheManager } = require("../../database/sqlite/cache/assetCacheManager");
+
+        test("evaluateStoragePaths evaluates separate volumes for database, backup, and assetCache", () => {
+            const res = evaluateStoragePaths();
+            assert.equal(res.ok, true);
+            assert.ok(res.volumes, "res.volumes must be defined");
+            assert.ok(res.volumes.database, "database volume must exist");
+            assert.ok(res.volumes.backup, "backup volume must exist");
+            assert.ok(res.volumes.assetCache, "assetCache volume must exist");
+            assert.equal(typeof res.volumes.database.path, "string");
+            assert.equal(typeof res.volumes.backup.path, "string");
+            assert.equal(typeof res.volumes.assetCache.path, "string");
+            assert.equal(res.volumes.database.status, "ok");
+        });
+
+        test("getAssetCacheManager reuses instance per DB with WeakMap without cross-contamination", () => {
+            const db1 = new Database(":memory:");
+            const db2 = new Database(":memory:");
+            const mgr1 = getAssetCacheManager(db1);
+            const mgr1_again = getAssetCacheManager(db1);
+            const mgr2 = getAssetCacheManager(db2);
+
+            assert.equal(mgr1, mgr1_again, "Identical DB should return identical AssetCacheManager");
+            assert.notEqual(mgr1, mgr2, "Different DBs should return separate AssetCacheManagers");
+
+            mgr1.stopTouchFlusher();
+            mgr2.stopTouchFlusher();
+            db1.close();
+            db2.close();
+        });
+    });
+
+    // ────────────────────────────────────────────────────────────────────────
+    // 7. P0 Telemetry Retry Buffer & Batched Cleanup
+    // ────────────────────────────────────────────────────────────────────────
+    describe("7. P0 Telemetry Retry Buffer & Batched Cleanup", () => {
+        test("P0 telemetry queues in criticalRetryQueue on insert failure and drains on flush", () => {
+            const memDb = new Database(":memory:");
+            memDb.pragma("foreign_keys = ON");
+            runMigrations(memDb);
+
+            const repo = new VoiceEventRepository(memDb);
+            // Corrupt or break _insertSingle temporarily
+            const origInsert = repo._insertSingle.bind(repo);
+            let fail = true;
+            repo._insertSingle = (item) => {
+                if (fail) throw new Error("Simulated locked DB");
+                return origInsert(item);
+            };
+
+            // Record P0 event while failing
+            repo.record({ eventType: "backup_failed", detail: "p0 test" }, true);
+            assert.equal(repo.criticalRetryQueue.length, 1, "Failed P0 must be pushed to criticalRetryQueue");
+
+            // Stop failing and flush
+            fail = false;
+            repo.flush();
+            assert.equal(repo.criticalRetryQueue.length, 0, "criticalRetryQueue must drain successfully on flush");
+
+            const count = memDb.prepare("SELECT count(*) as c FROM voice_events WHERE event_type = 'backup_failed'").get().c;
+            assert.equal(count, 1, "P0 event must be inserted into SQLite upon retry");
+
+            repo.stopFlusher();
+            memDb.close();
+        });
+
+        test("cleanup_history batched deletion executes successfully", async () => {
+            const res = await databaseService.executeSqliteAction("cleanup_history", {}, "test");
+            assert.equal(res.ok, true);
+            assert.equal(typeof res.deletedRows, "number");
+            assert.match(res.message, /ล้างประวัติ/);
         });
     });
 });

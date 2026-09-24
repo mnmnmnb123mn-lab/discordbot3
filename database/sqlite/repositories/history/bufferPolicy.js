@@ -6,7 +6,7 @@ const { notifyBufferDropped } = require("./telemetryAlert");
  * Resolves priority for an incoming history/telemetry event.
  *
  * P0: Critical Security, Database Corruption, Backup Failure, or explicit critical flag.
- *     (NEVER dropped, written directly to SQLite without lossy in-memory buffering)
+ *     (Best-effort durable; written directly to SQLite, queued for retry on transient error, never intentionally evicted while SQLite is healthy)
  * P1: Session Lifecycle, Quarantine, 429, Rate Limit, Errors.
  *     (Preserved over P2; only dropped if queue remains saturated after P2 eviction)
  * P2: Verbose Telemetry, Voice Lean, Pings, General Command execution.

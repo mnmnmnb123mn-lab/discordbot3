@@ -8,6 +8,7 @@ class VoiceEventRepository {
     constructor(db = null) {
         this._db = db;
         this.buffer = [];
+        this.criticalRetryQueue = [];
         this.flushInterval = null;
         this.maxQueueCap = 2000;
         this.flushSizeThreshold = 100;
@@ -34,6 +35,11 @@ class VoiceEventRepository {
         if (this.flushInterval) {
             clearInterval(this.flushInterval);
             this.flushInterval = null;
+        }
+        if (this.criticalRetryQueue.length > 0) {
+            for (const cItem of this.criticalRetryQueue.splice(0)) {
+                try { this._insertSingle(cItem); } catch (_) {}
+            }
         }
         let flushed = 0;
         do {
@@ -73,13 +79,16 @@ class VoiceEventRepository {
             metadataJson: cleanMetadataJson
         };
 
-        // P0: Critical Security / Corruption / Backup Failure - NEVER drop, insert immediately
+        // P0: Critical Security / Corruption / Backup Failure - Best-effort durable; never intentionally evicted while SQLite is healthy
         if (priority === "P0") {
             try {
                 this._insertSingle(item);
             } catch (err) {
                 this.isDegraded = true;
-                console.error(`[VOICE_EVENT_BUFFER] 🚨 CRITICAL P0 event insert failed: ${err.message}`);
+                if (this.criticalRetryQueue.length < 100) {
+                    this.criticalRetryQueue.push(item);
+                }
+                console.error(`[VOICE_EVENT_BUFFER] 🚨 CRITICAL P0 event insert failed (queued for retry): ${err.message}`);
             }
             return;
         }
@@ -131,6 +140,19 @@ class VoiceEventRepository {
     }
 
     flush() {
+        // Retry queued P0 events if any
+        if (this.criticalRetryQueue.length > 0) {
+            const retryItems = this.criticalRetryQueue.splice(0, 50);
+            for (const cItem of retryItems) {
+                try {
+                    this._insertSingle(cItem);
+                } catch (_) {
+                    this.criticalRetryQueue.unshift(cItem);
+                    break;
+                }
+            }
+        }
+
         if (this.buffer.length === 0) return 0;
         const batchSize = Math.min(this.buffer.length, 500);
         const items = this.buffer.slice(0, batchSize);

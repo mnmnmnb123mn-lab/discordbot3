@@ -15,10 +15,13 @@ let currentDbPath = null;
 
 function resolveDbPath(customPath = null) {
     if (customPath) {
+        if (customPath === ":memory:") return ":memory:";
         return path.resolve(customPath);
     }
     if (process.env.SQLITE_DB_PATH && process.env.SQLITE_DB_PATH.trim()) {
-        return path.resolve(process.env.SQLITE_DB_PATH.trim());
+        const envPath = process.env.SQLITE_DB_PATH.trim();
+        if (envPath === ":memory:") return ":memory:";
+        return path.resolve(envPath);
     }
     // Fallback: dedicated data directory in workspace root (avoiding source code collisions)
     return path.resolve(process.cwd(), "data", "discordbot.sqlite");
@@ -30,6 +33,18 @@ function openDatabase(options = {}) {
     }
 
     const dbPath = resolveDbPath(options.path);
+
+    if (dbPath === ":memory:") {
+        const db = new Database(":memory:", {
+            timeout: options.timeout || 5000,
+            verbose: options.verbose || null
+        });
+        applyPragmas(db, { isNew: true });
+        activeDb = db;
+        currentDbPath = ":memory:";
+        return activeDb;
+    }
+
     const restoreLock = isRestoreLockActive(dbPath);
     if (restoreLock.active && restoreLock.pid !== process.pid) {
         throw new Error(`[SQLITE] ❌ Database is currently locked for maintenance/restore by PID ${restoreLock.pid}`);
@@ -51,19 +66,29 @@ function openDatabase(options = {}) {
         throw new Error(`[SQLITE] ❌ Database target or parent directory is not readable/writable: ${parentDir} (${err.message})`);
     }
 
+    // Atomic Process Lock: ensure no other bot process holds lock before opening
+    const lockRes = acquireProcessLock(dbPath);
+    if (!lockRes.acquired) {
+        throw new Error(`[SQLITE] ❌ Failed to acquire process lock: database is already locked by active process PID ${lockRes.pid} (${dbPath})`);
+    }
+
     const isNew = !fs.existsSync(dbPath) || fs.statSync(dbPath).size === 0;
 
-    const db = new Database(dbPath, {
-        fileMustExist: options.fileMustExist || false,
-        timeout: options.timeout || 5000,
-        verbose: options.verbose || null
-    });
-
-    applyPragmas(db, { isNew });
+    let db;
+    try {
+        db = new Database(dbPath, {
+            fileMustExist: options.fileMustExist || false,
+            timeout: options.timeout || 5000,
+            verbose: options.verbose || null
+        });
+        applyPragmas(db, { isNew });
+    } catch (err) {
+        releaseProcessLock(dbPath);
+        throw err;
+    }
 
     activeDb = db;
     currentDbPath = dbPath;
-    acquireProcessLock(dbPath);
 
     return activeDb;
 }
@@ -77,6 +102,7 @@ function getDatabase() {
 
 function closeDatabase() {
     if (activeDb) {
+        const pathToUnlock = currentDbPath;
         try {
             // WAL checkpoint truncate on clean shutdown
             try {
@@ -88,8 +114,8 @@ function closeDatabase() {
                 console.warn(`[SQLITE] ⚠️ Error closing active database: ${err.message}`);
             }
         } finally {
-            if (currentDbPath) {
-                releaseProcessLock(currentDbPath);
+            if (pathToUnlock && pathToUnlock !== ":memory:") {
+                releaseProcessLock(pathToUnlock);
             }
             activeDb = null;
             currentDbPath = null;

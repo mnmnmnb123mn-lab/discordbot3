@@ -313,12 +313,18 @@ function registerAdminRoutes({
     startRotateTimer,
     ROTATE_MESSAGES_MAX
 }) {
-    // ── Quest Logs & Scheduled Runners ──
     app.get("/api/quest-logs", auth.requirePin, async (req, res) => {
         try {
             const limit = Math.min(100, Math.max(1, Number(req.query.limit) || 50));
             const logs = getQuestLogRepository().findRecent(limit);
-            res.json({ success: true, logs });
+            const safeLogs = logs.map(l => {
+                const safeAccounts = (l.accounts || []).map(acc => {
+                    const { encryptedToken, ...safeAcc } = acc;
+                    return safeAcc;
+                });
+                return { ...l, accounts: safeAccounts };
+            });
+            res.json({ success: true, logs: safeLogs });
         } catch (e) {
             res.status(500).json({ success: false, error: e.message });
         }
@@ -327,7 +333,11 @@ function registerAdminRoutes({
     app.get("/api/quest-scheduled", auth.requirePin, async (req, res) => {
         try {
             const list = getScheduledRunnerRepository().find();
-            res.json({ success: true, runners: list });
+            const safeRunners = list.map(r => {
+                const { token_ciphertext, token_iv, token_tag, token_salt, ...safe } = r;
+                return safe;
+            });
+            res.json({ success: true, runners: safeRunners });
         } catch (e) {
             res.status(500).json({ success: false, error: e.message });
         }

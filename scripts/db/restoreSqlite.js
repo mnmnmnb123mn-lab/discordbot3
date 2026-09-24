@@ -115,7 +115,13 @@ async function restoreDatabase({ sourceBackup, targetDb, force = false }) {
         }
     }
 
-    acquireRestoreLock(targetPath);
+    const rLock = acquireRestoreLock(targetPath);
+    if (!rLock.acquired && !force) {
+        throw new Error(
+            `Another restore process is currently running on target database (PID: ${rLock.pid}). ` +
+            `Refusing concurrent restore. Specify --force if you are certain.`
+        );
+    }
     try {
         // Step 2: Ensure connection is closed and backup existing target
         console.log("[RESTORE-SQLITE] 2/4 Securing current target database...");

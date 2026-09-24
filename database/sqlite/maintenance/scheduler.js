@@ -513,13 +513,27 @@ function stopScheduler() {
     console.log("[DB_SCHEDULER] 🛑 Background Maintenance Scheduler stopped.");
 }
 
+function hasCriticalRunningTasks() {
+    return Boolean(isBackupRunning);
+}
+
 function hasRunningTasks() {
     return Boolean(isWalRunning || isCleanupRunning || isVacuumRunning || isBackupRunning || isEmergencyRunning);
 }
 
-async function drainSchedulerTasks(timeoutMs = 3000) {
+async function drainSchedulerTasks(timeoutMs = null) {
+    const configuredTimeout = parseInt(process.env.SQLITE_SHUTDOWN_DRAIN_TIMEOUT_MS, 10);
+    const defaultTimeout = hasCriticalRunningTasks() ? 60000 : 30000;
+    const effectiveTimeoutMs = (typeof timeoutMs === "number" && timeoutMs > 0)
+        ? timeoutMs
+        : (!isNaN(configuredTimeout) && configuredTimeout > 0 ? configuredTimeout : defaultTimeout);
+
+    if (hasCriticalRunningTasks()) {
+        console.log(`[DB_SCHEDULER] ⏳ Waiting for critical database backup to finish before shutdown (timeout: ${effectiveTimeoutMs}ms)...`);
+    }
+
     const start = Date.now();
-    while (hasRunningTasks() && (Date.now() - start) < timeoutMs) {
+    while (hasRunningTasks() && (Date.now() - start) < effectiveTimeoutMs) {
         await new Promise(r => setTimeout(r, 50));
     }
     return !hasRunningTasks();
@@ -600,5 +614,6 @@ module.exports = {
     triggerEmergencyEvaluation,
     getSchedulerDiagnostics,
     hasRunningTasks,
+    hasCriticalRunningTasks,
     drainSchedulerTasks
 };

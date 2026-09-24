@@ -127,25 +127,48 @@ function evaluateStoragePaths(options = {}) {
         }
     }
 
-    // 3. Free Space Check (Split into Warning vs Critical)
-    try {
-        const space = getFilesystemFreeSpace(resolvedDbDir);
-        results.freeSpace = space;
+    // 3. Multi-Volume Free Space Check (Database, Backup, Asset Cache)
+    results.volumes = {};
+    for (const target of targetDirs) {
+        try {
+            const space = getFilesystemFreeSpace(target.dir);
+            const vol = {
+                path: target.dir,
+                name: target.name,
+                availableBytes: space.availableBytes,
+                availableMb: space.availableMb,
+                totalBytes: space.totalBytes,
+                totalMb: space.totalMb,
+                percentFree: space.percentFree,
+                readable: results.permissions[target.key]?.readable ?? true,
+                writable: results.permissions[target.key]?.writable ?? true,
+                warning: false,
+                critical: false,
+                status: "ok"
+            };
 
-        if (space.availableMb !== null) {
-            if (space.availableMb < 100) {
-                // < 100MB = CRITICAL (Actual disk exhaustion risk)
-                results.filesystemCritical = true;
-                results.errors.push(`[STORAGE] ❌ Critically low disk space: ${space.availableMb} MB available (< 100 MB required threshold). Risk of SQLite corruption.`);
-            } else if (space.availableMb < 1000) {
-                // 100MB – 1,000MB = WARNING
-                results.filesystemWarning = true;
-                results.warnings.push(`[STORAGE] ⚠️ Low free disk space: ${space.availableMb} MB available (< 1,000 MB recommended). Consider expanding volume.`);
+            if (space.availableMb !== null) {
+                if (space.availableMb < 100) {
+                    vol.critical = true;
+                    vol.status = "critical";
+                    results.filesystemCritical = true;
+                    results.errors.push(`[STORAGE] ❌ Critically low disk space on ${target.name} (${target.dir}): ${space.availableMb} MB available (< 100 MB threshold).`);
+                } else if (space.availableMb < 1000) {
+                    vol.warning = true;
+                    vol.status = "warning";
+                    results.filesystemWarning = true;
+                    results.warnings.push(`[STORAGE] ⚠️ Low free disk space on ${target.name} (${target.dir}): ${space.availableMb} MB available (< 1,000 MB recommended).`);
+                }
             }
+
+            results.volumes[target.key] = vol;
+        } catch (err) {
+            results.warnings.push(`[STORAGE] ⚠️ Could not evaluate free filesystem space on ${target.name}: ${err.message}`);
         }
-    } catch (err) {
-        results.warnings.push(`[STORAGE] ⚠️ Could not evaluate free filesystem space: ${err.message}`);
     }
+
+    // Backward-compatibility: results.freeSpace maps to database volume
+    results.freeSpace = results.volumes.database || getFilesystemFreeSpace(resolvedDbDir);
 
     // ok is true as long as there are no actual filesystem errors
     results.ok = results.errors.length === 0;

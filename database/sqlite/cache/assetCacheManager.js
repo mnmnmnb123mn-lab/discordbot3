@@ -383,8 +383,16 @@ class AssetCacheManager {
     }
 }
 
+const assetManagerInstances = new WeakMap();
 let defaultAssetCacheManager = null;
-function getAssetCacheManager() {
+
+function getAssetCacheManager(db = null) {
+    if (db) {
+        if (!assetManagerInstances.has(db)) {
+            assetManagerInstances.set(db, new AssetCacheManager(db));
+        }
+        return assetManagerInstances.get(db);
+    }
     if (!defaultAssetCacheManager) {
         defaultAssetCacheManager = new AssetCacheManager();
     }

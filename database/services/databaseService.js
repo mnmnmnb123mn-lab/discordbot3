@@ -379,6 +379,7 @@ async function getSqliteDetailedStatus() {
             totalMb: quota.footprint.totalMb,
             limits: quota.limits,
             filesystem: quota.filesystem,
+            volumes: storageCheck.volumes,
             isPersistent: storageCheck.isPersistent,
             configuredPersistentPath: storageCheck.configuredPersistentPath,
             persistentMountVerified: storageCheck.persistentMountVerified,
@@ -588,11 +589,32 @@ async function executeSqliteAction(action, options = {}, invoker = "owner") {
                 const days = parseInt(process.env.SQLITE_HISTORY_RETENTION_DAYS, 10);
                 const retentionDays = (!isNaN(days) && days > 0) ? days : 30;
                 const cutoff = Date.now() - (retentionDays * 24 * 60 * 60 * 1000);
-                const vDel = db.prepare("DELETE FROM voice_events WHERE occurred_at < ?").run(cutoff);
-                const cDel = db.prepare("DELETE FROM command_events WHERE occurred_at < ?").run(cutoff);
-                const sDel = db.prepare("DELETE FROM session_events WHERE occurred_at < ?").run(cutoff);
-                const rDel = db.prepare("DELETE FROM runtime_events WHERE occurred_at < ?").run(cutoff);
-                const total = (vDel.changes || 0) + (cDel.changes || 0) + (sDel.changes || 0) + (rDel.changes || 0);
+                const batchSize = 1000;
+
+                const batchDelete = (table) => {
+                    let deleted = 0;
+                    const stmt = db.prepare(`
+                        DELETE FROM ${table}
+                        WHERE id IN (
+                            SELECT id FROM ${table}
+                            WHERE occurred_at < ?
+                            LIMIT ?
+                        )
+                    `);
+                    while (true) {
+                        const info = stmt.run(cutoff, batchSize);
+                        deleted += info.changes;
+                        if (info.changes < batchSize) break;
+                    }
+                    return deleted;
+                };
+
+                const vDel = batchDelete("voice_events");
+                const cDel = batchDelete("command_events");
+                const sDel = batchDelete("session_events");
+                const rDel = batchDelete("runtime_events");
+                const total = vDel + cDel + sDel + rDel;
+
                 result = { ok: true, action, deletedRows: total, message: `ล้างประวัติเก่าเกิน ${retentionDays} วันสำเร็จ ลบ ${total} รายการ` };
                 recordAudit("success", result);
                 break;
