@@ -148,7 +148,8 @@ function evaluateEmergencyThresholds(dbPath, metrics = {}) {
     const isStorageEmergency = isEmergency;
 
     // 4. Telemetry Write-Behind Buffer Pressure (>= 2000 items in RAM)
-    // Note: Handled by buffer priority eviction/flush; does not trigger disk Emergency Trim
+    // Note: Policy B — Handled via in-memory Priority Drop, active queue drain flush, and webhook alerting.
+    // Strictly does NOT trigger disk Emergency Trim, as RAM queue pressure is distinct from physical disk exhaustion.
     const bufferCount = Number(metrics.writeBufferCount || 0);
     const isBufferEmergency = bufferCount >= 2000;
     if (isBufferEmergency) {

@@ -22,6 +22,15 @@ Updated: 2026-09-23
 - `SQLITE_QUOTA_CRIT_MB` (ค่าเริ่มต้น: `3686`)
 - `SQLITE_QUOTA_HARD_MB` (ค่าเริ่มต้น: `4096`)
 
+### ⚡ นโยบายการตอบสนองต่อภาวะวิกฤต (Emergency Policy B)
+ระบบแยกแยะภาวะวิกฤตออกเป็น 2 ประเภทอย่างชัดเจนตามสาเหตุทางเทคนิค:
+1. **Physical Storage Emergency (พื้นที่จัดเก็บดิสก์วิกฤต)**:
+   - เงื่อนไข: Footprint รวม > Critical (`3,686 MB`), หรือ WAL > `500 MB`, หรือพื้นที่ดิสก์เครื่องเหลือน้อยกว่า `100 MB`
+   - การตอบสนอง: ส่ง Webhook Alert (CRITICAL) ➔ ดำเนินการ **Emergency Auto-Trim** ล้างแคชหมดอายุ/LRU และประวัติเก่าที่พ้นกำหนดทันทีเพื่อคืนพื้นที่ดิสก์จริง
+2. **Buffer Queue Emergency (แรงกดดันคิวใน RAM / Writer Pressure)**:
+   - เงื่อนไข: Write-behind buffer queue รวมสะสมในหน่วยความจำ RAM `≥ 2,000` รายการ
+   - การตอบสนอง: ส่ง Webhook Alert (CRITICAL) ➔ สั่ง Drain Buffer ผ่านการ **Active Flush** และใช้ **Priority Drop** (สลัด Event ระดับต่ำ P2/P1 ทิ้ง โดยคุ้มครอง P0 ไม่ให้สูญหาย) **โดยไม่เรียก Emergency Trim บนไฟล์ดิสก์** เนื่องจากปัญหาคิวล้นใน RAM ไม่ได้เกิดจากดิสก์เต็ม และการลบแคชไฟล์บนดิสก์ไม่ได้ช่วยลดคิวใน RAM โดยตรง
+
 ---
 
 ## 2. Database Center ใน Owner Dashboard (`/database`)
@@ -35,16 +44,18 @@ Updated: 2026-09-23
   3. **🍃 MongoDB (Identity & Security)**: สถานะคลัสเตอร์, Ping latency, รายการ Collections และ **Safe Data Explorer** สำหรับดูตัวอย่างข้อมูลแบบ Masked/Redacted ปลอดภัย
 
 ### 🔒 ข้อกำหนดความปลอดภัยของ Database Console
-คอนโซลในหน้าเว็บอนุญาตให้รันเฉพาะคำสั่ง Allowlist ฐานข้อมูลเท่านั้น:
+คอนโซลในหน้าเว็บอนุญาตให้รันเฉพาะคำสั่ง Allowlist ฐานข้อมูลทั้ง 14 คำสั่งเท่านั้น:
 - `status`, `health` — ตรวจสอบสถานะภาพรวมและสุขภาพฐานข้อมูล
 - `stats` — ดูสถิติแถวข้อมูลแยกตามหมวดหมู่ (Core, Temp, History, Cache)
 - `tables` — แสดงรายชื่อตารางทั้งหมดพร้อมจำนวนแถว
 - `migrations` — ดูประวัติ Schema Migrations และเวอร์ชันปัจจุบัน
 - `integrity` — ตรวจสอบความสมบูรณ์เชิงลึกของข้อมูล (PRAGMA integrity_check)
-- `cleanup`, `cleanup cache`, `cleanup history` — สั่งล้างข้อมูลหมดอายุ แคช หรือประวัติย้อนหลัง
+- `cleanup`, `cleanup cache`, `cleanup history` — สั่งล้างข้อมูลหมดอายุ แคช หรือประวัติย้อนหลัง (Retention ตามค่าคอนฟิก)
 - `checkpoint` — รวมไฟล์ WAL กลับเข้าสู่ไฟล์หลัก
 - `vacuum` — รัน Incremental Vacuum คืนพื้นที่ที่ว่าง
 - `backup` — สร้างไฟล์สำรองข้อมูลทันที
+- `emergency-trim` — สั่งทำ Emergency Auto-Trim ล้างข้อมูลแคชและประวัติหมดอายุทันทีเพื่อคืนพื้นที่
+- `full-check` — ตรวจสอบความสมบูรณ์แบบละเอียดครบวงจร (Integrity, Foreign Keys, PRAGMAs, Migrations, Storage)
 
 > [!CAUTION]
 > **ระบบบล็อกคำสั่ง OS Shell (เช่น `rm`, `curl`, `wget`, `bash`) 100%**: เพื่อความปลอดภัยสูงสุด ห้ามเปิดใช้ Arbitrary OS Shell จากหน้าเว็บ
@@ -96,6 +107,11 @@ Updated: 2026-09-23
 > 1. คำสั่ง `DROP TABLE` อนุญาตให้ใช้ได้เฉพาะกับตารางแคชชั่วคราว (Ephemeral Cache) ที่สามารถสร้างใหม่ได้อัตโนมัติเท่านั้น
 > 2. **ห้ามใช้ `DROP TABLE` กับตารางข้อมูลหลัก (Core Tables)** เช่น `quest_logs`, `scheduled_runners`, `dm_notifications`, `verification_recovery` หรือตารางประวัติเด็ดขาด
 > 3. การปรับปรุงโครงสร้างในอนาคตทั้งหมดต้องเป็น **Immutable Forward-Only** โดยใช้ `ALTER TABLE ADD COLUMN` หรือสร้างตารางใหม่แล้วโอนย้ายข้อมูลผ่าน Transaction ที่มี Rollback ปลอดภัย
+
+4. **Pre-Migration Safety Backups & Isolated Retention**:
+   - เมื่อระบบตรวจพบว่า Migration ใดมีคำสั่งที่เสี่ยง (Destructive เช่น `DROP TABLE`) ระบบจะสร้าง Snapshot สำรองข้อมูลล่วงหน้า (`sqlite_backup_pre_migration_<id>_<timestamp>.sqlite`) อัตโนมัติก่อนลงมือ Migration
+   - **การแยก Namespace และ Retention อิสระ**: ไฟล์ Pre-migration Backup ถูกแยกการหมุนเวียนออกจาก Daily Backup ปกติ ไม่ปะปนกัน และจำกัดจำนวนชุดอัตโนมัติ (ค่าเริ่มต้น: **3 ชุดล่าสุด**) เพื่อป้องกันไม่ให้ไฟล์แบ็กอัปสะสมไม่จำกัดในระยะยาว
+   - สามารถกำหนดได้ผ่าน `SQLITE_PRE_MIGRATION_BACKUP_RETENTION` ใน `.env`
 
 ---
 

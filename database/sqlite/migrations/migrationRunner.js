@@ -76,6 +76,37 @@ function resolveBackupDir(customDir = null) {
     return path.resolve(process.cwd(), "backups");
 }
 
+function resolvePreMigrationRetention(customRetention = null) {
+    if (customRetention !== null && customRetention !== undefined && !isNaN(customRetention)) {
+        return parseInt(customRetention, 10);
+    }
+    const envVal = parseInt(process.env.SQLITE_PRE_MIGRATION_BACKUP_RETENTION, 10);
+    return (!isNaN(envVal) && envVal > 0) ? envVal : 3;
+}
+
+function rotatePreMigrationBackups(backupDir, maxToKeep = 3) {
+    if (!fs.existsSync(backupDir)) return;
+    try {
+        const files = fs.readdirSync(backupDir)
+            .filter(f => f.startsWith("sqlite_backup_pre_migration_") && f.endsWith(".sqlite"))
+            .map(f => {
+                const p = path.join(backupDir, f);
+                const stat = fs.statSync(p);
+                return { path: p, mtime: stat.mtimeMs };
+            })
+            .sort((a, b) => b.mtime - a.mtime);
+
+        if (files.length > maxToKeep) {
+            const toDelete = files.slice(maxToKeep);
+            for (const item of toDelete) {
+                try { fs.unlinkSync(item.path); } catch (_) {}
+            }
+        }
+    } catch (err) {
+        console.warn(`[MIGRATION] ⚠️ Failed to rotate pre-migration backups: ${err.message}`);
+    }
+}
+
 function createPreMigrationBackup(db, migrationItem, options = {}) {
     const isMemory = !db.name || db.name === ":memory:";
     if (isMemory && !options.backupDir) {
@@ -99,6 +130,10 @@ function createPreMigrationBackup(db, migrationItem, options = {}) {
     } catch (err) {
         throw new Error(`[MIGRATION] Pre-migration safety backup failed before applying destructive migration ${migrationItem.migrationId}: ${err.message}`);
     }
+
+    // Apply pre-migration backup retention rotation (default: 3 sets)
+    const maxRetention = resolvePreMigrationRetention(options.preMigrationRetention);
+    rotatePreMigrationBackups(backupDir, maxRetention);
 
     return {
         migrationId: migrationItem.migrationId,
@@ -186,5 +221,7 @@ module.exports = {
     loadMigrationFiles,
     calculateChecksum,
     isDestructiveMigration,
-    createPreMigrationBackup
+    createPreMigrationBackup,
+    rotatePreMigrationBackups,
+    resolvePreMigrationRetention
 };

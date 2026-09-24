@@ -1,6 +1,13 @@
 "use strict";
 
-const { executeSqliteAction } = require("../../services/databaseService");
+const databaseService = require("../../services/databaseService");
+
+function executeSqliteAction(action, options = {}, invoker = "system_scheduler") {
+    if (databaseService && typeof databaseService.executeSqliteAction === "function") {
+        return databaseService.executeSqliteAction(action, options, invoker);
+    }
+    throw new Error("databaseService.executeSqliteAction is not available");
+}
 const { getAssetCacheManager } = require("../cache/assetCacheManager");
 const { getCurrentDbPath, resolveDbPath } = require("../connection");
 const { evaluateEmergencyThresholds, canSendAlert, recordAlertSent } = require("./quota");
@@ -32,10 +39,10 @@ let configuredIntervalsMs = {
 };
 
 const diagnostics = {
-    wal: { lastRunAt: null, lastDurationMs: 0, lastStatus: "idle", runCount: 0 },
-    cleanup: { lastRunAt: null, lastDurationMs: 0, lastStatus: "idle", runCount: 0 },
-    vacuum: { lastRunAt: null, lastDurationMs: 0, lastStatus: "idle", runCount: 0 },
-    backup: { lastRunAt: null, lastDurationMs: 0, lastStatus: "idle", runCount: 0 },
+    wal: { lastRunAt: null, lastDurationMs: 0, lastStatus: "idle", lastError: null, runCount: 0 },
+    cleanup: { lastRunAt: null, lastDurationMs: 0, lastStatus: "idle", lastError: null, runCount: 0 },
+    vacuum: { lastRunAt: null, lastDurationMs: 0, lastStatus: "idle", lastError: null, runCount: 0 },
+    backup: { lastRunAt: null, lastDurationMs: 0, lastStatus: "idle", lastError: null, runCount: 0 },
     emergency: { lastRunAt: null, lastStatus: "idle", incidentCount: 0 }
 };
 
@@ -60,11 +67,20 @@ async function runWalCheckpoint() {
     diagnostics.wal.lastStatus = "running";
 
     try {
-        await executeSqliteAction("checkpoint", {}, "system_scheduler");
-        diagnostics.wal.lastStatus = "success";
-        diagnostics.wal.runCount++;
+        const res = await executeSqliteAction("checkpoint", {}, "system_scheduler");
+        if (res && res.ok) {
+            diagnostics.wal.lastStatus = "success";
+            diagnostics.wal.lastError = null;
+            diagnostics.wal.runCount++;
+        } else {
+            diagnostics.wal.lastStatus = "error";
+            const errDetail = res?.message || res?.error || "Unknown checkpoint error";
+            diagnostics.wal.lastError = errDetail;
+            console.error(`[DB_SCHEDULER] ❌ WAL Checkpoint failed: ${errDetail}`);
+        }
     } catch (err) {
         diagnostics.wal.lastStatus = "error";
+        diagnostics.wal.lastError = err.message;
         console.error(`[DB_SCHEDULER] ❌ WAL Checkpoint failed: ${err.message}`);
     } finally {
         diagnostics.wal.lastDurationMs = Date.now() - start;
@@ -84,19 +100,30 @@ async function runCleanup() {
 
     try {
         // 1. Cleanup database expired records (nonces, history)
-        await executeSqliteAction("cleanup_all", {}, "system_scheduler");
+        const res = await executeSqliteAction("cleanup_all", {}, "system_scheduler");
+        if (!res || !res.ok) {
+            diagnostics.cleanup.lastStatus = "error";
+            const errDetail = res?.message || res?.error || "Unknown cleanup error";
+            diagnostics.cleanup.lastError = errDetail;
+            console.error(`[DB_SCHEDULER] ❌ Maintenance cleanup failed: ${errDetail}`);
+            return;
+        }
 
         // 2. Reconcile asset cache & enforce 500MB quota
         try {
             const assetMgr = getAssetCacheManager();
             assetMgr.evictIfOverQuota();
             assetMgr.reconcileOrphans();
-        } catch (_) {}
+        } catch (assetErr) {
+            console.warn(`[DB_SCHEDULER] ⚠️ Asset cache reconciliation warning: ${assetErr.message}`);
+        }
 
         diagnostics.cleanup.lastStatus = "success";
+        diagnostics.cleanup.lastError = null;
         diagnostics.cleanup.runCount++;
     } catch (err) {
         diagnostics.cleanup.lastStatus = "error";
+        diagnostics.cleanup.lastError = err.message;
         console.error(`[DB_SCHEDULER] ❌ Maintenance cleanup failed: ${err.message}`);
     } finally {
         diagnostics.cleanup.lastDurationMs = Date.now() - start;
@@ -115,11 +142,20 @@ async function runVacuum() {
     diagnostics.vacuum.lastStatus = "running";
 
     try {
-        await executeSqliteAction("vacuum", {}, "system_scheduler");
-        diagnostics.vacuum.lastStatus = "success";
-        diagnostics.vacuum.runCount++;
+        const res = await executeSqliteAction("vacuum", {}, "system_scheduler");
+        if (res && res.ok) {
+            diagnostics.vacuum.lastStatus = "success";
+            diagnostics.vacuum.lastError = null;
+            diagnostics.vacuum.runCount++;
+        } else {
+            diagnostics.vacuum.lastStatus = "error";
+            const errDetail = res?.message || res?.error || "Unknown vacuum error";
+            diagnostics.vacuum.lastError = errDetail;
+            console.error(`[DB_SCHEDULER] ❌ Incremental Vacuum failed: ${errDetail}`);
+        }
     } catch (err) {
         diagnostics.vacuum.lastStatus = "error";
+        diagnostics.vacuum.lastError = err.message;
         console.error(`[DB_SCHEDULER] ❌ Incremental Vacuum failed: ${err.message}`);
     } finally {
         diagnostics.vacuum.lastDurationMs = Date.now() - start;
@@ -142,6 +178,7 @@ async function runAutoBackup() {
         const res = await executeSqliteAction("backup", { retention }, "system_scheduler");
         if (res && res.ok) {
             diagnostics.backup.lastStatus = "success";
+            diagnostics.backup.lastError = null;
             diagnostics.backup.runCount++;
             console.log(`[DB_SCHEDULER] 💾 Automated 24h backup completed successfully: ${res.backup?.filename || "ok"} (retention: ${retention})`);
 
@@ -166,6 +203,7 @@ async function runAutoBackup() {
         } else {
             diagnostics.backup.lastStatus = "error";
             const errDetail = res?.message || res?.error || "unknown error";
+            diagnostics.backup.lastError = errDetail;
             console.error(`[DB_SCHEDULER] ⚠️ Automated backup failed: ${errDetail}`);
 
             try {
@@ -185,6 +223,7 @@ async function runAutoBackup() {
         }
     } catch (err) {
         diagnostics.backup.lastStatus = "error";
+        diagnostics.backup.lastError = err.message;
         console.error(`[DB_SCHEDULER] ❌ Automated backup exception: ${err.message}`);
 
         try {
@@ -286,7 +325,24 @@ async function runEmergencyEvaluation() {
                 } catch (_) {}
             }
 
-            // Execute Emergency Auto-Trim only on physical storage emergency
+            // Policy B: Telemetry Write-Behind Buffer Pressure Handling (RAM / Writer Pressure)
+            // Attempt to drain pending events from write-behind buffers via active flush.
+            // Bounded queue priority eviction and webhook alerting are managed within the repositories.
+            // Note: Does NOT trigger Emergency Trim on physical disk assets, because buffer pressure is RAM/writer pressure.
+            if (evalResult.isBufferEmergency) {
+                try {
+                    const { getVoiceEventRepository } = require("../repositories/history/VoiceEventRepository");
+                    const { getCommandEventRepository } = require("../repositories/history/CommandEventRepository");
+                    const { getSessionEventRepository } = require("../repositories/history/SessionEventRepository");
+                    getVoiceEventRepository()?.flush();
+                    getCommandEventRepository()?.flush();
+                    getSessionEventRepository()?.flush();
+                } catch (flushErr) {
+                    console.warn(`[DB_SCHEDULER] ⚠️ Buffer drain flush warning: ${flushErr.message}`);
+                }
+            }
+
+            // Execute Emergency Auto-Trim strictly on physical storage emergency
             if (evalResult.isStorageEmergency) {
                 const trimResult = await executeSqliteAction("emergency_trim", {
                     reason: evalResult.reasons.join("; ")

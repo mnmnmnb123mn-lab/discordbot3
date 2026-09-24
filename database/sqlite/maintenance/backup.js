@@ -30,12 +30,39 @@ function resolveBackupDir(customDir = null) {
     return path.resolve(process.cwd(), "backups");
 }
 
-function listBackups(customDir = null) {
+function listBackups(customDir = null, options = {}) {
+    const backupDir = resolveBackupDir(customDir);
+    if (!fs.existsSync(backupDir)) return [];
+
+    const includePreMigration = options.includePreMigration || false;
+
+    return fs.readdirSync(backupDir)
+        .filter(f => {
+            if (!f.startsWith("sqlite_backup_") || !f.endsWith(".sqlite")) return false;
+            if (!includePreMigration && f.startsWith("sqlite_backup_pre_migration_")) return false;
+            return true;
+        })
+        .map(f => {
+            const p = path.join(backupDir, f);
+            const stat = fs.statSync(p);
+            return {
+                filename: f,
+                path: p,
+                sizeBytes: stat.size,
+                sizeMb: parseFloat((stat.size / (1024 * 1024)).toFixed(2)),
+                createdAt: new Date(stat.mtimeMs).toISOString(),
+                mtime: stat.mtimeMs
+            };
+        })
+        .sort((a, b) => b.mtime - a.mtime);
+}
+
+function listPreMigrationBackups(customDir = null) {
     const backupDir = resolveBackupDir(customDir);
     if (!fs.existsSync(backupDir)) return [];
 
     return fs.readdirSync(backupDir)
-        .filter(f => f.startsWith("sqlite_backup_") && f.endsWith(".sqlite"))
+        .filter(f => f.startsWith("sqlite_backup_pre_migration_") && f.endsWith(".sqlite"))
         .map(f => {
             const p = path.join(backupDir, f);
             const stat = fs.statSync(p);
@@ -167,6 +194,7 @@ module.exports = {
     rotateBackups,
     resolveBackupDir,
     listBackups,
+    listPreMigrationBackups,
     computeFileSha256,
     DEFAULT_MAX_BACKUPS
 };

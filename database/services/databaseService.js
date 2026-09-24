@@ -536,8 +536,17 @@ async function executeSqliteAction(action, options = {}, invoker = "owner") {
             }
 
             case "cleanup_cache": {
-                const del = db.prepare("DELETE FROM cache_entries").run();
+                let cacheDelCount = 0;
                 let assetCount = 0;
+                let assetError = null;
+
+                try {
+                    const del = db.prepare("DELETE FROM cache_entries").run();
+                    cacheDelCount = del.changes || 0;
+                } catch (cErr) {
+                    console.error(`[DATABASE_SERVICE] ❌ Failed to clear cache_entries: ${cErr.message}`);
+                }
+
                 try {
                     const { getAssetCacheManager } = require("../sqlite/cache/assetCacheManager");
                     const assetMgr = getAssetCacheManager(db);
@@ -548,13 +557,30 @@ async function executeSqliteAction(action, options = {}, invoker = "owner") {
                         }
                     }
                     assetMgr.reconcileOrphans();
-                } catch (_) {
-                    const fallbackDel = db.prepare("DELETE FROM asset_cache").run();
-                    assetCount = fallbackDel.changes || 0;
+                } catch (err) {
+                    assetError = err.message;
+                    console.warn(`[DATABASE_SERVICE] ⚠️ Asset Cache Manager cleanup failed: ${err.message}. Retaining metadata to prevent orphaned disk files.`);
                 }
-                const total = (del.changes || 0) + assetCount;
-                result = { ok: true, action, deletedRows: total, message: `ล้างแคชสำเร็จ ลบทั้งหมด ${total} รายการ (รวมไฟล์ Assets บนดิสก์)` };
-                recordAudit("success", result);
+
+                if (assetError) {
+                    result = {
+                        ok: false,
+                        action,
+                        deletedRows: cacheDelCount,
+                        assetError,
+                        message: `ล้างแคชข้อความสำเร็จ (${cacheDelCount} รายการ) แต่การล้าง Asset Cache ล้มเหลว: ${assetError} (รักษารายการ Metadata ไว้เพื่อป้องกันไฟล์ขยะตกค้าง)`
+                    };
+                    recordAudit("failure", result, new Error(assetError));
+                } else {
+                    const total = cacheDelCount + assetCount;
+                    result = {
+                        ok: true,
+                        action,
+                        deletedRows: total,
+                        message: `ล้างแคชสำเร็จ ลบทั้งหมด ${total} รายการ (รวมไฟล์ Assets บนดิสก์)`
+                    };
+                    recordAudit("success", result);
+                }
                 break;
             }
 
@@ -574,27 +600,55 @@ async function executeSqliteAction(action, options = {}, invoker = "owner") {
 
             case "checkpoint": {
                 const chk = checkpointWal(db, options.mode || "PASSIVE");
-                result = { ok: chk.ok, action, checkpoint: chk, message: "ดำเนินการ Checkpoint WAL สำเร็จ" };
-                db.prepare("INSERT OR REPLACE INTO database_meta (key, value, updated_at) VALUES ('last_checkpoint', ?, ?)")
-                    .run(new Date().toISOString(), Date.now());
-                recordAudit("success", result);
+                const ok = Boolean(chk && chk.ok);
+                result = {
+                    ok,
+                    action,
+                    checkpoint: chk,
+                    message: ok
+                        ? `ดำเนินการ Checkpoint WAL สำเร็จ (Mode: ${options.mode || "PASSIVE"}, Checkpointed: ${chk.checkpointedPages || 0}, Logged: ${chk.logPages || 0})`
+                        : `ดำเนินการ Checkpoint WAL ล้มเหลว: ${chk?.error || "Unknown error"}`
+                };
+                if (ok) {
+                    db.prepare("INSERT OR REPLACE INTO database_meta (key, value, updated_at) VALUES ('last_checkpoint', ?, ?)")
+                        .run(new Date().toISOString(), Date.now());
+                }
+                recordAudit(ok ? "success" : "failure", result, ok ? null : (chk?.error || "Checkpoint failed"));
                 break;
             }
 
             case "vacuum": {
                 const vac = runIncrementalVacuum(db, options.pages || 500);
-                result = { ok: vac.ok, action, vacuum: vac, message: "ดำเนินการ Incremental Vacuum สำเร็จ" };
-                recordAudit("success", result);
+                const ok = Boolean(vac && vac.ok);
+                result = {
+                    ok,
+                    action,
+                    vacuum: vac,
+                    message: ok
+                        ? `ดำเนินการ Incremental Vacuum สำเร็จ (คืนหน้าได้: ${vac.freedPages || 0} หน้า, ขนาดก่อน/หลัง: ${vac.preTotalMb} MB ➔ ${vac.postTotalMb} MB)`
+                        : `ดำเนินการ Incremental Vacuum ล้มเหลว: ${vac?.error || "Unknown error"}`
+                };
+                recordAudit(ok ? "success" : "failure", result, ok ? null : (vac?.error || "Vacuum failed"));
                 break;
             }
 
             case "backup": {
                 const maxBackups = options.retention || parseInt(process.env.SQLITE_BACKUP_RETENTION, 10) || 2;
                 const bkp = await createBackup(db, { maxBackups });
-                result = { ok: bkp.ok, action, backup: bkp, message: `สำรองข้อมูลสำเร็จ (${bkp.filename}) ขนาด ${bkp.sizeMb} MB` };
-                db.prepare("INSERT OR REPLACE INTO database_meta (key, value, updated_at) VALUES ('last_backup', ?, ?)")
-                    .run(new Date().toISOString(), Date.now());
-                recordAudit("success", result);
+                const ok = Boolean(bkp && bkp.ok);
+                result = {
+                    ok,
+                    action,
+                    backup: bkp,
+                    message: ok
+                        ? `สำรองข้อมูลสำเร็จ (${bkp.filename}) ขนาด ${bkp.sizeMb} MB`
+                        : `สำรองข้อมูลล้มเหลว: ${bkp?.error || "Unknown error"}`
+                };
+                if (ok) {
+                    db.prepare("INSERT OR REPLACE INTO database_meta (key, value, updated_at) VALUES ('last_backup', ?, ?)")
+                        .run(new Date().toISOString(), Date.now());
+                }
+                recordAudit(ok ? "success" : "failure", result, ok ? null : (bkp?.error || "Backup failed"));
                 break;
             }
 
@@ -716,6 +770,13 @@ async function executeDatabaseConsole(commandString, invoker = "owner") {
 
     try {
         const db = getDatabase();
+        const dispatchSqliteAction = (actName, actOpts, actInvoker) => {
+            if (module.exports && typeof module.exports.executeSqliteAction === "function") {
+                return module.exports.executeSqliteAction(actName, actOpts, actInvoker);
+            }
+            return executeSqliteAction(actName, actOpts, actInvoker);
+        };
+
         switch (cmd) {
             case "status":
             case "health": {
@@ -777,51 +838,68 @@ async function executeDatabaseConsole(commandString, invoker = "owner") {
             }
 
             case "integrity": {
-                const act = await executeSqliteAction("integrity", {}, invoker);
+                const act = await dispatchSqliteAction("integrity", {}, invoker);
                 output = act.ok ? "✅ ผ่านการตรวจสอบ Integrity และ Foreign Keys 100% ฐานข้อมูลสมบูรณ์ปกติ" : `❌ พบข้อผิดพลาด: ${JSON.stringify(act)}`;
                 ok = act.ok;
                 break;
             }
 
             case "cleanup": {
-                const act = await executeSqliteAction("cleanup_all", {}, invoker);
-                output = `✅ ทำความสะอาดข้อมูลสำเร็จ: ลบข้อมูลชั่วคราวและประวัติเก่า ${act.stats?.deletedRows || 0} รายการ`;
+                const act = await dispatchSqliteAction("cleanup_all", {}, invoker);
+                output = act.ok
+                    ? `✅ ทำความสะอาดข้อมูลสำเร็จ: ลบข้อมูลชั่วคราวและประวัติเก่า ${act.stats?.totalDeleted || act.stats?.deletedRows || 0} รายการ`
+                    : `❌ ทำความสะอาดข้อมูลล้มเหลว: ${act.message || act.error || "Unknown error"}`;
+                ok = act.ok;
                 break;
             }
 
             case "cleanup cache": {
-                const act = await executeSqliteAction("cleanup_cache", {}, invoker);
-                output = `✅ ล้างแคชทั้งหมดสำเร็จ: ลบ ${act.deletedRows || 0} รายการ`;
+                const act = await dispatchSqliteAction("cleanup_cache", {}, invoker);
+                output = act.ok
+                    ? `✅ ล้างแคชทั้งหมดสำเร็จ: ลบ ${act.deletedRows || 0} รายการ`
+                    : `❌ ล้างแคชล้มเหลว: ${act.message || act.error || "Unknown error"}`;
+                ok = act.ok;
                 break;
             }
 
             case "cleanup history": {
-                const act = await executeSqliteAction("cleanup_history", {}, invoker);
-                output = `✅ ล้างประวัติย้อนหลังเกิน 30 วันสำเร็จ: ลบ ${act.deletedRows || 0} รายการ`;
+                const act = await dispatchSqliteAction("cleanup_history", {}, invoker);
+                output = act.ok
+                    ? (act.message?.startsWith("✅") ? act.message : `✅ ${act.message || `ล้างประวัติสำเร็จ: ลบ ${act.deletedRows || 0} รายการ`}`)
+                    : `❌ ล้างประวัติล้มเหลว: ${act.message || act.error || "Unknown error"}`;
+                ok = act.ok;
                 break;
             }
 
             case "checkpoint": {
-                const act = await executeSqliteAction("checkpoint", {}, invoker);
-                output = `✅ ดำเนินการ Checkpoint WAL สำเร็จ`;
+                const act = await dispatchSqliteAction("checkpoint", {}, invoker);
+                output = act.ok
+                    ? `✅ ดำเนินการ Checkpoint WAL สำเร็จ: ${act.message || "เสร็จสิ้น"}`
+                    : `❌ ดำเนินการ Checkpoint WAL ล้มเหลว: ${act.message || act.error || act.checkpoint?.error || "Unknown error"}`;
+                ok = act.ok;
                 break;
             }
 
             case "vacuum": {
-                const act = await executeSqliteAction("vacuum", {}, invoker);
-                output = `✅ ดำเนินการ Incremental Vacuum สำเร็จ`;
+                const act = await dispatchSqliteAction("vacuum", {}, invoker);
+                output = act.ok
+                    ? `✅ ดำเนินการ Incremental Vacuum สำเร็จ: ${act.message || "เสร็จสิ้น"}`
+                    : `❌ ดำเนินการ Incremental Vacuum ล้มเหลว: ${act.message || act.error || act.vacuum?.error || "Unknown error"}`;
+                ok = act.ok;
                 break;
             }
 
             case "backup": {
-                const act = await executeSqliteAction("backup", {}, invoker);
-                output = act.ok ? `✅ สร้างไฟล์สำรองข้อมูลสำเร็จ:\n   ไฟล์: ${act.backup?.filename}\n   ขนาด: ${act.backup?.sizeMb} MB\n   SHA-256: ${act.backup?.sha256 || 'N/A'}` : `❌ ล้มเหลว: ${act.error}`;
+                const act = await dispatchSqliteAction("backup", {}, invoker);
+                output = act.ok
+                    ? `✅ สร้างไฟล์สำรองข้อมูลสำเร็จ:\n   ไฟล์: ${act.backup?.filename}\n   ขนาด: ${act.backup?.sizeMb} MB\n   SHA-256: ${act.backup?.sha256 || 'N/A'}`
+                    : `❌ สำรองข้อมูลล้มเหลว: ${act.message || act.error || "Unknown error"}`;
                 ok = act.ok;
                 break;
             }
 
             case "emergency-trim": {
-                const act = await executeSqliteAction("emergency_trim", {}, invoker);
+                const act = await dispatchSqliteAction("emergency_trim", {}, invoker);
                 if (act.ok) {
                     const t = act.trimResult;
                     output = [
@@ -843,7 +921,7 @@ async function executeDatabaseConsole(commandString, invoker = "owner") {
             }
 
             case "full-check": {
-                const act = await executeSqliteAction("full_check", {}, invoker);
+                const act = await dispatchSqliteAction("full_check", {}, invoker);
                 if (act.ok) {
                     output = [
                         `🔍 ผลการตรวจสอบความสมบูรณ์แบบละเอียด (Full Health Check):`,
