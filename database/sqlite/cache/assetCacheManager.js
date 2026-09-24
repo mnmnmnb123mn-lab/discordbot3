@@ -4,6 +4,7 @@ const fs = require("fs");
 const path = require("path");
 const crypto = require("crypto");
 const { getDatabase } = require("../connection");
+const { canWrite } = require("../maintenance/writePolicy");
 
 const DEFAULT_MAX_QUOTA_BYTES = 500 * 1024 * 1024; // 500MB dedicated quota
 
@@ -150,6 +151,9 @@ class AssetCacheManager {
     }
 
     setAsset(assetKey, buffer, options = {}) {
+        if (!canWrite("cache")) {
+            return false;
+        }
         if (!assetKey || !Buffer.isBuffer(buffer)) {
             throw new TypeError("assetKey string and Buffer are required");
         }
@@ -258,7 +262,14 @@ class AssetCacheManager {
 
     getTotalSizeBytes() {
         try {
-            const row = this.db.prepare("SELECT COALESCE(SUM(size_bytes), 0) as total FROM asset_cache").get();
+            const row = this.db.prepare(`
+                SELECT COALESCE(SUM(size_bytes), 0) as total
+                FROM (
+                    SELECT relative_path, MAX(size_bytes) as size_bytes
+                    FROM asset_cache
+                    GROUP BY relative_path
+                )
+            `).get();
             return row ? Number(row.total) : 0;
         } catch (_) {
             return 0;
@@ -345,8 +356,8 @@ class AssetCacheManager {
 
     getStats() {
         try {
-            const countRow = this.db.prepare("SELECT COUNT(*) as count, COALESCE(SUM(size_bytes), 0) as totalBytes FROM asset_cache").get();
-            const totalBytes = countRow ? Number(countRow.totalBytes) : 0;
+            const totalBytes = this.getTotalSizeBytes();
+            const countRow = this.db.prepare("SELECT COUNT(*) as count FROM asset_cache").get();
             const count = countRow ? countRow.count : 0;
             return {
                 count,

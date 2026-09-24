@@ -435,8 +435,16 @@ async function loadDbOverview() {
 
         const persistEl = document.getElementById('ov-sqlite-persistent');
         if (persistEl) {
-            persistEl.textContent = 'Persistent Storage: ' + (sq.storage && sq.storage.isPersistent ? '✅ External Mount' : '❌ Ephemeral / In-Source');
-            persistEl.style.color = (sq.storage && sq.storage.isPersistent) ? 'var(--green2)' : 'var(--orange)';
+            if (sq.storage && sq.storage.persistentMountVerified) {
+                persistEl.textContent = 'Persistent Storage: ✅ Confirmed External Mount';
+                persistEl.style.color = 'var(--green2)';
+            } else if (sq.storage && sq.storage.configuredPersistentPath) {
+                persistEl.textContent = 'Persistent Storage: 🟡 Path Configured (Mount Unverified)';
+                persistEl.style.color = 'var(--yellow)';
+            } else {
+                persistEl.textContent = 'Persistent Storage: ❌ Ephemeral / In-Source';
+                persistEl.style.color = 'var(--orange)';
+            }
         }
 
         // Timestamps
@@ -466,9 +474,19 @@ async function loadSqliteDetails() {
         const st = data.storage;
         const persistBadge = document.getElementById('badge-persistent');
         if (persistBadge) {
-            persistBadge.textContent = 'Storage: ' + (st.isPersistent ? '✅ Persistent Volume' : '❌ In-Source');
-            persistBadge.style.color = st.isPersistent ? 'var(--green2)' : 'var(--orange)';
-            persistBadge.style.borderColor = st.isPersistent ? 'var(--green2)' : 'var(--orange)';
+            if (st.persistentMountVerified) {
+                persistBadge.textContent = 'Storage: ✅ Confirmed External Mount';
+                persistBadge.style.color = 'var(--green2)';
+                persistBadge.style.borderColor = 'var(--green2)';
+            } else if (st.configuredPersistentPath) {
+                persistBadge.textContent = 'Storage: 🟡 Path Configured (Unverified Mount)';
+                persistBadge.style.color = 'var(--yellow)';
+                persistBadge.style.borderColor = 'var(--yellow)';
+            } else {
+                persistBadge.textContent = 'Storage: ❌ Ephemeral / In-Source';
+                persistBadge.style.color = 'var(--orange)';
+                persistBadge.style.borderColor = 'var(--orange)';
+            }
         }
 
         const pct = ((st.totalMb / st.limits.hardMb) * 100).toFixed(1);

@@ -590,6 +590,19 @@ async function replyInteractionError(interaction) {
     } catch {}
 }
 
+function serializeCommandOptions(optionsData) {
+    if (!Array.isArray(optionsData) || optionsData.length === 0) return {};
+    const map = {};
+    for (const opt of optionsData) {
+        if (Array.isArray(opt.options) && opt.options.length > 0) {
+            map[opt.name] = serializeCommandOptions(opt.options);
+        } else {
+            map[opt.name] = opt.value !== undefined ? opt.value : true;
+        }
+    }
+    return map;
+}
+
 async function dispatchCommandInteraction({ interaction, commands, client, SHADOW_MASTER_ID, commandKey, commandCooldownContext, commandInFlight }) {
     const startTime = Date.now();
     let status = "success";
@@ -597,6 +610,10 @@ async function dispatchCommandInteraction({ interaction, commands, client, SHADO
 
     try {
         await commands.handleInteraction(interaction, client, SHADOW_MASTER_ID);
+        if (interaction?.__commandFailed) {
+            status = "failed";
+            errorDetail = interaction.__commandError || "Command internal error";
+        }
     } catch (e) {
         status = "failed";
         errorDetail = e?.message || String(e);
@@ -608,12 +625,7 @@ async function dispatchCommandInteraction({ interaction, commands, client, SHADO
             const db = require("../../database");
             const commandRepo = db?.repositories?.commandEvent;
             if (commandRepo && typeof interaction.isChatInputCommand === "function" && interaction.isChatInputCommand()) {
-                const optionsMap = {};
-                if (Array.isArray(interaction.options?.data)) {
-                    for (const opt of interaction.options.data) {
-                        optionsMap[opt.name] = opt.value;
-                    }
-                }
+                const optionsMap = serializeCommandOptions(interaction.options?.data);
                 commandRepo.record({
                     occurredAt: startTime,
                     commandName: interaction.commandName,

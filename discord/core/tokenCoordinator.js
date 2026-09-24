@@ -372,10 +372,14 @@ class TokenCoordinator extends EventEmitter {
      * Apply backoff to a token (e.g. from HTTP 429 Retry-After)
      * @param {string} token
      * @param {number} durationMs
+     * @param {object|string} [options]
      */
-    applyTokenBackoff(token, durationMs) {
+    applyTokenBackoff(token, durationMs, options = {}) {
         const hash = this.hashToken(token);
         if (!hash) return;
+        const subsystem = typeof options === 'string' ? options : (options?.subsystem || null);
+        const reason = (typeof options === 'object' && options?.reason) || '429_backoff';
+        const source = (typeof options === 'object' && options?.source) || 'rest_api';
         const state = this._getOrCreateState(hash);
         const until = Date.now() + Math.max(300, Number(durationMs) || 2000);
         state.backoffUntil = Math.max(state.backoffUntil || 0, until);
@@ -383,10 +387,12 @@ class TokenCoordinator extends EventEmitter {
         const backoffSeconds = Math.ceil(waitMs / 1000);
         this.emit('token:rate_limited', {
             tokenHash: hash,
+            subsystem,
             backoffUntil: state.backoffUntil,
             waitMs,
             backoffSeconds,
-            source: 'rest_api'
+            reason,
+            source
         });
     }
 
@@ -514,7 +520,7 @@ class TokenCoordinator extends EventEmitter {
                         waitSec = typeof err.retry_after === 'number' ? (err.retry_after > 100 ? err.retry_after / 1000 : err.retry_after) : 2.5;
                     }
                     const waitMs = Math.ceil(waitSec * 1000) + 100;
-                    this.applyTokenBackoff(hash, waitMs);
+                    this.applyTokenBackoff(hash, waitMs, { subsystem, reason: '429_rate_limit', source: 'rest_api' });
 
                     if (attempt < maxAttempts) {
                         // Smooth pause and retry without dropping task

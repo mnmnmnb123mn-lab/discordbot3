@@ -169,9 +169,14 @@ async function getDatabaseOverview() {
                     percentFree: storage.freeSpace?.percentFree ?? null,
                     filesystemCritical: storage.filesystemCritical,
                     filesystemWarning: storage.filesystemWarning,
-                    pathWarning: storage.pathWarning,
                     isPersistent: storage.isPersistent,
-                    persistentLabel: storage.isPersistent ? "✅ Persistent Storage" : "❌ Ephemeral / In-Source"
+                    configuredPersistentPath: storage.configuredPersistentPath,
+                    persistentMountVerified: storage.persistentMountVerified,
+                    persistentLabel: storage.persistentMountVerified
+                        ? "✅ Owner-Confirmed External Volume"
+                        : storage.configuredPersistentPath
+                            ? "🟡 Persistent Path Configured (Mount Unverified)"
+                            : "❌ Ephemeral / In-Source"
                 },
                 records: {
                     total: totalRecords,
@@ -375,8 +380,14 @@ async function getSqliteDetailedStatus() {
             limits: quota.limits,
             filesystem: quota.filesystem,
             isPersistent: storageCheck.isPersistent,
+            configuredPersistentPath: storageCheck.configuredPersistentPath,
+            persistentMountVerified: storageCheck.persistentMountVerified,
             pathWarning: storageCheck.pathWarning,
-            persistentLabel: storageCheck.isPersistent ? "✅ Persistent Storage" : "❌ Ephemeral / In-Source"
+            persistentLabel: storageCheck.persistentMountVerified
+                ? "✅ Owner-Confirmed External Volume"
+                : storageCheck.configuredPersistentPath
+                    ? "🟡 Persistent Path Configured (Mount Unverified)"
+                    : "❌ Ephemeral / In-Source"
         },
         categories,
         maintenanceHistory,

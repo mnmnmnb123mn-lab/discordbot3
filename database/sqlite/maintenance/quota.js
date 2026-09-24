@@ -145,17 +145,22 @@ function evaluateEmergencyThresholds(dbPath, metrics = {}) {
         reasons.push(`Persistent disk storage critically low (${quota.filesystem.availableMb} MB free < 100 MB required)`);
     }
 
-    // 4. Telemetry Write-Behind Buffer Overflow (>= 2000 items)
+    const isStorageEmergency = isEmergency;
+
+    // 4. Telemetry Write-Behind Buffer Pressure (>= 2000 items in RAM)
+    // Note: Handled by buffer priority eviction/flush; does not trigger disk Emergency Trim
     const bufferCount = Number(metrics.writeBufferCount || 0);
-    if (bufferCount >= 2000) {
-        isEmergency = true;
+    const isBufferEmergency = bufferCount >= 2000;
+    if (isBufferEmergency) {
         reasons.push(`Telemetry write-behind buffer queue overflow (${bufferCount} items >= 2000 capacity)`);
     }
 
     return {
-        isEmergency,
+        isEmergency: isStorageEmergency || isBufferEmergency,
+        isStorageEmergency,
+        isBufferEmergency,
         reasons,
-        severity: isEmergency ? (quota.status === "hard" ? "CRITICAL" : "ERROR") : "OK",
+        severity: (isStorageEmergency || isBufferEmergency) ? (quota.status === "hard" ? "CRITICAL" : "ERROR") : "OK",
         quota,
         walMb,
         bufferCount

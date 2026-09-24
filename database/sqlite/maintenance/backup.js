@@ -4,7 +4,7 @@ const fs = require("node:fs");
 const path = require("node:path");
 const crypto = require("node:crypto");
 const Database = require("better-sqlite3");
-const { getFilesystemFreeSpace } = require("./quota");
+const { getFilesystemFreeSpace, getDatabaseFootprint } = require("./quota");
 
 const DEFAULT_MAX_BACKUPS = 2;
 
@@ -60,10 +60,10 @@ async function createBackup(db, options = {}) {
         fs.mkdirSync(backupDir, { recursive: true });
     }
 
-    // Safety check: ensure sufficient filesystem free space
-    if (db.name && fs.existsSync(db.name)) {
-        const dbSize = fs.statSync(db.name).size;
-        const requiredBytes = Math.max(dbSize * 1.5, 50 * 1024 * 1024); // at least 1.5x DB size or 50MB
+    // Safety check: ensure sufficient filesystem free space (including WAL and SHM)
+    if (!options.skipSpaceCheck && db.name && fs.existsSync(db.name)) {
+        const footprint = getDatabaseFootprint(db.name);
+        const requiredBytes = Math.max(footprint.totalBytes * 1.5, 50 * 1024 * 1024); // at least 1.5x total footprint or 50MB
         const freeSpace = getFilesystemFreeSpace(backupDir);
 
         if (freeSpace.availableBytes !== null && freeSpace.availableBytes < requiredBytes) {
@@ -76,26 +76,32 @@ async function createBackup(db, options = {}) {
     const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
     const filename = options.filename || `sqlite_backup_${timestamp}.sqlite`;
     const targetPath = path.join(backupDir, filename);
+    const tempPath = path.join(backupDir, `${filename}.tmp`);
+
+    // Clean up any stale temp file
+    if (fs.existsSync(tempPath)) {
+        try { fs.unlinkSync(tempPath); } catch (_) {}
+    }
 
     // better-sqlite3 provides native online async backup API
     try {
-        await db.backup(targetPath);
+        await db.backup(tempPath);
     } catch (err) {
+        if (fs.existsSync(tempPath)) {
+            try { fs.unlinkSync(tempPath); } catch (_) {}
+        }
         if (fs.existsSync(targetPath)) {
             try { fs.unlinkSync(targetPath); } catch (_) {}
         }
         throw new Error(`การสำรองข้อมูล SQLite ล้มเหลวระหว่างเขียนไฟล์: ${err.message}`);
     }
 
-    const stat = fs.statSync(targetPath);
-    const sha256 = await computeFileSha256(targetPath);
-
-    // Post-backup verification: verify backup file physically opens and passes quick_check
+    // Post-backup verification: verify backup file physically opens and passes quick_check on temp file
     let verifyDb = null;
     let verified = false;
     let quickCheckOutput = null;
     try {
-        verifyDb = new Database(targetPath, { readonly: true, fileMustExist: true });
+        verifyDb = new Database(tempPath, { readonly: true, fileMustExist: true });
         const checkRows = verifyDb.pragma("quick_check(1)");
         verified = checkRows.length === 1 && (checkRows[0].quick_check === "ok" || checkRows[0] === "ok");
         quickCheckOutput = checkRows;
@@ -109,9 +115,19 @@ async function createBackup(db, options = {}) {
     }
 
     if (!verified) {
-        try { fs.unlinkSync(targetPath); } catch (_) {}
+        try { fs.unlinkSync(tempPath); } catch (_) {}
+        if (fs.existsSync(targetPath)) {
+            try { fs.unlinkSync(targetPath); } catch (_) {}
+        }
         throw new Error(`ไฟล์สำรองข้อมูลไม่ผ่านการตรวจสอบความสมบูรณ์ (Quick Check Failed): ${JSON.stringify(quickCheckOutput)}`);
     }
+
+    const sha256 = await computeFileSha256(tempPath);
+
+    // Atomically promote temporary backup to targetPath
+    fs.renameSync(tempPath, targetPath);
+
+    const stat = fs.statSync(targetPath);
 
     const durationMs = Date.now() - startTime;
 

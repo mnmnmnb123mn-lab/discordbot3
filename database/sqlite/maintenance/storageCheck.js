@@ -37,13 +37,19 @@ function evaluateStoragePaths(options = {}) {
     if (!explicitBackupDir) missingExplicitEnvs.push("SQLITE_BACKUP_DIR");
     if (!explicitAssetDir) missingExplicitEnvs.push("SQLITE_ASSET_DIR");
 
-    // Persistent storage is verified when no paths reside inside source tree and explicit external paths are configured
-    const isPersistent = !hasInSource && (missingExplicitEnvs.length === 0 || !isProduction);
+    // Persistent storage path is configured when no paths reside inside source tree and explicit external paths are configured
+    const configuredPersistentPath = !hasInSource && (missingExplicitEnvs.length === 0 || !isProduction);
+    const persistenceConfirmed = Boolean(process.env.SQLITE_PERSISTENCE_CONFIRMED === "true" || process.env.PERSISTENT_STORAGE_CONFIRMED === "true");
+    const persistentMountVerified = configuredPersistentPath && persistenceConfirmed;
+    const isPersistent = configuredPersistentPath; // backward-compatibility flag
 
     const results = {
         ok: true,
         isProduction,
         isPersistent,
+        configuredPersistentPath,
+        persistentMountVerified,
+        persistenceConfirmed,
         allowInSource,
         missingExplicitEnvs,
         hasInSource,
@@ -71,15 +77,18 @@ function evaluateStoragePaths(options = {}) {
     ];
 
     // 1. Path Placement & Persistence Assessment
-    if (!isPersistent) {
+    if (!configuredPersistentPath) {
         results.persistentRecommended = true;
-        results.pathWarning = true;
         const inSourceNames = [];
         if (dbInSource) inSourceNames.push("database");
         if (backupInSource) inSourceNames.push("backup");
         if (assetInSource) inSourceNames.push("asset-cache");
 
-        if (isProduction) {
+        if (allowInSource) {
+            results.pathWarning = false;
+            results.warnings.push(`[STORAGE] ℹ️ ALLOW_IN_SOURCE_STORAGE=true is active. Local in-source paths [${inSourceNames.join(", ") || "default"}] are permitted by owner override.`);
+        } else if (isProduction) {
+            results.pathWarning = true;
             const missingDetails = missingExplicitEnvs.length > 0
                 ? `Missing explicit external path ENV(s): [${missingExplicitEnvs.join(", ")}]. `
                 : "";
@@ -89,6 +98,7 @@ function evaluateStoragePaths(options = {}) {
             const msg = `[PRODUCTION_STORAGE] ⚠️ Production storage is not using verified external persistent mount. ${missingDetails}${sourceDetails}In containerized production (Pterodactyl/Docker/VPS), data may be lost on container rebuild or redeploy unless external persistent mounts (e.g. /persistent/...) are configured or ALLOW_IN_SOURCE_STORAGE=true is explicitly set.`;
             results.warnings.push(msg);
         } else {
+            results.pathWarning = true;
             const msg = `[STORAGE] ℹ️ Storage path(s) [${inSourceNames.join(", ") || "default"}] reside in local workspace. Ensure persistent volumes are mounted before deploying to production.`;
             results.warnings.push(msg);
         }

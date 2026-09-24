@@ -2,6 +2,7 @@
 
 const { getDatabase } = require("../../connection");
 const { resolvePriority, evictWithPriority, notifyBufferDropped } = require("./bufferPolicy");
+const { canWrite } = require("../../maintenance/writePolicy");
 
 const SENSITIVE_KEY_REGEX = /(token|password|pin|secret|credential|auth|bearer|cookie|salt|private|api_?key|access_?key|secret_?key|^key$)/i;
 
@@ -99,6 +100,11 @@ class CommandEventRepository {
             return;
         }
 
+        // P2 drop early when telemetry is degraded under quota pressure
+        if (priority === "P2" && !canWrite("telemetry", { priority: "P2" })) {
+            return;
+        }
+
         // Bounded queue overflow guard with priority eviction
         if (this.buffer.length >= this.maxQueueCap) {
             const dropTarget = Math.min(500, Math.max(1, Math.floor(this.maxQueueCap / 4)));
@@ -140,6 +146,11 @@ class CommandEventRepository {
         if (this.buffer.length === 0) return 0;
         const batchSize = Math.min(this.buffer.length, 500);
         const items = this.buffer.slice(0, batchSize);
+
+        if (!canWrite("history")) {
+            this.buffer.splice(0, batchSize);
+            return 0;
+        }
 
         const stmt = this.db.prepare(`
             INSERT INTO command_events (

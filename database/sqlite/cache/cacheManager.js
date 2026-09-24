@@ -2,6 +2,7 @@
 
 const { getDatabase } = require("../connection");
 const { getPolicy } = require("./cachePolicy");
+const { canWrite } = require("../maintenance/writePolicy");
 
 class CacheManager {
     constructor(db = null) {
@@ -91,6 +92,9 @@ class CacheManager {
     }
 
     set(namespace, cacheKey, value, options = {}) {
+        if (!canWrite("cache")) {
+            return false;
+        }
         const now = Date.now();
         const policy = getPolicy(namespace);
         const ttlMs = options.ttlMs !== undefined ? options.ttlMs : policy.ttlMs;

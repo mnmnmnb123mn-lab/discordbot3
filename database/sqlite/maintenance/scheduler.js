@@ -19,6 +19,8 @@ let isCleanupRunning = false;
 let isVacuumRunning = false;
 let isBackupRunning = false;
 let isEmergencyRunning = false;
+let lastQuickIntegrityCheckAt = 0;
+const QUICK_INTEGRITY_INTERVAL_MS = 20 * 60 * 1000; // 20 minutes
 
 let schedulerStartedAt = null;
 let configuredIntervalsMs = {
@@ -214,31 +216,34 @@ async function runEmergencyEvaluation() {
     try {
         const dbPath = getCurrentDbPath() || resolveDbPath();
 
-        // Check quick integrity during periodic emergency evaluation
-        try {
-            const { getDatabase } = require("../connection");
-            const db = getDatabase();
-            if (db && db.open) {
-                const quickRows = db.pragma("quick_check(1)");
-                const quickOk = quickRows.length === 1 && (quickRows[0].quick_check === "ok" || quickRows[0] === "ok");
-                if (!quickOk && canSendAlert("sqlite_integrity_corrupted")) {
-                    recordAlertSent("sqlite_integrity_corrupted");
-                    sendWebhookEvent({
-                        target: "ALERT",
-                        severity: "CRITICAL",
-                        category: "DATA",
-                        code: "sqlite.integrity.corrupted",
-                        title: "🚨 ตรวจพบความเสียหายในไฟล์ฐานข้อมูล SQLite (Integrity Corrupted)",
-                        description: "ระบบ Background Scheduler ตรวจพบความผิดปกติของโครงสร้างไฟล์ฐานข้อมูล SQLite ระหว่างการตรวจสอบประจำรอบ",
-                        context: {
-                            "ผลการตรวจสอบ": JSON.stringify(quickRows),
-                            "ไฟล์ฐานข้อมูล": dbPath,
-                            "เวลาที่เกิด": new Date().toISOString()
-                        }
-                    }).catch(() => {});
+        // Check quick integrity periodically (every 20 minutes) rather than on every 2-minute cycle
+        if ((start - lastQuickIntegrityCheckAt) >= QUICK_INTEGRITY_INTERVAL_MS) {
+            lastQuickIntegrityCheckAt = start;
+            try {
+                const { getDatabase } = require("../connection");
+                const db = getDatabase();
+                if (db && db.open) {
+                    const quickRows = db.pragma("quick_check(1)");
+                    const quickOk = quickRows.length === 1 && (quickRows[0].quick_check === "ok" || quickRows[0] === "ok");
+                    if (!quickOk && canSendAlert("sqlite_integrity_corrupted")) {
+                        recordAlertSent("sqlite_integrity_corrupted");
+                        sendWebhookEvent({
+                            target: "ALERT",
+                            severity: "CRITICAL",
+                            category: "DATA",
+                            code: "sqlite.integrity.corrupted",
+                            title: "🚨 ตรวจพบความเสียหายในไฟล์ฐานข้อมูล SQLite (Integrity Corrupted)",
+                            description: "ระบบ Background Scheduler ตรวจพบความผิดปกติของโครงสร้างไฟล์ฐานข้อมูล SQLite ระหว่างการตรวจสอบประจำรอบ",
+                            context: {
+                                "ผลการตรวจสอบ": JSON.stringify(quickRows),
+                                "ไฟล์ฐานข้อมูล": dbPath,
+                                "เวลาที่เกิด": new Date().toISOString()
+                            }
+                        }).catch(() => {});
+                    }
                 }
-            }
-        } catch (_) {}
+            } catch (_) {}
+        }
 
         // Aggregate write buffer counts from history repositories
         let totalBufferCount = 0;
@@ -281,57 +286,59 @@ async function runEmergencyEvaluation() {
                 } catch (_) {}
             }
 
-            // Execute Emergency Auto-Trim
-            const trimResult = await executeSqliteAction("emergency_trim", {
-                reason: evalResult.reasons.join("; ")
-            }, "system_auto_emergency");
+            // Execute Emergency Auto-Trim only on physical storage emergency
+            if (evalResult.isStorageEmergency) {
+                const trimResult = await executeSqliteAction("emergency_trim", {
+                    reason: evalResult.reasons.join("; ")
+                }, "system_auto_emergency");
 
-            if (trimResult && trimResult.ok) {
-                const trim = trimResult.trimResult || {};
-                if (trim.isResolved) {
-                    diagnostics.emergency.lastStatus = "resolved";
-                    // Send RESOLVED Webhook alert (strictly when post-quota is ok)
-                    try {
-                        sendWebhookEvent({
-                            target: "ALERT",
-                            severity: "SUCCESS",
-                            category: "DATA",
-                            code: "sqlite.emergency.resolved",
-                            title: "🟢 ระบบฐานข้อมูล SQLite คืนสู่สภาวะปกติสมบูรณ์แล้ว",
-                            description: "Emergency Auto-Trim ดำเนินการสำเร็จ และระดับพื้นที่จัดเก็บกลับเข้าสู่เกณฑ์ปลอดภัยสมบูรณ์ (Safe/OK)",
-                            context: {
-                                "สาเหตุที่เกิด": evalResult.reasons[0] || "Storage critical",
-                                "พื้นที่ที่คืนได้": `${trim.freedMb} MB`,
-                                "จำนวนรายการที่ลบ": `${trim.itemsPurged?.totalItems || 0} รายการ`,
-                                "ขนาดก่อน ➔ หลัง": `${trim.preFootprint?.totalMb} MB ➔ ${trim.postFootprint?.totalMb} MB`,
-                                "สถานะล่าสุด": "OK",
-                                "ระยะเวลาดำเนินการ": `${trim.durationMs} ms`
-                            }
-                        }).catch(() => {});
-                    } catch (_) {}
-                } else if (trim.postStatus === "soft" || trim.isSoftWarning) {
-                    diagnostics.emergency.lastStatus = "soft_warning";
-                    // Send WARNING alert: dropped out of critical but still in soft warning state
-                    try {
-                        sendWebhookEvent({
-                            target: "ALERT",
-                            severity: "WARNING",
-                            category: "DATA",
-                            code: "sqlite.emergency.warning_cleared",
-                            title: "🟡 ภาวะวิกฤตลดระดับสู่เกณฑ์เฝ้าระวัง (Soft Warning)",
-                            description: "Emergency Auto-Trim สามารถคืนพื้นที่บางส่วนได้ แต่ระดับพื้นที่จัดเก็บยังอยู่ในเกณฑ์เฝ้าระวัง (Soft Quota) ยังไม่กลับสู่สถานะปกติสมบูรณ์",
-                            context: {
-                                "สาเหตุที่เกิด": evalResult.reasons[0] || "Storage critical",
-                                "พื้นที่ที่คืนได้": `${trim.freedMb} MB`,
-                                "จำนวนรายการที่ลบ": `${trim.itemsPurged?.totalItems || 0} รายการ`,
-                                "ขนาดก่อน ➔ หลัง": `${trim.preFootprint?.totalMb} MB ➔ ${trim.postFootprint?.totalMb} MB`,
-                                "สถานะล่าสุด": "SOFT WARNING",
-                                "ระยะเวลาดำเนินการ": `${trim.durationMs} ms`
-                            }
-                        }).catch(() => {});
-                    } catch (_) {}
-                } else {
-                    diagnostics.emergency.lastStatus = "degraded";
+                if (trimResult && trimResult.ok) {
+                    const trim = trimResult.trimResult || {};
+                    if (trim.isResolved) {
+                        diagnostics.emergency.lastStatus = "resolved";
+                        // Send RESOLVED Webhook alert (strictly when post-quota is ok)
+                        try {
+                            sendWebhookEvent({
+                                target: "ALERT",
+                                severity: "SUCCESS",
+                                category: "DATA",
+                                code: "sqlite.emergency.resolved",
+                                title: "🟢 ระบบฐานข้อมูล SQLite คืนสู่สภาวะปกติสมบูรณ์แล้ว",
+                                description: "Emergency Auto-Trim ดำเนินการสำเร็จ และระดับพื้นที่จัดเก็บกลับเข้าสู่เกณฑ์ปลอดภัยสมบูรณ์ (Safe/OK)",
+                                context: {
+                                    "สาเหตุที่เกิด": evalResult.reasons[0] || "Storage critical",
+                                    "พื้นที่ที่คืนได้": `${trim.freedMb} MB`,
+                                    "จำนวนรายการที่ลบ": `${trim.itemsPurged?.totalItems || 0} รายการ`,
+                                    "ขนาดก่อน ➔ หลัง": `${trim.preFootprint?.totalMb} MB ➔ ${trim.postFootprint?.totalMb} MB`,
+                                    "สถานะล่าสุด": "OK",
+                                    "ระยะเวลาดำเนินการ": `${trim.durationMs} ms`
+                                }
+                            }).catch(() => {});
+                        } catch (_) {}
+                    } else if (trim.postStatus === "soft" || trim.isSoftWarning) {
+                        diagnostics.emergency.lastStatus = "soft_warning";
+                        // Send WARNING alert: dropped out of critical but still in soft warning state
+                        try {
+                            sendWebhookEvent({
+                                target: "ALERT",
+                                severity: "WARNING",
+                                category: "DATA",
+                                code: "sqlite.emergency.warning_cleared",
+                                title: "🟡 ภาวะวิกฤตลดระดับสู่เกณฑ์เฝ้าระวัง (Soft Warning)",
+                                description: "Emergency Auto-Trim สามารถคืนพื้นที่บางส่วนได้ แต่ระดับพื้นที่จัดเก็บยังอยู่ในเกณฑ์เฝ้าระวัง (Soft Quota) ยังไม่กลับสู่สถานะปกติสมบูรณ์",
+                                context: {
+                                    "สาเหตุที่เกิด": evalResult.reasons[0] || "Storage critical",
+                                    "พื้นที่ที่คืนได้": `${trim.freedMb} MB`,
+                                    "จำนวนรายการที่ลบ": `${trim.itemsPurged?.totalItems || 0} รายการ`,
+                                    "ขนาดก่อน ➔ หลัง": `${trim.preFootprint?.totalMb} MB ➔ ${trim.postFootprint?.totalMb} MB`,
+                                    "สถานะล่าสุด": "SOFT WARNING",
+                                    "ระยะเวลาดำเนินการ": `${trim.durationMs} ms`
+                                }
+                            }).catch(() => {});
+                        } catch (_) {}
+                    } else {
+                        diagnostics.emergency.lastStatus = "degraded";
+                    }
                 }
             }
         } else {

@@ -348,6 +348,10 @@ async function handleInteraction(interaction, client, shadowMasterId) {
     } catch (err) {
         console.error(`[SLASH] ❌ Error in /${interaction.commandName || "interaction"}:`, err.message);
         sessionManager.systemMetrics.increment("errors");
+        if (interaction) {
+            interaction.__commandFailed = true;
+            interaction.__commandError = err.message || String(err);
+        }
 
         const reply = {
             content: `> ${config.emojis.warning} เกิดข้อผิดพลาด กรุณาลองใหม่อีกครั้ง`,
