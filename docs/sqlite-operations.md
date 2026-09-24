@@ -152,6 +152,7 @@ Updated: 2026-09-23
   SQLITE_DB_PATH=/persistent/discordbot.sqlite
   SQLITE_BACKUP_DIR=/persistent/backups
   SQLITE_ASSET_DIR=/persistent/cache-assets
+  SQLITE_PERSISTENCE_CONFIRMED=true
   SQLITE_QUOTA_SOFT_MB=3072
   SQLITE_QUOTA_CRIT_MB=3686
   SQLITE_QUOTA_HARD_MB=4096

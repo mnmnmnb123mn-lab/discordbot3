@@ -63,9 +63,10 @@ voice, slash-command, and verification readiness.
    `API_SECRET` invalidates existing Owner sessions.
 7. Mount persistent volume storage for the local SQLite operational database
    (e.g. `/persistent`) and set `SQLITE_DB_PATH=/persistent/discordbot.sqlite`,
-   `SQLITE_BACKUP_DIR=/persistent/backups`, and
-   `SQLITE_ASSET_DIR=/persistent/cache-assets`. Run `npm run check:storage`
-   to verify filesystem write permissions and path isolation before deployment.
+   `SQLITE_BACKUP_DIR=/persistent/backups`,
+   `SQLITE_ASSET_DIR=/persistent/cache-assets`, and
+   `SQLITE_PERSISTENCE_CONFIRMED=true`. Run `npm run check:storage`
+   to verify filesystem write permissions, path isolation, and persistence confirmation before deployment.
 8. Deploy.
 9. Run the single-port smoke helper:
 
