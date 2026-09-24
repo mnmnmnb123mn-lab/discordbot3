@@ -51,7 +51,7 @@ const {
 // ════════════════════════════════════════════════════════════════════════════
 const panelMessages = new Map();
 const activePanelCreates = new Set();
-const INFORMATION_COMMANDS = new Set(["userinfo", "serverinfo", "ping"]);
+const INFORMATION_COMMANDS = new Set(["user", "userinfo", "serverinfo", "ping"]);
 const MODERATION_COMMANDS = new Set(["ban", "kick", "timeout", "clear"]);
 const UTILITY_COMMANDS = new Set(["say", "embed", "copy-emojis"]);
 

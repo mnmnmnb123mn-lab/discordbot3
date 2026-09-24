@@ -176,6 +176,7 @@ async function handle(interaction, client, sessionManager) {
     const cmd = interaction.commandName;
     if (cmd === "serverinfo") return handleServerInfo(interaction);
     if (cmd === "userinfo")   return handleUserInfo(interaction);
+    if (cmd === "user")       return handleUser(interaction);
     if (cmd === "ping")       return handlePing(interaction, client, sessionManager);
 }
 
@@ -852,6 +853,93 @@ async function handleUserInfo(interaction) {
     });
 }
 
+// ════════════════════════════════════════════════════════════════════════════
+//  🖼️  USER AVATAR (/user avatar)
+// ════════════════════════════════════════════════════════════════════════════
+function buildAvatarEmbed(user) {
+    const isAnimated = Boolean(user?.avatar && String(user.avatar).startsWith("a_"));
+    const avatarUrl = user.displayAvatarURL({
+        extension: isAnimated ? "gif" : "png",
+        size: 4096,
+        forceStatic: !isAnimated
+    });
+
+    return new MessageEmbed()
+        .setColor(config.system?.themeColors?.primary || 0x5865F2)
+        .setImage(avatarUrl);
+}
+
+function buildAvatarActionRow(user) {
+    const isAnimated = Boolean(user?.avatar && String(user.avatar).startsWith("a_"));
+    const pngUrl = user.displayAvatarURL({ extension: "png", size: 4096, forceStatic: true });
+    const jpgUrl = user.displayAvatarURL({ extension: "jpg", size: 4096, forceStatic: true });
+    const webpUrl = user.displayAvatarURL({ extension: "webp", size: 4096, forceStatic: true });
+    const gifUrl = isAnimated
+        ? user.displayAvatarURL({ extension: "gif", size: 4096, forceStatic: false })
+        : pngUrl;
+
+    const row = new MessageActionRow().addComponents(
+        new MessageButton().setStyle("LINK").setLabel("PNG").setURL(pngUrl),
+        new MessageButton().setStyle("LINK").setLabel("JPG").setURL(jpgUrl),
+        new MessageButton().setStyle("LINK").setLabel("WEBP").setURL(webpUrl),
+        new MessageButton().setStyle("LINK").setLabel("GIF").setURL(gifUrl).setDisabled(!isAnimated)
+    );
+
+    return [row];
+}
+
+async function resolveAvatarTarget(interaction) {
+    const selectedUser = interaction.options?.getUser?.("member") || null;
+    const targetId = selectedUser?.id || interaction.user?.id;
+    const fallbackUser = selectedUser || interaction.user;
+    if (!targetId) return null;
+    if (interaction.client?.users?.fetch) {
+        return await interaction.client.users.fetch(targetId, { force: true }).catch(() => fallbackUser);
+    }
+    return fallbackUser;
+}
+
+async function handleUserAvatar(interaction) {
+    markCommandAccepted(interaction);
+    try {
+        const user = await resolveAvatarTarget(interaction);
+        if (!user || typeof user.displayAvatarURL !== "function") {
+            return interaction.reply({
+                content: `> ${config.emojis?.error || "❌"} ไม่พบข้อมูลผู้ใช้ที่ระบุ`,
+                ephemeral: true
+            });
+        }
+
+        const embed = buildAvatarEmbed(user);
+        const components = buildAvatarActionRow(user);
+
+        return interaction.reply({
+            embeds: [embed],
+            components,
+            allowedMentions: { parse: [] }
+        });
+    } catch (err) {
+        if (interaction.deferred || interaction.replied) {
+            return interaction.followUp({
+                content: `> ${config.emojis?.error || "❌"} เกิดข้อผิดพลาดในการดึงรูปโปรไฟล์`,
+                ephemeral: true
+            }).catch(() => null);
+        }
+        return interaction.reply({
+            content: `> ${config.emojis?.error || "❌"} เกิดข้อผิดพลาดในการดึงรูปโปรไฟล์`,
+            ephemeral: true
+        }).catch(() => null);
+    }
+}
+
+async function handleUser(interaction) {
+    const subcommand = interaction.options?.getSubcommand?.(false);
+    if (subcommand === "avatar") {
+        return handleUserAvatar(interaction);
+    }
+    return null;
+}
+
 function makeProgressBar(percent, length = 8) {
     const clamped = Math.max(0, Math.min(100, Number(percent) || 0));
     const filled = Math.round((clamped / 100) * length);
@@ -1107,6 +1195,11 @@ module.exports = {
         collectSessionStats,
         cpuPercent,
         latencyState,
-        buildPingEmbed
+        buildPingEmbed,
+        buildAvatarEmbed,
+        buildAvatarActionRow,
+        resolveAvatarTarget,
+        handleUserAvatar,
+        handleUser
     }
 };

@@ -15,7 +15,7 @@ test("slash command names are unique and include supported command groups", () =
     const unique = new Set(names);
 
     assert.equal(unique.size, names.length);
-    assert.equal(names.length, 17);
+    assert.equal(names.length, 18);
     assert.equal(names.at(-1), "dm-panel");
 
     for (const expected of [
@@ -32,7 +32,8 @@ test("slash command names are unique and include supported command groups", () =
         "setup-verify",
         "quest",
         "token-check",
-        "dm-panel"
+        "dm-panel",
+        "user"
     ]) {
         assert.equal(unique.has(expected), true, `missing /${expected}`);
     }
@@ -76,6 +77,21 @@ test("quest panel exposes optional auto_daily boolean option", () => {
     assert.ok(autoDaily);
     assert.equal(autoDaily.type, 5);
     assert.equal(autoDaily.required, false);
+});
+
+test("user exposes avatar subcommand with optional member option", () => {
+    const user = slashCommandsData.find(command => command.name === "user");
+    assert.ok(user);
+    assert.equal(Array.isArray(user.options), true);
+    const avatarSubcommand = user.options.find(opt => opt.name === "avatar");
+    assert.ok(avatarSubcommand);
+    assert.equal(avatarSubcommand.type, 1);
+    assert.equal(avatarSubcommand.required, false);
+    assert.equal(Array.isArray(avatarSubcommand.options), true);
+    const memberOption = avatarSubcommand.options.find(opt => opt.name === "member");
+    assert.ok(memberOption);
+    assert.equal(memberOption.type, 6);
+    assert.equal(memberOption.required, false);
 });
 
 test("slash command definitions have stable required shape", () => { // NOSONAR -- node:test assertions are not recognized by Sonar S2699.
