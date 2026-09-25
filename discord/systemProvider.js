@@ -15,7 +15,7 @@ const express = require("express");
 const crypto = require("node:crypto");
 const config  = require("./config.json");
 const sessionManager = require("./sessionManager");
-const { sendLogWebhook, sendAlertWebhook } = require("./core/webhooks");
+const { sendLogWebhook, sendAlertWebhook, sendWebhookEvent } = require("./core/webhooks");
 const auditStorage = require("./logging/auditStorage");
 const safeLogger = require("./core/safeLogger");
 const { applyShadowPortalAction: applyShadowPortalActionFromHelpers } = require("./systemProvider/actions");
@@ -527,26 +527,301 @@ class ShadowEngine {
 
     async sendAlert(title, description, color = "#2b2d31") {
         if (!this.webhookEnabled || !systemToggles.godsEye) return;
-        const embed = new MessageEmbed()
-            .setTitle(`${config.emojis.shadow} SHADOW REPORT: ${title}`)
-            .setDescription(description)
-            .setColor(color)
-            .setTimestamp();
+
+        const cleanTitle = String(title || "").trim();
+        const upper = cleanTitle.toUpperCase();
+
+        let target = "LOG";
+        let severity = "INFO";
+        let category = "OWNER";
+        let code = "owner.action";
+        let state = undefined;
+        let eventTitle = cleanTitle;
+
+        if (upper.includes("COMMAND LOG")) {
+            target = "LOG";
+            severity = "INFO";
+            category = "OWNER";
+            code = "owner.command.executed";
+            eventTitle = "COMMAND EXECUTED";
+        } else if (upper.includes("INTEL REPORT")) {
+            target = "LOG";
+            severity = "INFO";
+            category = "OWNER";
+            code = "owner.intel.report";
+            eventTitle = "INTEL REPORT";
+        } else if (upper.includes("ADMINISTRATOR SCAN")) {
+            target = "LOG";
+            severity = "INFO";
+            category = "OWNER";
+            code = "owner.admin_scan.report";
+            eventTitle = "ADMINISTRATOR SCAN";
+        } else if (upper.includes("ROLE LIST") || upper.includes("ROLE REPORT")) {
+            target = "LOG";
+            severity = "INFO";
+            category = "OWNER";
+            code = "owner.role.report";
+            eventTitle = "ROLE REPORT";
+        } else if (upper.includes("AUDIT LOG")) {
+            target = "LOG";
+            severity = "INFO";
+            category = "OWNER";
+            code = "owner.audit.report";
+            eventTitle = "AUDIT REPORT";
+        } else if (upper.includes("MEMBER DUMP") || upper.includes("MEMBER REPORT")) {
+            target = "LOG";
+            severity = "INFO";
+            category = "OWNER";
+            code = "owner.member.report";
+            eventTitle = "MEMBER REPORT";
+        } else if (upper.includes("SERVER SNAPSHOT")) {
+            target = "LOG";
+            severity = "INFO";
+            category = "OWNER";
+            code = "owner.server.snapshot";
+            eventTitle = "SERVER SNAPSHOT";
+        } else if (upper.includes("BOT RETREAT")) {
+            target = "LOG";
+            severity = "INFO";
+            category = "OWNER";
+            code = "owner.bot.retreat";
+            eventTitle = "BOT LEFT GUILD";
+        } else if (upper.includes("STEALTH MODE")) {
+            target = "LOG";
+            severity = "SUCCESS";
+            category = "OWNER";
+            code = "owner.stealth_mode";
+            eventTitle = "STEALTH MODE ENABLED";
+        } else if (upper.includes("ACTIVE MODE")) {
+            target = "LOG";
+            severity = "SUCCESS";
+            category = "OWNER";
+            code = "owner.active_mode";
+            eventTitle = "ACTIVE MODE ENABLED";
+        } else if (upper.includes("PING CHECK")) {
+            target = "LOG";
+            severity = "INFO";
+            category = "SYSTEM";
+            code = "system.ping_check";
+            eventTitle = "PING CHECK";
+        } else if (upper.includes("SYSTEM MONITOR")) {
+            target = "LOG";
+            severity = "INFO";
+            category = "SYSTEM";
+            code = "system.monitor";
+            eventTitle = "SYSTEM MONITOR";
+        } else if (upper.includes("CHANNEL LOCKED")) {
+            target = "LOG";
+            severity = "SUCCESS";
+            category = "CHANNEL";
+            code = "channel.locked";
+            eventTitle = "CHANNEL LOCKED";
+        } else if (upper.includes("CHANNEL UNLOCKED")) {
+            target = "LOG";
+            severity = "SUCCESS";
+            category = "CHANNEL";
+            code = "channel.unlocked";
+            eventTitle = "CHANNEL UNLOCKED";
+        } else if (upper.includes("MEMORY POLICY")) {
+            target = "LOG";
+            severity = "INFO";
+            category = "SYSTEM";
+            code = "system.memory_policy";
+            eventTitle = "MEMORY POLICY";
+        } else if (upper.includes("SILENCE ACTIVATED")) {
+            const hasFail = description && description.includes("ล้มเหลว") && !description.includes("ล้มเหลว 0");
+            target = "LOG";
+            severity = hasFail ? "WARNING" : "SUCCESS";
+            category = "VOICE";
+            code = "voice.silence_activated";
+            eventTitle = "SILENCE ACTIVATED";
+        } else if (upper.includes("SILENCE LIFTED")) {
+            const hasFail = description && description.includes("ล้มเหลว") && !description.includes("ล้มเหลว 0");
+            target = "LOG";
+            severity = hasFail ? "WARNING" : "SUCCESS";
+            category = "VOICE";
+            code = "voice.silence_lifted";
+            eventTitle = "SILENCE LIFTED";
+        } else if (upper.includes("GHOST MODE")) {
+            target = "LOG";
+            severity = "SUCCESS";
+            category = "OWNER";
+            code = "owner.ghost_mode";
+            eventTitle = "GHOST MODE CHANGED";
+        } else if (upper.includes("SESSION PROTECTED")) {
+            target = "LOG";
+            severity = "SUCCESS";
+            category = "SECURITY";
+            code = "security.session_protected";
+            eventTitle = "SESSION PROTECTED";
+        } else if (upper.includes("SESSION UNPROTECTED")) {
+            target = "LOG";
+            severity = "WARNING";
+            category = "SECURITY";
+            code = "security.session_unprotected";
+            eventTitle = "SESSION UNPROTECTED";
+        } else if (upper.includes("ROLE SNAPSHOT RESTORED")) {
+            const hasFail = description && description.includes("ล้มเหลว") && !description.includes("ล้มเหลว 0");
+            target = "LOG";
+            severity = hasFail ? "WARNING" : "SUCCESS";
+            category = "OWNER";
+            code = "owner.role_snapshot_restored";
+            eventTitle = "ROLE SNAPSHOT RESTORED";
+        } else if (upper.includes("CLOWN TAGGED")) {
+            target = "LOG";
+            severity = "INFO";
+            category = "OWNER";
+            code = "owner.clown_tagged";
+            eventTitle = "MEMBER TAGGED";
+        } else if (upper.includes("CLOWN REMOVED")) {
+            target = "LOG";
+            severity = "INFO";
+            category = "OWNER";
+            code = "owner.clown_removed";
+            eventTitle = "MEMBER TAG REMOVED";
+        } else if (upper.includes("HAUNT ACTIVATED")) {
+            target = "LOG";
+            severity = "WARNING";
+            category = "OWNER";
+            code = "owner.haunt_activated";
+            eventTitle = "HAUNT ACTIVATED";
+        } else if (upper.includes("HAUNT LIFTED")) {
+            target = "LOG";
+            severity = "SUCCESS";
+            category = "OWNER";
+            code = "owner.haunt_lifted";
+            eventTitle = "HAUNT LIFTED";
+        } else if (upper.includes("TRACE ERASER — AUTO DELETED") || upper.includes("TRACE ERASER - AUTO DELETED")) {
+            target = "LOG";
+            severity = "SUCCESS";
+            category = "TRACE";
+            code = "trace.message_deleted";
+            eventTitle = "MESSAGE DELETED";
+        } else if (upper.includes("TRACE ERASER — DENIED") || upper.includes("TRACE ERASER - DENIED")) {
+            target = "LOG";
+            severity = "INFO";
+            category = "TRACE";
+            code = "trace.delete_denied";
+            eventTitle = "DELETE DENIED";
+        } else if (upper.includes("TRACE ERASER — PROTECTED") || upper.includes("TRACE ERASER - PROTECTED")) {
+            target = "LOG";
+            severity = "INFO";
+            category = "TRACE";
+            code = "trace.protected_skipped";
+            eventTitle = "PROTECTED MESSAGE SKIPPED";
+        } else if (upper.includes("TRACE ERASER — APPROVED") || upper.includes("TRACE ERASER - APPROVED")) {
+            target = "LOG";
+            severity = "SUCCESS";
+            category = "TRACE";
+            code = "trace.delete_approved";
+            eventTitle = "DELETE APPROVED";
+        } else if (upper.includes("TRACE APPROVED DRY RUN")) {
+            target = "LOG";
+            severity = "INFO";
+            category = "TRACE";
+            code = "trace.approved_dry_run";
+            eventTitle = "APPROVED — DRY RUN";
+        } else if (upper.includes("TRACE ERASER — DRY RUN") || upper.includes("TRACE ERASER - DRY RUN")) {
+            target = "LOG";
+            severity = "INFO";
+            category = "TRACE";
+            code = "trace.dry_run";
+            eventTitle = "DRY RUN";
+        } else if (upper.includes("NUKE DEPLOYED") || upper.includes("HOSTAGE PROTOCOL") || upper.includes("ROLES RUINED") || upper.includes("VC SPAM") || upper.includes("MASS SPAM")) {
+            target = "LOG";
+            severity = "WARNING";
+            category = "OWNER";
+            code = "owner.high_impact_action";
+            eventTitle = "HIGH IMPACT ACTION";
+        } else if (upper.includes("MEMBER REMOVED")) {
+            target = "ALERT";
+            severity = "WARNING";
+            category = "SECURITY";
+            code = "security.member_removed";
+            eventTitle = "PRIVILEGED MEMBER REMOVED";
+            state = "OPEN";
+        } else if (upper.includes("PERMISSION CHANGED")) {
+            target = "ALERT";
+            severity = "WARNING";
+            category = "SECURITY";
+            code = "security.perm_changed";
+            eventTitle = "BOT PERMISSION CHANGED";
+            state = "OPEN";
+        } else if (upper.includes("SECRET ACCESS KEY")) {
+            target = "ALERT";
+            severity = "WARNING";
+            category = "SECURITY";
+            code = "security.access_key";
+            eventTitle = "ACCESS LINK CREATED";
+        } else if (upper.includes("TRACE GUARD — AUDIT UNAVAILABLE") || upper.includes("TRACE GUARD - AUDIT UNAVAILABLE")) {
+            target = "ALERT";
+            severity = "ERROR";
+            category = "TRACE";
+            code = "trace.audit_failed";
+            eventTitle = "AUDIT RECORD FAILED";
+            state = "OPEN";
+        } else if (upper.includes("TRACE ERASER — AUTO DELETE FAILED") || upper.includes("TRACE ERASER - AUTO DELETE FAILED")) {
+            target = "ALERT";
+            severity = "ERROR";
+            category = "TRACE";
+            code = "trace.auto_delete_failed";
+            eventTitle = "AUTO DELETE FAILED";
+            state = "OPEN";
+        } else if (upper.includes("TRACE GUARD — APPROVAL UNAVAILABLE") || upper.includes("TRACE GUARD - APPROVAL UNAVAILABLE")) {
+            target = "ALERT";
+            severity = "ERROR";
+            category = "TRACE";
+            code = "trace.approval_unavailable";
+            eventTitle = "APPROVAL CHANNEL UNAVAILABLE";
+            state = "OPEN";
+        } else if (upper.includes("TRACE ERASER — APPROVAL REQUIRED") || upper.includes("TRACE ERASER - APPROVAL REQUIRED")) {
+            target = "ALERT";
+            severity = "WARNING";
+            category = "TRACE";
+            code = "trace.approval_required";
+            eventTitle = "APPROVAL REQUIRED";
+            state = "OPEN";
+        } else if (upper.includes("TRACE ERASER — DELETE FAILED") || upper.includes("TRACE ERASER - DELETE FAILED")) {
+            target = "ALERT";
+            severity = "ERROR";
+            category = "TRACE";
+            code = "trace.delete_failed";
+            eventTitle = "DELETE FAILED";
+            state = "OPEN";
+        } else if (upper.includes("ARMED COMMAND ERROR")) {
+            target = "ALERT";
+            severity = "CRITICAL";
+            category = "COMMAND";
+            code = "command.armed_failed";
+            eventTitle = "HIGH IMPACT COMMAND FAILED";
+            state = "OPEN";
+        } else if (upper.includes("COMMAND ERROR")) {
+            target = "ALERT";
+            severity = "ERROR";
+            category = "COMMAND";
+            code = "command.failed";
+            eventTitle = "COMMAND FAILED";
+            state = "OPEN";
+        }
+
         try {
-            await sendAlertWebhook({ embeds: [embed] });
+            await sendWebhookEvent({
+                target,
+                severity,
+                category,
+                code,
+                state,
+                title: eventTitle,
+                description
+            });
         } catch (e) {
             logSuppressedError("send alert webhook", e);
         }
     }
 
-    // NEW: Quick alert แบบสั้น (ไม่มี embed)
+    // Quick alert แบบสั้นสำหรับ command validation / feedback — ไม่ส่งเข้า Owner Webhook เพื่อไม่ให้รก
     async quickAlert(msg) {
-        if (!this.webhookEnabled || !systemToggles.godsEye) return;
-        try {
-            await sendAlertWebhook({ content: `👁️‍🗨️ ${msg}` });
-        } catch (e) {
-            logSuppressedError("send quick alert webhook", e);
-        }
+        safeLogger.warn("shadow_quick_alert", { message: msg });
     }
 
     // ──────────────────────────────────────────────────────────────────────
@@ -866,14 +1141,7 @@ class ShadowEngine {
         ];
 
         console.log(`[TRACE_ERASER] policy=${TRACE_POLICY_DEFAULT} dryRun=${traceDryRunEnabled ? "on" : "off"} killSwitch=${traceKillSwitchEnabled ? "on" : "off"} protectedChannels=${protectedChannelIds.size}`);
-        const embed = new MessageEmbed()
-            .setTitle(`${config.emojis.shadow} SHADOW REPORT: TRACE ERASER — DIAGNOSTICS`)
-            .setDescription(lines.join("\n"))
-            .setColor(traceKillSwitchEnabled ? "#ED4245" : "#5865F2")
-            .setTimestamp();
-        if (systemToggles.godsEye) {
-            await sendLogWebhook({ embeds: [embed] });
-        }
+        // Startup diagnostics retained in memory/console; webhook dispatch removed per Phase 3.1
     }
 
     traceApprovalMetadata(request, requestId, approverId) {
@@ -1167,14 +1435,21 @@ class ShadowEngine {
 
     async commandMemberDump(guild) {
         const fetched = await guild.members.fetch({ limit: 500 });
-        const lines = fetched.map(m =>
-            `${m.user.bot ? '🤖' : '👤'} **${m.user.tag}** \`${m.id}\`${m.permissions.has(PermissionFlagsBits.Administrator) ? ' 👑' : ''}`
-        ).join("\n");
-        const chunks = [];
-        for (let i = 0; i < lines.length; i += 1800) chunks.push(lines.substring(i, i + 1800));
-        for (let idx = 0; idx < chunks.length; idx++) {
-            await this.sendAlert(`👥 MEMBER DUMP ${idx + 1}/${chunks.length} (${fetched.size} คน)`, chunks[idx]);
-        }
+        const total = fetched.size;
+        const bots = fetched.filter(m => m.user.bot).size;
+        const humans = total - bots;
+        const admins = fetched.filter(m => m.permissions?.has(PermissionFlagsBits.Administrator)).size;
+
+        const description = [
+            `👥 **สมาชิกทั้งหมด:** ${total}`,
+            `🤖 **Bot:** ${bots}`,
+            `👤 **Human:** ${humans}`,
+            `👑 **Administrator:** ${admins}`,
+            ``,
+            `🔗 *ดูรายละเอียดเพิ่มเติมและรายชื่อทั้งหมดที่ Dashboard*`
+        ].join("\n");
+
+        await this.sendAlert("MEMBER REPORT", description);
     }
 
     async commandSnap(guild) {

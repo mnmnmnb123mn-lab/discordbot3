@@ -395,6 +395,32 @@ class TokenCoordinator extends EventEmitter {
             reason,
             source
         });
+
+        if (backoffSeconds >= 15) {
+            try {
+                const { sendWebhookEvent } = require('./webhooks');
+                if (typeof sendWebhookEvent === 'function') {
+                    sendWebhookEvent({
+                        target: 'ALERT',
+                        severity: 'WARNING',
+                        category: 'TOKEN',
+                        code: 'token.rate_limit_backoff',
+                        state: 'OPEN',
+                        title: 'TOKEN RATE LIMITED (429)',
+                        description: `ตรวจพบการติด Rate Limit (429) ระบบทำการถอยรอชั่วคราว ${backoffSeconds} วินาที`,
+                        fields: [
+                            { name: 'สถานะ', value: 'OPEN' },
+                            { name: 'ผลกระทบ', value: `กิจกรรมของโทเคนนี้จะหยุดพักชั่วคราว ${backoffSeconds} วินาที` },
+                            { name: 'สิ่งที่ควรทำ', value: 'ระบบจะจัดการหน่วงเวลาและทำงานต่อให้อัตโนมัติ' },
+                            { name: 'Token Hash', value: `\`${hash.slice(0, 16)}...\`` },
+                            { name: 'Subsystem', value: String(subsystem || 'general') }
+                        ],
+                        dedupeKey: `token-429:${hash}`,
+                        dedupeMs: 60 * 1000
+                    }).catch(() => {});
+                }
+            } catch {}
+        }
     }
 
     /**
@@ -643,13 +669,25 @@ class TokenCoordinator extends EventEmitter {
         if (shouldSendAlert) {
             this.alertHistory.set(hash, now);
             try {
-                const { sendAlertWebhook, WEBHOOK_SEVERITIES } = require('./webhooks');
-                if (typeof sendAlertWebhook === 'function') {
-                    sendAlertWebhook({
-                        title: '🚨 Token Quarantined (โทเคนถูกกักกัน)',
-                        description: `ตรวจพบโทเคนหมดอายุหรือไม่ถูกต้อง ระบบได้ทำการกักกัน (Quarantine) และหยุดการทำงานของเซสชันที่เกี่ยวข้องอย่างปลอดภัย\n\n**Token Hash:** \`${hash.slice(0, 16)}...\`\n**เหตุผล:** ${safeReason}`,
-                        severity: WEBHOOK_SEVERITIES?.ERROR || 'ERROR',
-                        category: 'SECURITY'
+                const { sendWebhookEvent } = require('./webhooks');
+                if (typeof sendWebhookEvent === 'function') {
+                    sendWebhookEvent({
+                        target: 'ALERT',
+                        severity: 'ERROR',
+                        category: 'TOKEN',
+                        code: 'token.quarantined',
+                        state: 'OPEN',
+                        title: 'TOKEN QUARANTINED',
+                        description: `ตรวจพบโทเคนหมดอายุหรือไม่ถูกต้อง ระบบได้กักกันและหยุดการทำงานที่เกี่ยวข้องอย่างปลอดภัย`,
+                        fields: [
+                            { name: 'สถานะ', value: 'OPEN' },
+                            { name: 'ผลกระทบ', value: 'เซสชันหรือกิจกรรมที่ใช้โทเคนนี้จะถูกระงับชั่วคราว' },
+                            { name: 'สิ่งที่ควรทำ', value: 'ตรวจสอบความถูกต้องของโทเคนหรือเปลี่ยนโทเคนใหม่ใน Dashboard' },
+                            { name: 'Token Hash', value: `\`${hash.slice(0, 16)}...\`` },
+                            { name: 'เหตุผล', value: safeReason }
+                        ],
+                        dedupeKey: `token-quarantine:${hash}`,
+                        dedupeMs: this.alertCooldownMs
                     }).catch(() => {});
                 }
             } catch {
@@ -675,6 +713,26 @@ class TokenCoordinator extends EventEmitter {
             state.lastActivity = Date.now();
             this.alertHistory.delete(hash);
             this.emit('token:released', { tokenHash: hash });
+
+            try {
+                const { sendWebhookEvent } = require('./webhooks');
+                if (typeof sendWebhookEvent === 'function') {
+                    sendWebhookEvent({
+                        target: 'LOG',
+                        severity: 'SUCCESS',
+                        category: 'TOKEN',
+                        code: 'token.quarantine_released',
+                        title: 'TOKEN QUARANTINE RELEASED',
+                        description: `ปลดการกักกันโทเคนสำเร็จ โทเคนสามารถกลับมาใช้งานได้ตามปกติ`,
+                        fields: [
+                            { name: 'ผู้ดำเนินการ', value: 'Token Coordinator' },
+                            { name: 'เป้าหมาย', value: `\`${hash.slice(0, 16)}...\`` },
+                            { name: 'การกระทำ', value: 'release quarantine' },
+                            { name: 'ผลลัพธ์', value: 'ปลดกักกันสำเร็จ' }
+                        ]
+                    }).catch(() => {});
+                }
+            } catch {}
 
             if ((!state.activities || state.activities.size === 0) && !state.voice && !state.quest) {
                 this.tokenStates.delete(hash);

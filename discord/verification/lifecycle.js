@@ -26,6 +26,7 @@ const {
     stopLookupCacheCleanup
 } = require("./utils/ipUtils");
 const { readFiniteInteger } = require("../core/numbers");
+const { sendWebhookEvent } = require("../core/webhooks");
 
 const RETENTION_CONFIG_SCAN_MAX = readFiniteInteger(process.env.RETENTION_CONFIG_SCAN_MAX, { fallback: 1000, min: 50, max: 10000 });
 const RETENTION_ERROR_MAX = readFiniteInteger(process.env.RETENTION_ERROR_MAX, { fallback: 50, min: 5, max: 1000 });
@@ -333,6 +334,23 @@ async function startVerificationRuntime(options = {}) {
             maintenanceTimer = createInterval(() => maintenanceRunner().catch(err => {
                 lastError = safeError(err);
                 console.error("[VERIFICATION] maintenance failed:", lastError);
+                sendWebhookEvent({
+                    target: "ALERT",
+                    severity: "ERROR",
+                    category: "VERIFICATION",
+                    code: "verification.maintenance_failed",
+                    state: "OPEN",
+                    title: "VERIFICATION MAINTENANCE FAILED",
+                    description: `การบำรุงรักษาระบบยืนยันตัวตนรอบปกติล้มเหลว: ${lastError}`,
+                    fields: [
+                        { name: "สถานะ", value: "OPEN" },
+                        { name: "ผลกระทบ", value: "การล้างข้อมูลเก่าหรืออัปเดตสิทธิ์ยืนยันตัวตนอาจล่าช้า" },
+                        { name: "สิ่งที่ควรทำ", value: "ตรวจสอบฐานข้อมูลและการเชื่อมต่อ Discord API" },
+                        { name: "รหัสข้อผิดพลาด", value: String(err?.code || err?.name || "maintenance_error") }
+                    ],
+                    dedupeKey: "verification-maintenance-failed",
+                    dedupeMs: 30 * 60 * 1000
+                }).catch(() => {});
             }), MAINTENANCE_INTERVAL_MS);
             maintenanceTimer.unref?.();
         }

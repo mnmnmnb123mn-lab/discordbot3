@@ -456,7 +456,7 @@ async function persistVerificationRecovery({ guildId, messageId, settingKey, rol
             category: "VERIFICATION",
             code: "verification.panel.recovery_persistence_failed",
             state: "OPEN",
-            title: "แผงยืนยันต้องตรวจสอบด้วยตนเอง",
+            title: "PANEL RECOVERY RECORD FAILED",
             description: "ระบบกู้คืนแผงไม่สมบูรณ์และไม่สามารถบันทึก Recovery Record ได้",
             impact: "สถานะแผงใน Discord กับฐานข้อมูลอาจไม่ตรงกัน",
             action: "ตรวจแผงยืนยันล่าสุดใน Discord แล้วตั้งค่าแผงใหม่หากจำเป็น",
@@ -952,6 +952,24 @@ async function handleSetupVerify(interaction) {
             panelMsgId: panelMsg.id,
             panelRevision
         });
+
+        sendWebhookEvent({
+            target: "LOG",
+            severity: "SUCCESS",
+            category: "VERIFICATION",
+            code: "verification.panel.created",
+            title: "PANEL CREATED",
+            description: `ติดตั้งแผงยืนยันตัวตนสำเร็จในห้อง <#${channel.id}>`,
+            fields: [
+                { name: "ผู้ดำเนินการ", value: `${interaction.user.tag} (\`${interaction.user.id}\`)` },
+                { name: "เซิร์ฟเวอร์", value: `${interaction.guild.name} (\`${interaction.guild.id}\`)` },
+                { name: "เป้าหมาย", value: `<#${channel.id}>` },
+                { name: "การกระทำ", value: `setup-verify (${verifyType ? "OAuth2" : "Direct Role"})` },
+                { name: "ผลลัพธ์", value: `สำเร็จ (Role: @${role.name})` },
+                { name: "รายละเอียด", value: `Panel Revision: ${panelRevision}` }
+            ],
+            sourceIconUrl: getDiscordGuildIconUrl(interaction.guild)
+        }).catch(() => {});
 
         return interaction.editReply({ embeds: [resultEmbed] });
     } catch (err) {

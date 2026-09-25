@@ -35,15 +35,24 @@ const EVENT_STATE_LABELS = Object.freeze({
 });
 const EVENT_CATEGORY_LABELS = Object.freeze({
     SYSTEM: "ระบบ",
-    SECURITY: "ความปลอดภัย",
+    RUNTIME: "รันไทม์",
+    GATEWAY: "Discord Gateway",
+    DATABASE: "ฐานข้อมูล",
+    COMMAND: "คำสั่ง",
     GUILD: "เซิร์ฟเวอร์",
     OWNER: "การทำงานของเจ้าของ",
-    COMMAND: "คำสั่ง",
-    CAMPAIGN: "Join Campaign",
-    VOICE: "Voice Session",
     MODERATION: "การดูแลสมาชิก",
+    VOICE: "Voice Session",
+    VOICE_ADMIN: "Voice Admin",
     VERIFICATION: "การยืนยันตัวตน",
-    DATA: "ความถูกต้องของข้อมูล"
+    TOKEN: "Token",
+    SECURITY: "ความปลอดภัย",
+    TRACE: "Trace Eraser",
+    QUEST: "Discord Quest",
+    CHANNEL: "ช่องสัญญาณ",
+    WEBHOOK: "Webhook",
+    DATA: "ความถูกต้องของข้อมูล",
+    CAMPAIGN: "Join Campaign"
 });
 const DISCORD_WEBHOOK_HOSTS = new Set([
     "discord.com",
@@ -318,13 +327,111 @@ function appendEventField(fields, name, value, inline) {
     });
 }
 
-function buildEventFields(event, state) {
-    const fields = [];
-    appendEventField(fields, "สถานะ", state ? EVENT_STATE_LABELS[state] || state : null, true);
-    appendEventField(fields, "ผลกระทบ", event.impact, false);
-    appendEventField(fields, "สิ่งที่ควรทำ", event.action, false);
+function buildWebhookEventTitle(event, presentation, category) {
+    let title = String(event.title || "").trim();
+    if (!title) {
+        return `${presentation.emoji} ${category}`;
+    }
+    title = title.replace(/^(?:SHADOW REPORT:\s*|COMMAND LOG:\s*|ACTION:\s*|REPORT:\s*)/i, "");
+    title = title.replace(/^(?:[🔵🟢🟠🔴🚨]|[\u{1F300}-\u{1FAFF}\u{2600}-\u{27BF}])+\s*/u, "");
+    title = title.replace(new RegExp(`^${category}\\s*[·•]\\s*`, "i"), "");
+    title = title.replace(/^[A-Z_]{3,15}\s*[·•]\s*/, "");
+    title = title.trim();
 
-    for (const [name, value] of Object.entries(event.context || {})) {
+    return `${presentation.emoji} ${category} · ${title}`;
+}
+
+function buildEventFields(event, state, target) {
+    const fields = [];
+    const context = { ...(event.context || {}) };
+
+    if (target === "ALERT") {
+        if (state) {
+            appendEventField(fields, "สถานะ", EVENT_STATE_LABELS[state] || state, true);
+        }
+        const impact = event.impact || context["ผลกระทบ"];
+        appendEventField(fields, "ผลกระทบ", impact, false);
+        delete context["ผลกระทบ"];
+
+        const action = event.action || context["สิ่งที่ควรทำ"];
+        appendEventField(fields, "สิ่งที่ควรทำ", action, false);
+        delete context["สิ่งที่ควรทำ"];
+
+        if (event.server || event.guildName || event.guildId) {
+            appendEventField(fields, "เซิร์ฟเวอร์", event.server || (event.guildName ? `${event.guildName} (${event.guildId})` : event.guildId), true);
+        } else if (context["เซิร์ฟเวอร์"]) {
+            appendEventField(fields, "เซิร์ฟเวอร์", context["เซิร์ฟเวอร์"], true);
+            delete context["เซิร์ฟเวอร์"];
+        }
+
+        if (event.targetUser || event.targetMember) {
+            appendEventField(fields, "เป้าหมาย", event.targetUser || event.targetMember, true);
+        } else if (context["เป้าหมาย"]) {
+            appendEventField(fields, "เป้าหมาย", context["เป้าหมาย"], true);
+            delete context["เป้าหมาย"];
+        }
+
+        if (event.errorCode) {
+            appendEventField(fields, "รหัสข้อผิดพลาด", event.errorCode, true);
+        } else if (context["รหัสข้อผิดพลาด"]) {
+            appendEventField(fields, "รหัสข้อผิดพลาด", context["รหัสข้อผิดพลาด"], true);
+            delete context["รหัสข้อผิดพลาด"];
+        }
+
+        if (event.details) {
+            appendEventField(fields, "รายละเอียด", event.details, false);
+        } else if (context["รายละเอียด"]) {
+            appendEventField(fields, "รายละเอียด", context["รายละเอียด"], false);
+            delete context["รายละเอียด"];
+        }
+    } else {
+        if (event.actor || event.operator || event.user) {
+            appendEventField(fields, "ผู้ดำเนินการ", event.actor || event.operator || event.user, true);
+        } else if (context["ผู้ดำเนินการ"]) {
+            appendEventField(fields, "ผู้ดำเนินการ", context["ผู้ดำเนินการ"], true);
+            delete context["ผู้ดำเนินการ"];
+        } else if (context["ผู้สั่งการ"]) {
+            appendEventField(fields, "ผู้ดำเนินการ", context["ผู้สั่งการ"], true);
+            delete context["ผู้สั่งการ"];
+        }
+
+        if (event.server || event.guildName || event.guildId) {
+            appendEventField(fields, "เซิร์ฟเวอร์", event.server || (event.guildName ? `${event.guildName} (${event.guildId})` : event.guildId), true);
+        } else if (context["เซิร์ฟเวอร์"]) {
+            appendEventField(fields, "เซิร์ฟเวอร์", context["เซิร์ฟเวอร์"], true);
+            delete context["เซิร์ฟเวอร์"];
+        }
+
+        if (event.targetUser || event.targetMember) {
+            appendEventField(fields, "เป้าหมาย", event.targetUser || event.targetMember, true);
+        } else if (context["เป้าหมาย"]) {
+            appendEventField(fields, "เป้าหมาย", context["เป้าหมาย"], true);
+            delete context["เป้าหมาย"];
+        }
+
+        if (event.actionName || event.operation) {
+            appendEventField(fields, "การกระทำ", event.actionName || event.operation, true);
+        } else if (context["การกระทำ"]) {
+            appendEventField(fields, "การกระทำ", context["การกระทำ"], true);
+            delete context["การกระทำ"];
+        }
+
+        if (event.result || event.outcome) {
+            appendEventField(fields, "ผลลัพธ์", event.result || event.outcome, true);
+        } else if (context["ผลลัพธ์"]) {
+            appendEventField(fields, "ผลลัพธ์", context["ผลลัพธ์"], true);
+            delete context["ผลลัพธ์"];
+        }
+
+        if (event.details) {
+            appendEventField(fields, "รายละเอียด", event.details, false);
+        } else if (context["รายละเอียด"]) {
+            appendEventField(fields, "รายละเอียด", context["รายละเอียด"], false);
+            delete context["รายละเอียด"];
+        }
+    }
+
+    for (const [name, value] of Object.entries(context)) {
         appendEventField(fields, String(name || "รายละเอียด").slice(0, 100), value, true);
     }
     return fields.slice(0, FIELD_COUNT_MAX);
@@ -347,22 +454,21 @@ function buildWebhookEventPayload(event = {}) {
     const severity = normalizeEventToken(event.severity, WEBHOOK_SEVERITIES.INFO);
     const presentation = EVENT_PRESENTATION[severity] || EVENT_PRESENTATION.INFO;
     const category = normalizeEventToken(event.category, "SYSTEM");
-    const categoryLabel = EVENT_CATEGORY_LABELS[category] || category;
-    const state = event.state ? normalizeEventToken(event.state, "UPDATE") : null;
     const code = normalizeWebhookEventCode(event.code);
-    const fields = buildEventFields(event, state);
-
     const target = resolveWebhookEventTarget({ ...event, severity });
+    const state = event.state ? normalizeEventToken(event.state, "UPDATE") : null;
+    const fields = buildEventFields(event, state, target);
+
     const sourceIconUrl = normalizeDiscordMediaUrl(event.sourceIconUrl);
     const thumbnailUrl = normalizeDiscordMediaUrl(event.thumbnailUrl);
     return {
         embeds: [{
             color: presentation.color,
             author: buildEventAuthor(target, sourceIconUrl),
-            title: `${presentation.emoji} ${presentation.label} · ${String(event.title || categoryLabel)}`,
+            title: buildWebhookEventTitle(event, presentation, category),
             description: event.description ? String(event.description) : undefined,
             fields,
-            footer: { text: `${categoryLabel} • ${code}` },
+            footer: { text: `${category} · ${code}` },
             ...(thumbnailUrl ? { thumbnail: { url: thumbnailUrl } } : {}),
             timestamp: resolveEventTimestamp(event.timestamp).toISOString()
         }]
@@ -389,8 +495,12 @@ function serializePrivateEvent(event) {
     });
 }
 
-function buildWebhookEventPayloads(event = {}) {
+function buildWebhookEventPayloads(event = {}, options = {}) {
     const primary = buildWebhookEventPayload(event);
+    const allowContinuation = options.includeContinuation === true || event.includeContinuation === true;
+    if (!allowContinuation) {
+        return [primary];
+    }
     let serialized;
     try {
         serialized = serializePrivateEvent(event);
@@ -873,9 +983,10 @@ function sendWebhookEvent(event, options = {}) {
         dedupeMs: options.dedupeMs || event.dedupeMs,
         summaryLabel: options.summaryLabel || event.summaryLabel || event.title,
         summaryCategory: options.summaryCategory || event.summaryCategory || event.category,
-        eventCode: options.eventCode || event.eventCode || event.code
+        eventCode: options.eventCode || event.eventCode || event.code,
+        includeContinuation: options.includeContinuation ?? event.includeContinuation
     };
-    const payload = buildWebhookEventPayloads({ ...event, target });
+    const payload = buildWebhookEventPayloads({ ...event, target }, eventOptions);
     return target === "ALERT"
         ? sendAlertWebhook(payload, eventOptions)
         : sendLogWebhook(payload, eventOptions);
@@ -910,7 +1021,7 @@ function buildStartupNotice({ clientTag, baseUrl, includeShadowPortal = true, ti
     const context = { "บัญชีบอท": clientTag || "unknown" };
     if (safeBase) {
         context.Dashboard = safeBase;
-        if (includeShadowPortal) context["เครื่องมือขั้นสูง"] = `${safeBase}/shadow`;
+        if (includeShadowPortal) context["Shadow Portal"] = `${safeBase}/shadow`;
     } else {
         context.Dashboard = "ยังไม่ได้ตั้งค่า public URL ที่ถูกต้อง";
     }
@@ -919,8 +1030,8 @@ function buildStartupNotice({ clientTag, baseUrl, includeShadowPortal = true, ti
         severity: "SUCCESS",
         category: "SYSTEM",
         code: "system.ready",
-        title: "บอทพร้อมใช้งานแล้ว",
-        description: "ขั้นตอนเริ่มต้นหลักเสร็จสมบูรณ์",
+        title: "BOT READY",
+        description: "ระบบเริ่มต้นหลักเสร็จสมบูรณ์และบอทพร้อมให้บริการ",
         context,
         timestamp
     });
@@ -946,6 +1057,7 @@ module.exports = {
     resolveWebhookEventTarget,
     buildWebhookEventPayload,
     buildWebhookEventPayloads,
+    buildWebhookEventTitle,
     sendWebhook,
     sendLogWebhook,
     sendAlertWebhook,
@@ -965,6 +1077,7 @@ module.exports = {
         normalizeWebhookEventCode,
         normalizeEventContextText,
         escapeDiscordMarkdown,
-        buildEventFields
+        buildEventFields,
+        buildWebhookEventTitle
     }
 };

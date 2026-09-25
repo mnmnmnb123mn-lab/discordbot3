@@ -178,14 +178,19 @@ test("private webhook events preserve full owner-visible credentials and IP valu
     assert.equal(text.includes(webhookUrl), true);
 });
 
-test("private webhook continuations preserve every event field beyond Discord field and length limits", () => { // NOSONAR -- node:test assertions are not recognized by Sonar S2699.
+test("webhook events send single primary payload by default and support explicit continuation", () => { // NOSONAR -- node:test assertions are not recognized by Sonar S2699.
     const context = Object.fromEntries(Array.from({ length: 30 }, (_, index) => [`field-${index}`, `${index}:${"x".repeat(500)}`]));
     context.boolean = true;
     context.number = 42;
     const event = { severity: "ERROR", category: "SECURITY", title: "รายละเอียด", context };
-    const payloads = buildWebhookEventPayloads(event);
-    assert.ok(payloads.length > 1);
-    const continuation = payloads.slice(1)
+
+    const defaultPayloads = buildWebhookEventPayloads(event);
+    assert.equal(defaultPayloads.length, 1);
+    assert.match(defaultPayloads[0].embeds[0].title, /SECURITY · รายละเอียด/);
+
+    const explicitPayloads = buildWebhookEventPayloads(event, { includeContinuation: true });
+    assert.ok(explicitPayloads.length > 1);
+    const continuation = explicitPayloads.slice(1)
         .flatMap(payload => payload.embeds[0].fields)
         .map(field => field.value)
         .join("");
@@ -351,11 +356,11 @@ test("sendWebhookEvent preserves event-level summary metadata for duplicate repo
     await flushWebhookQueue(20);
     await new Promise(resolve => setImmediate(resolve));
 
-    assert.equal(calls.length, 3);
-    const duplicateEmbed = calls[2].payload.embeds[0];
+    assert.equal(calls.length, 2);
+    const duplicateEmbed = calls[1].payload.embeds[0];
     assert.match(duplicateEmbed.title, /สรุปเหตุการณ์ที่เกิดซ้ำ/);
     assert.equal(duplicateEmbed.description, "เหตุการณ์ทดสอบ");
-    assert.match(duplicateEmbed.footer.text, /ความปลอดภัย/);
+    assert.match(duplicateEmbed.footer.text, /SECURITY/);
     assert.match(duplicateEmbed.footer.text, /security\.owner_mismatch\.repeated/);
 });
 
@@ -443,9 +448,9 @@ test("startup notice only includes dashboard and optional shadow portal links", 
     });
 
     const text = JSON.stringify(notice);
-    assert.match(text, /บอทพร้อมใช้งานแล้ว/);
+    assert.match(text, /BOT READY/);
     assert.match(text, /Dashboard/);
-    assert.match(text, /เครื่องมือขั้นสูง/);
+    assert.match(text, /Shadow Portal/);
     assert.match(text, /https:\/\/example\.com\/shadow/);
     assert.equal(text.includes("telemetry/snapshot"), false);
     assert.equal(text.includes("คู่มือ"), false);
@@ -565,3 +570,94 @@ test("delivery diagnostics expose one canonical dedupe count", () => {
     assert.equal(diagnostics.dedupeKeys, diagnostics.routineDedupeKeys);
     assert.equal(Object.hasOwn(diagnostics, "eventDedupeKeys"), false);
 });
+
+test("Phase 1 Webhook Renovation: complete severity routing contracts", () => {
+    assert.equal(resolveWebhookEventTarget({ severity: "INFO" }), "LOG");
+    assert.equal(resolveWebhookEventTarget({ severity: "SUCCESS" }), "LOG");
+    assert.equal(resolveWebhookEventTarget({ severity: "WARNING" }), "LOG");
+    assert.equal(resolveWebhookEventTarget({ severity: "WARNING", actionRequired: true }), "ALERT");
+    assert.equal(resolveWebhookEventTarget({ severity: "ERROR" }), "ALERT");
+    assert.equal(resolveWebhookEventTarget({ severity: "CRITICAL" }), "ALERT");
+    assert.equal(resolveWebhookEventTarget({ severity: "INFO", target: "ALERT" }), "ALERT");
+    assert.equal(resolveWebhookEventTarget({ severity: "ERROR", target: "LOG" }), "LOG");
+});
+
+test("Phase 1 Webhook Renovation: unified visual system and title formatting", () => {
+    const logPayload = buildWebhookEventPayload({
+        severity: "SUCCESS",
+        category: "SYSTEM",
+        code: "system.ready",
+        title: "BOT READY"
+    });
+    assert.equal(logPayload.embeds[0].author.name, "PHOMUEANGTAI • ACTIVITY & AUDIT");
+    assert.equal(logPayload.embeds[0].title, "🟢 SYSTEM · BOT READY");
+    assert.equal(logPayload.embeds[0].footer.text, "SYSTEM · system.ready");
+
+    const alertPayload = buildWebhookEventPayload({
+        severity: "CRITICAL",
+        category: "RUNTIME",
+        code: "runtime.uncaught_exception",
+        title: "UNCAUGHT EXCEPTION"
+    });
+    assert.equal(alertPayload.embeds[0].author.name, "PHOMUEANGTAI • ACTION REQUIRED");
+    assert.equal(alertPayload.embeds[0].title, "🚨 RUNTIME · UNCAUGHT EXCEPTION");
+    assert.equal(alertPayload.embeds[0].footer.text, "RUNTIME · runtime.uncaught_exception");
+
+    // Test stripping redundant emojis and prefixes
+    const strippedPayload = buildWebhookEventPayload({
+        severity: "WARNING",
+        category: "SECURITY",
+        code: "security.trace_approval",
+        title: "SHADOW REPORT: TRACE APPROVAL REQUIRED"
+    });
+    assert.equal(strippedPayload.embeds[0].title, "🟠 SECURITY · TRACE APPROVAL REQUIRED");
+});
+
+test("Phase 1 Webhook Renovation: canonical field layouts for LOG and ALERT", () => {
+    const logPayload = buildWebhookEventPayload({
+        target: "LOG",
+        severity: "SUCCESS",
+        category: "MODERATION",
+        code: "moderation.ban",
+        title: "MEMBER BANNED",
+        actor: "AdminUser",
+        server: "Community Guild",
+        targetUser: "SpammerUser",
+        actionName: "Ban Member",
+        result: "Banned permanently",
+        details: "Violation of rule 1"
+    });
+    const logFields = logPayload.embeds[0].fields.map(f => f.name);
+    assert.deepEqual(logFields, [
+        "ผู้ดำเนินการ",
+        "เซิร์ฟเวอร์",
+        "เป้าหมาย",
+        "การกระทำ",
+        "ผลลัพธ์",
+        "รายละเอียด"
+    ]);
+
+    const alertPayload = buildWebhookEventPayload({
+        target: "ALERT",
+        severity: "ERROR",
+        category: "DATABASE",
+        code: "database.connection_lost",
+        title: "CONNECTION LOST",
+        state: "OPEN",
+        impact: "ระบบอาจไม่สามารถบันทึกข้อมูลได้",
+        action: "ระบบกำลังพยายามเชื่อมต่อใหม่",
+        server: "Primary Cluster",
+        errorCode: "ECONNREFUSED",
+        details: "Heartbeat timeout"
+    });
+    const alertFields = alertPayload.embeds[0].fields.map(f => f.name);
+    assert.deepEqual(alertFields, [
+        "สถานะ",
+        "ผลกระทบ",
+        "สิ่งที่ควรทำ",
+        "เซิร์ฟเวอร์",
+        "รหัสข้อผิดพลาด",
+        "รายละเอียด"
+    ]);
+});
+

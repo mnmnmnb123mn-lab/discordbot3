@@ -55,9 +55,9 @@ describe("Database Webhooks Alert Lifecycle Suite", () => {
         assert.match(item.payload.embeds[0].footer.text, /mongo\.connection\.lost/);
         assert.match(item.payload.embeds[0].title, /ขาดการเชื่อมต่อ/);
 
-        // Verify Owner Intent OI-05 full-fidelity continuation was also generated
+        // P0 Renovation: Single primary embed by default (no automatic continuation spam)
         const continuation = sentQueue.find(s => s.payload.embeds[0].title === "Owner event continuation");
-        assert.ok(continuation, "OI-05 continuation embed must be present");
+        assert.equal(continuation, undefined, "P0: Single primary embed by default without duplicate continuation");
     });
 
     test("MongoDB connection error dispatches CRITICAL alert", async () => {

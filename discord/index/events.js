@@ -166,10 +166,10 @@ async function recordProtectionResult({ guild, sessionManager, result, member, m
         if (actionResult?.attempted === true && actionResult?.success === true) {
             sendWebhookEvent({
                 severity: "ERROR",
-                category: "DATA",
+                category: "DATABASE",
                 code: "protection.case.persistence_failed",
                 state: "OPEN",
-                title: "ผลการป้องกันกับ ModCase ไม่ตรงกัน",
+                title: "MODCASE PERSISTENCE FAILED",
                 description: "Discord ดำเนินการลงโทษสำเร็จ แต่ระบบบันทึก ModCase ไม่สำเร็จ",
                 impact: "ประวัติการดูแลสมาชิกอาจไม่มีรายการของการดำเนินการครั้งนี้",
                 action: "ตรวจ Runtime Log และสร้างหรือแก้ ModCase ให้ตรงกับการดำเนินการจริง",
@@ -743,13 +743,16 @@ async function handleGuildCreateEvent(guild) {
         severity: "INFO",
         category: "GUILD",
         code: "guild.joined",
-        title: "บอทเข้าร่วมเซิร์ฟเวอร์ใหม่",
-        context: {
-            "เซิร์ฟเวอร์": guild.name,
-            "Guild ID": guild.id,
-            "จำนวนสมาชิก": guild.memberCount,
-            "ลิงก์เชิญชั่วคราว": inviteStr
-        },
+        title: "BOT JOINED GUILD",
+        description: `บอทเข้าร่วมเซิร์ฟเวอร์ใหม่: **${guild.name}**`,
+        fields: [
+            { name: "ผู้ดำเนินการ", value: "Discord System" },
+            { name: "เซิร์ฟเวอร์", value: `${guild.name} (\`${guild.id}\`)` },
+            { name: "เป้าหมาย", value: `สมาชิก ${guild.memberCount} คน` },
+            { name: "การกระทำ", value: "bot joined guild" },
+            { name: "ผลลัพธ์", value: "พร้อมให้บริการ" },
+            inviteStr ? { name: "รายละเอียด", value: `ลิงก์เชิญ: ${inviteStr}` } : null
+        ].filter(Boolean),
         sourceIconUrl: getDiscordGuildIconUrl(guild)
     }).catch(() => {});
 }

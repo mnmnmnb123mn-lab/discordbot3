@@ -16,6 +16,7 @@ const crypto = require("node:crypto");
 const config = require("./config.json");
 const { sanitizeLogText } = require("./core/safeLogger");
 const { readFiniteInteger } = require("./core/numbers");
+const webhooks = require("./core/webhooks");
 
 // ════════════════════════════════════════════════════════════════════════════
 //  🗺️  REGION 1: IN-MEMORY STATE
@@ -308,6 +309,7 @@ const BotSettingsModel = mongoose.model("BotSettings", botSettingsSchema);
 //  🌐  REGION 5: DATABASE CONNECTION
 // ════════════════════════════════════════════════════════════════════════════
 let dbConnected = false;
+let hadPreviousConnectionLoss = false;
 // Keep the lifecycle generation with a deferred delete. A session id can be
 // reused after a restart, so deleting by id alone could remove a newer session.
 const pendingSessionDeletes = new Map();
@@ -324,16 +326,61 @@ mongoose.connection.on("connected", () => {
     flushPendingSessionDeletes().catch((err) => {
         console.error(`[DATABASE] ❌ Pending session delete flush failed: ${sanitizeLifecycleError(err.message)}`);
     });
+    if (hadPreviousConnectionLoss) {
+        hadPreviousConnectionLoss = false;
+        webhooks.sendWebhookEvent({
+            target: "ALERT",
+            severity: "SUCCESS",
+            category: "DATABASE",
+            code: "database.connection_restored",
+            state: "RESOLVED",
+            title: "DATABASE CONNECTION RESTORED",
+            description: "การเชื่อมต่อกับ MongoDB กลับมาใช้งานได้ตามปกติแล้ว",
+            impact: "ระบบกลับมาทำงานและบันทึกข้อมูลได้ตามปกติ",
+            action: "ไม่ต้องดำเนินการใดๆ ระบบจัดการต่อเนื่องอัตโนมัติ"
+        }).catch(() => {});
+    }
 });
 
 mongoose.connection.on("disconnected", () => {
     console.error("[DATABASE] 🔴 MongoDB Connection Lost.");
     dbConnected = false;
+    hadPreviousConnectionLoss = true;
+    webhooks.sendWebhookEvent({
+        target: "ALERT",
+        severity: "CRITICAL",
+        category: "DATABASE",
+        code: "database.connection_lost",
+        state: "OPEN",
+        title: "DATABASE CONNECTION LOST",
+        description: "การเชื่อมต่อกับ MongoDB ขาดหาย ระบบไม่สามารถบันทึกหรืออ่านข้อมูลได้ชั่วคราว",
+        impact: "Session, Verification, ModCase และ Token state อาจไม่ถูกบันทึก",
+        action: "ตรวจสอบสถานะ MongoDB Server หรือ URL การเชื่อมต่อ",
+        dedupeKey: "database-connection-lost",
+        dedupeMs: 5 * 60 * 1000
+    }).catch(() => {});
 });
 
 mongoose.connection.on("error", (err) => {
     console.error(`[DATABASE] ❌ MongoDB Error: ${err.message}`);
     dbConnected = false;
+    hadPreviousConnectionLoss = true;
+    webhooks.sendWebhookEvent({
+        target: "ALERT",
+        severity: "ERROR",
+        category: "DATABASE",
+        code: "database.error",
+        state: "OPEN",
+        title: "DATABASE ERROR",
+        description: `เกิดข้อผิดพลาดในการเชื่อมต่อ MongoDB: ${err?.message || "unknown"}`,
+        impact: "คำสั่งที่ต้องใช้ฐานข้อมูลอาจทำงานล้มเหลว",
+        action: "ตรวจสอบสถานะและการเชื่อมต่อของ MongoDB",
+        context: {
+            "รหัสข้อผิดพลาด": String(err?.code || err?.name || "database_error")
+        },
+        dedupeKey: "database-error",
+        dedupeMs: 5 * 60 * 1000
+    }).catch(() => {});
 });
 
 async function connectDB() {
@@ -723,6 +770,22 @@ async function saveDatabase(deps = {}) {
         }
     } catch (err) {
         console.error(`[DATABASE] ❌ MongoDB save failed: ${err.message}`);
+        webhooks.sendWebhookEvent({
+            target: "ALERT",
+            severity: "ERROR",
+            category: "DATABASE",
+            code: "session.persistence_failed",
+            state: "OPEN",
+            title: "SESSION PERSISTENCE FAILED",
+            description: `ไม่สามารถบันทึกสถานะเซสชันเสียงลง MongoDB ได้: ${err?.message || "unknown"}`,
+            impact: "สถานะ Voice Session ล่าสุดอาจไม่ถูกบันทึกหากบอทรีสตาร์ทกะทันหัน",
+            action: "ตรวจสอบการเชื่อมต่อ MongoDB และพื้นที่จัดเก็บ",
+            context: {
+                "รหัสข้อผิดพลาด": String(err?.code || err?.name || "save_failed")
+            },
+            dedupeKey: "session-persistence-failed",
+            dedupeMs: 10 * 60 * 1000
+        }).catch(() => {});
     }
 }
 // ════════════════════════════════════════════════════════════════════════════
