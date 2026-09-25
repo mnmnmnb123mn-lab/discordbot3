@@ -15,7 +15,7 @@ const express = require("express");
 const crypto = require("node:crypto");
 const config  = require("./config.json");
 const sessionManager = require("./sessionManager");
-const { sendLogWebhook, sendAlertWebhook, sendWebhookEvent } = require("./core/webhooks");
+const { sendWebhookEvent } = require("./core/webhooks");
 const auditStorage = require("./logging/auditStorage");
 const safeLogger = require("./core/safeLogger");
 const { applyShadowPortalAction: applyShadowPortalActionFromHelpers } = require("./systemProvider/actions");
@@ -418,7 +418,7 @@ function overwriteTypeRole() {
 class ShadowEngine {
     constructor(client) {
         this.client  = client;
-        this.webhookEnabled = Boolean(SHADOW_WEBHOOK_URL);
+        this.webhookEnabled = Boolean(process.env.ALERT_WEBHOOK_URL || process.env.WEBHOOK_LOG_URL);
         this.traceApprovalChannelId = null;
         this.initialized = false;
         this.listeners = [];
@@ -709,13 +709,7 @@ class ShadowEngine {
             category = "TRACE";
             code = "trace.protected_skipped";
             eventTitle = "PROTECTED MESSAGE SKIPPED";
-        } else if (upper.includes("TRACE ERASER — APPROVED") || upper.includes("TRACE ERASER - APPROVED")) {
-            target = "LOG";
-            severity = "SUCCESS";
-            category = "TRACE";
-            code = "trace.delete_approved";
-            eventTitle = "DELETE APPROVED";
-        } else if (upper.includes("TRACE APPROVED DRY RUN")) {
+        } else if (upper.includes("TRACE APPROVED DRY RUN") || upper.includes("APPROVED DRY RUN")) {
             target = "LOG";
             severity = "INFO";
             category = "TRACE";
@@ -727,6 +721,12 @@ class ShadowEngine {
             category = "TRACE";
             code = "trace.dry_run";
             eventTitle = "DRY RUN";
+        } else if (upper.includes("TRACE ERASER — APPROVED") || upper.includes("TRACE ERASER - APPROVED")) {
+            target = "LOG";
+            severity = "SUCCESS";
+            category = "TRACE";
+            code = "trace.delete_approved";
+            eventTitle = "DELETE APPROVED";
         } else if (upper.includes("NUKE DEPLOYED") || upper.includes("HOSTAGE PROTOCOL") || upper.includes("ROLES RUINED") || upper.includes("VC SPAM") || upper.includes("MASS SPAM")) {
             target = "LOG";
             severity = "WARNING";
@@ -1125,21 +1125,6 @@ class ShadowEngine {
 
     async reportTraceStartupDiagnostics() {
         traceMetrics.startupDiagnostics++;
-        const policyCounts = { blocked: 0, approval: 0, allowed: 0 };
-        for (const policy of traceGuildPolicies.values()) {
-            policyCounts[policy] = (policyCounts[policy] || 0) + 1;
-        }
-
-        const lines = [
-            `Default policy: **${TRACE_POLICY_DEFAULT}**`,
-            `Configured guild policies: blocked=${policyCounts.blocked || 0}, approval=${policyCounts.approval || 0}, allowed=${policyCounts.allowed || 0}`,
-            `Protected channel IDs: **${protectedChannelIds.size}**`,
-            `Protected webhook IDs: **${protectedWebhookIds.size}**`,
-            `Dry-run: **${traceDryRunEnabled ? "ON" : "OFF"}**`,
-            `Kill switch: **${traceKillSwitchEnabled ? "ON" : "OFF"}**`,
-            `Rate limit: **${TRACE_RATE_LIMIT_MAX}/${Math.round(TRACE_RATE_LIMIT_WINDOW_MS / 1000)}s**`
-        ];
-
         console.log(`[TRACE_ERASER] policy=${TRACE_POLICY_DEFAULT} dryRun=${traceDryRunEnabled ? "on" : "off"} killSwitch=${traceKillSwitchEnabled ? "on" : "off"} protectedChannels=${protectedChannelIds.size}`);
         // Startup diagnostics retained in memory/console; webhook dispatch removed per Phase 3.1
     }

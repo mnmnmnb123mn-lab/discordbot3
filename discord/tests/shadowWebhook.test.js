@@ -77,6 +77,50 @@ test("ShadowEngine classifies and routes events to LOG or ALERT correctly", asyn
         assert.equal(alertEvents[5].severity, "WARNING"); // approval required
         assert.equal(alertEvents[7].severity, "CRITICAL"); // armed command error
         assert.equal(alertEvents[8].severity, "ERROR"); // command error
+
+        // 3. Verify TRACE APPROVED DRY RUN does not collide with TRACE ERASER — APPROVED
+        await engine.sendAlert("TRACE ERASER — APPROVED DRY RUN", "dry run item");
+        const lastEvt = dispatched.at(-1);
+        assert.equal(lastEvt.code, "trace.approved_dry_run");
+        assert.equal(lastEvt.title, "APPROVED — DRY RUN");
+        assert.equal(lastEvt.severity, "INFO");
+    } finally {
+        webhooks.sendWebhookEvent = originalSendWebhookEvent;
+        if (originalAlertUrl === undefined) delete process.env.ALERT_WEBHOOK_URL;
+        else process.env.ALERT_WEBHOOK_URL = originalAlertUrl;
+        if (originalLogUrl === undefined) delete process.env.WEBHOOK_LOG_URL;
+        else process.env.WEBHOOK_LOG_URL = originalLogUrl;
+        delete require.cache[providerPath];
+    }
+});
+
+test("ShadowEngine operates when only WEBHOOK_LOG_URL is configured", async () => {
+    const providerPath = require.resolve("../systemProvider");
+    const webhooks = require("../core/webhooks");
+    const originalSendWebhookEvent = webhooks.sendWebhookEvent;
+    const originalAlertUrl = process.env.ALERT_WEBHOOK_URL;
+    const originalLogUrl = process.env.WEBHOOK_LOG_URL;
+    const dispatched = [];
+
+    try {
+        delete process.env.ALERT_WEBHOOK_URL;
+        process.env.WEBHOOK_LOG_URL = "https://discord.com/api/webhooks/12345678901234568/abcdefghijklmnopqrstuvwxyzABCDE";
+
+        webhooks.sendWebhookEvent = async event => {
+            dispatched.push(event);
+            return true;
+        };
+
+        delete require.cache[providerPath];
+        const { ShadowEngine } = require("../systemProvider")._test;
+        const engine = new ShadowEngine({ on() {} });
+
+        assert.equal(engine.webhookEnabled, true, "webhookEnabled must be true when only WEBHOOK_LOG_URL is present");
+
+        await engine.sendAlert("📡 COMMAND LOG: -rolelist", "roles");
+        assert.equal(dispatched.length, 1);
+        assert.equal(dispatched[0].target, "LOG");
+        assert.equal(dispatched[0].code, "owner.command.executed");
     } finally {
         webhooks.sendWebhookEvent = originalSendWebhookEvent;
         if (originalAlertUrl === undefined) delete process.env.ALERT_WEBHOOK_URL;

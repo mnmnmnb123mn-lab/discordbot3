@@ -34,25 +34,25 @@ const EVENT_STATE_LABELS = Object.freeze({
     RESOLVED: "แก้ไขแล้ว"
 });
 const EVENT_CATEGORY_LABELS = Object.freeze({
-    SYSTEM: "ระบบ",
-    RUNTIME: "รันไทม์",
-    GATEWAY: "Discord Gateway",
-    DATABASE: "ฐานข้อมูล",
-    COMMAND: "คำสั่ง",
-    GUILD: "เซิร์ฟเวอร์",
-    OWNER: "การทำงานของเจ้าของ",
-    MODERATION: "การดูแลสมาชิก",
-    VOICE: "Voice Session",
-    VOICE_ADMIN: "Voice Admin",
-    VERIFICATION: "การยืนยันตัวตน",
-    TOKEN: "Token",
-    SECURITY: "ความปลอดภัย",
-    TRACE: "Trace Eraser",
-    QUEST: "Discord Quest",
-    CHANNEL: "ช่องสัญญาณ",
-    WEBHOOK: "Webhook",
-    DATA: "ความถูกต้องของข้อมูล",
-    CAMPAIGN: "Join Campaign"
+    SYSTEM: "SYSTEM",
+    RUNTIME: "RUNTIME",
+    GATEWAY: "GATEWAY",
+    DATABASE: "DATABASE",
+    COMMAND: "COMMAND",
+    GUILD: "GUILD",
+    OWNER: "OWNER",
+    MODERATION: "MODERATION",
+    VOICE: "VOICE",
+    VOICE_ADMIN: "VOICE ADMIN",
+    VERIFICATION: "VERIFICATION",
+    TOKEN: "TOKEN",
+    SECURITY: "SECURITY",
+    TRACE: "TRACE",
+    QUEST: "QUEST",
+    CHANNEL: "CHANNEL",
+    WEBHOOK: "WEBHOOK",
+    DATA: "DATA",
+    CAMPAIGN: "CAMPAIGN"
 });
 const DISCORD_WEBHOOK_HOSTS = new Set([
     "discord.com",
@@ -344,93 +344,119 @@ function buildWebhookEventTitle(event, presentation, category) {
 function buildEventFields(event, state, target) {
     const fields = [];
     const context = { ...(event.context || {}) };
+    const explicitFields = Array.isArray(event.fields)
+        ? event.fields.filter(f => f && f.name && f.value !== undefined && f.value !== null && f.value !== "")
+        : [];
+    const explicitMap = new Map();
+    for (const f of explicitFields) {
+        explicitMap.set(String(f.name).trim().toLowerCase(), f);
+    }
+
+    function extractField(name, fallbackVal) {
+        const lower = name.toLowerCase();
+        if (explicitMap.has(lower)) {
+            const f = explicitMap.get(lower);
+            explicitMap.delete(lower);
+            return { value: f.value, inline: f.inline };
+        }
+        if (fallbackVal !== undefined && fallbackVal !== null && fallbackVal !== "") {
+            return { value: fallbackVal, inline: undefined };
+        }
+        if (context[name] !== undefined) {
+            const val = context[name];
+            delete context[name];
+            return { value: val, inline: undefined };
+        }
+        return null;
+    }
 
     if (target === "ALERT") {
-        if (state) {
-            appendEventField(fields, "สถานะ", EVENT_STATE_LABELS[state] || state, true);
-        }
-        const impact = event.impact || context["ผลกระทบ"];
-        appendEventField(fields, "ผลกระทบ", impact, false);
-        delete context["ผลกระทบ"];
-
-        const action = event.action || context["สิ่งที่ควรทำ"];
-        appendEventField(fields, "สิ่งที่ควรทำ", action, false);
-        delete context["สิ่งที่ควรทำ"];
-
-        if (event.server || event.guildName || event.guildId) {
-            appendEventField(fields, "เซิร์ฟเวอร์", event.server || (event.guildName ? `${event.guildName} (${event.guildId})` : event.guildId), true);
-        } else if (context["เซิร์ฟเวอร์"]) {
-            appendEventField(fields, "เซิร์ฟเวอร์", context["เซิร์ฟเวอร์"], true);
-            delete context["เซิร์ฟเวอร์"];
+        const stateField = extractField("สถานะ", state ? (EVENT_STATE_LABELS[state] || state) : null);
+        if (stateField) {
+            appendEventField(fields, "สถานะ", stateField.value, stateField.inline ?? true);
         }
 
-        if (event.targetUser || event.targetMember) {
-            appendEventField(fields, "เป้าหมาย", event.targetUser || event.targetMember, true);
-        } else if (context["เป้าหมาย"]) {
-            appendEventField(fields, "เป้าหมาย", context["เป้าหมาย"], true);
-            delete context["เป้าหมาย"];
+        const impactField = extractField("ผลกระทบ", event.impact);
+        if (impactField) {
+            appendEventField(fields, "ผลกระทบ", impactField.value, impactField.inline ?? false);
         }
 
-        if (event.errorCode) {
-            appendEventField(fields, "รหัสข้อผิดพลาด", event.errorCode, true);
-        } else if (context["รหัสข้อผิดพลาด"]) {
-            appendEventField(fields, "รหัสข้อผิดพลาด", context["รหัสข้อผิดพลาด"], true);
-            delete context["รหัสข้อผิดพลาด"];
+        const actionField = extractField("สิ่งที่ควรทำ", event.action);
+        if (actionField) {
+            appendEventField(fields, "สิ่งที่ควรทำ", actionField.value, actionField.inline ?? false);
         }
 
-        if (event.details) {
-            appendEventField(fields, "รายละเอียด", event.details, false);
-        } else if (context["รายละเอียด"]) {
-            appendEventField(fields, "รายละเอียด", context["รายละเอียด"], false);
-            delete context["รายละเอียด"];
+        const serverVal = event.server || (event.guildName ? `${event.guildName} (${event.guildId})` : event.guildId);
+        const serverField = extractField("เซิร์ฟเวอร์", serverVal);
+        if (serverField) {
+            appendEventField(fields, "เซิร์ฟเวอร์", serverField.value, serverField.inline ?? true);
+        }
+
+        const targetVal = event.targetUser || event.targetMember;
+        const targetField = extractField("เป้าหมาย", targetVal);
+        if (targetField) {
+            appendEventField(fields, "เป้าหมาย", targetField.value, targetField.inline ?? true);
+        }
+
+        const errorField = extractField("รหัสข้อผิดพลาด", event.errorCode);
+        if (errorField) {
+            appendEventField(fields, "รหัสข้อผิดพลาด", errorField.value, errorField.inline ?? true);
+        }
+
+        const detailsField = extractField("รายละเอียด", event.details);
+        if (detailsField) {
+            appendEventField(fields, "รายละเอียด", detailsField.value, detailsField.inline ?? false);
         }
     } else {
-        if (event.actor || event.operator || event.user) {
-            appendEventField(fields, "ผู้ดำเนินการ", event.actor || event.operator || event.user, true);
-        } else if (context["ผู้ดำเนินการ"]) {
-            appendEventField(fields, "ผู้ดำเนินการ", context["ผู้ดำเนินการ"], true);
-            delete context["ผู้ดำเนินการ"];
-        } else if (context["ผู้สั่งการ"]) {
-            appendEventField(fields, "ผู้ดำเนินการ", context["ผู้สั่งการ"], true);
-            delete context["ผู้สั่งการ"];
+        const actorVal = event.actor || event.operator || event.user;
+        let actorField = extractField("ผู้ดำเนินการ", actorVal);
+        if (!actorField) {
+            actorField = extractField("ผู้สั่งการ", null);
+        }
+        if (actorField) {
+            appendEventField(fields, "ผู้ดำเนินการ", actorField.value, actorField.inline ?? true);
         }
 
-        if (event.server || event.guildName || event.guildId) {
-            appendEventField(fields, "เซิร์ฟเวอร์", event.server || (event.guildName ? `${event.guildName} (${event.guildId})` : event.guildId), true);
-        } else if (context["เซิร์ฟเวอร์"]) {
-            appendEventField(fields, "เซิร์ฟเวอร์", context["เซิร์ฟเวอร์"], true);
-            delete context["เซิร์ฟเวอร์"];
+        const serverVal = event.server || (event.guildName ? `${event.guildName} (${event.guildId})` : event.guildId);
+        const serverField = extractField("เซิร์ฟเวอร์", serverVal);
+        if (serverField) {
+            appendEventField(fields, "เซิร์ฟเวอร์", serverField.value, serverField.inline ?? true);
         }
 
-        if (event.targetUser || event.targetMember) {
-            appendEventField(fields, "เป้าหมาย", event.targetUser || event.targetMember, true);
-        } else if (context["เป้าหมาย"]) {
-            appendEventField(fields, "เป้าหมาย", context["เป้าหมาย"], true);
-            delete context["เป้าหมาย"];
+        const targetVal = event.targetUser || event.targetMember;
+        const targetField = extractField("เป้าหมาย", targetVal);
+        if (targetField) {
+            appendEventField(fields, "เป้าหมาย", targetField.value, targetField.inline ?? true);
         }
 
-        if (event.actionName || event.operation) {
-            appendEventField(fields, "การกระทำ", event.actionName || event.operation, true);
-        } else if (context["การกระทำ"]) {
-            appendEventField(fields, "การกระทำ", context["การกระทำ"], true);
-            delete context["การกระทำ"];
+        const actionVal = event.actionName || event.operation;
+        const actionField = extractField("การกระทำ", actionVal);
+        if (actionField) {
+            appendEventField(fields, "การกระทำ", actionField.value, actionField.inline ?? true);
         }
 
-        if (event.result || event.outcome) {
-            appendEventField(fields, "ผลลัพธ์", event.result || event.outcome, true);
-        } else if (context["ผลลัพธ์"]) {
-            appendEventField(fields, "ผลลัพธ์", context["ผลลัพธ์"], true);
-            delete context["ผลลัพธ์"];
+        const resultVal = event.result || event.outcome;
+        const resultField = extractField("ผลลัพธ์", resultVal);
+        if (resultField) {
+            appendEventField(fields, "ผลลัพธ์", resultField.value, resultField.inline ?? true);
         }
 
-        if (event.details) {
-            appendEventField(fields, "รายละเอียด", event.details, false);
-        } else if (context["รายละเอียด"]) {
-            appendEventField(fields, "รายละเอียด", context["รายละเอียด"], false);
-            delete context["รายละเอียด"];
+        const detailsField = extractField("รายละเอียด", event.details);
+        if (detailsField) {
+            appendEventField(fields, "รายละเอียด", detailsField.value, detailsField.inline ?? false);
         }
     }
 
+    // Append remaining explicit fields in caller order
+    for (const f of explicitFields) {
+        const lower = String(f.name).trim().toLowerCase();
+        if (explicitMap.has(lower)) {
+            appendEventField(fields, f.name, f.value, f.inline ?? true);
+            explicitMap.delete(lower);
+        }
+    }
+
+    // Append remaining context entries
     for (const [name, value] of Object.entries(context)) {
         appendEventField(fields, String(name || "รายละเอียด").slice(0, 100), value, true);
     }
@@ -453,7 +479,8 @@ function buildEventAuthor(target, sourceIconUrl) {
 function buildWebhookEventPayload(event = {}) {
     const severity = normalizeEventToken(event.severity, WEBHOOK_SEVERITIES.INFO);
     const presentation = EVENT_PRESENTATION[severity] || EVENT_PRESENTATION.INFO;
-    const category = normalizeEventToken(event.category, "SYSTEM");
+    const categoryToken = normalizeEventToken(event.category, "SYSTEM");
+    const displayCategory = EVENT_CATEGORY_LABELS[categoryToken] || categoryToken.replace(/_/g, " ");
     const code = normalizeWebhookEventCode(event.code);
     const target = resolveWebhookEventTarget({ ...event, severity });
     const state = event.state ? normalizeEventToken(event.state, "UPDATE") : null;
@@ -465,10 +492,10 @@ function buildWebhookEventPayload(event = {}) {
         embeds: [{
             color: presentation.color,
             author: buildEventAuthor(target, sourceIconUrl),
-            title: buildWebhookEventTitle(event, presentation, category),
+            title: buildWebhookEventTitle(event, presentation, displayCategory),
             description: event.description ? String(event.description) : undefined,
             fields,
-            footer: { text: `${category} · ${code}` },
+            footer: { text: `${displayCategory} · ${code}` },
             ...(thumbnailUrl ? { thumbnail: { url: thumbnailUrl } } : {}),
             timestamp: resolveEventTimestamp(event.timestamp).toISOString()
         }]

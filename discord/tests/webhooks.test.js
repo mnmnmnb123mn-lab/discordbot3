@@ -661,3 +661,76 @@ test("Phase 1 Webhook Renovation: canonical field layouts for LOG and ALERT", ()
     ]);
 });
 
+test("Phase 1 Webhook Renovation: renders explicit event.fields with dedupe and precedence", () => {
+    // 1. Test explicit fields in ALERT
+    const alertWithFields = buildWebhookEventPayload({
+        target: "ALERT",
+        severity: "ERROR",
+        category: "VOICE_ADMIN",
+        code: "voiceadmin.enforcement_failed",
+        title: "ENFORCEMENT FAILED",
+        state: "OPEN",
+        fields: [
+            { name: "สถานะ", value: "OPEN" },
+            { name: "ผลกระทบ", value: "lock ยังคงอยู่แต่ไมค์ยังไม่ถูกปิด" },
+            { name: "สิ่งที่ควรทำ", value: "ตรวจสิทธิ์บอท" },
+            { name: "เซิร์ฟเวอร์", value: "Voice Guild" },
+            { name: "เป้าหมาย", value: "Target User" },
+            { name: "รหัสข้อผิดพลาด", value: "50013" },
+            { name: "User ID", value: "123456789" },
+            { name: "ประเภท", value: "mute" }
+        ]
+    });
+
+    const alertEmbed = alertWithFields.embeds[0];
+    assert.equal(alertEmbed.title, "🔴 VOICE ADMIN · ENFORCEMENT FAILED");
+    assert.equal(alertEmbed.footer.text, "VOICE ADMIN · voiceadmin.enforcement_failed");
+
+    const alertFieldNames = alertEmbed.fields.map(f => f.name);
+    // Canonical fields come first, custom fields appended after
+    assert.deepEqual(alertFieldNames, [
+        "สถานะ",
+        "ผลกระทบ",
+        "สิ่งที่ควรทำ",
+        "เซิร์ฟเวอร์",
+        "เป้าหมาย",
+        "รหัสข้อผิดพลาด",
+        "User ID",
+        "ประเภท"
+    ]);
+
+    // Check that field values are preserved accurately
+    assert.equal(alertEmbed.fields[0].value, "OPEN");
+    assert.equal(alertEmbed.fields[6].name, "User ID");
+    assert.equal(alertEmbed.fields[6].value, "123456789");
+
+    // 2. Test explicit fields in LOG with dedupe
+    const logWithFields = buildWebhookEventPayload({
+        target: "LOG",
+        severity: "SUCCESS",
+        category: "GATEWAY",
+        code: "gateway.shard_resumed",
+        title: "GATEWAY SHARD RESUMED",
+        actor: "Discord Gateway",
+        fields: [
+            { name: "ผู้ดำเนินการ", value: "Discord Gateway" },
+            { name: "เป้าหมาย", value: "Shard 0 (discord)" },
+            { name: "การกระทำ", value: "shard resume" },
+            { name: "ผลลัพธ์", value: "สำเร็จ (4 events)" }
+        ]
+    });
+
+    const logEmbed = logWithFields.embeds[0];
+    assert.equal(logEmbed.title, "🟢 GATEWAY · GATEWAY SHARD RESUMED");
+    assert.equal(logEmbed.footer.text, "GATEWAY · gateway.shard_resumed");
+
+    const logFieldNames = logEmbed.fields.map(f => f.name);
+    assert.deepEqual(logFieldNames, [
+        "ผู้ดำเนินการ",
+        "เป้าหมาย",
+        "การกระทำ",
+        "ผลลัพธ์"
+    ]);
+    assert.equal(logFieldNames.filter(name => name === "ผู้ดำเนินการ").length, 1, "Duplicate field must be deduped");
+});
+
