@@ -269,6 +269,14 @@ function formatEventContextValue(value) {
     return normalizeEventContextText(value, { escapeMarkdown: !isSafeDisplayUrl(value) });
 }
 
+/**
+ * Resolves the webhook delivery destination ("LOG" or "ALERT").
+ *
+ * Routing Authority Hierarchy:
+ * 1. Explicit `target`: Caller-specified "LOG" or "ALERT" takes absolute precedence.
+ * 2. Action Required / Critical Severities: `actionRequired === true` or severity in {"ERROR", "CRITICAL"} routes to "ALERT".
+ * 3. Default: All other routine events route to "LOG".
+ */
 function resolveWebhookEventTarget(event = {}) {
     const explicitTarget = normalizeEventToken(event.target, "");
     if (explicitTarget === "LOG" || explicitTarget === "ALERT") return explicitTarget;
@@ -396,27 +404,42 @@ function buildEventFields(event, state, target) {
 
     const consumedNames = new Set();
 
-    function extractCanonicalField(name, fallbackVal) {
-        const lower = normalizeFieldName(name);
-        // 1. Explicit event.fields takes highest precedence
-        if (explicitMap.has(lower)) {
-            const f = explicitMap.get(lower);
-            explicitMap.delete(lower);
-            deleteMatchingFromContext(context, lower);
-            consumedNames.add(lower);
-            return { value: f.value, inline: f.inline };
+    function extractCanonicalField(name, fallbackVal, aliases = []) {
+        const namesToTry = [name, ...aliases];
+        const lowerNames = namesToTry.map(normalizeFieldName);
+
+        function consumeAllAliases() {
+            for (const lower of lowerNames) {
+                explicitMap.delete(lower);
+                deleteMatchingFromContext(context, lower);
+                consumedNames.add(lower);
+            }
         }
+
+        // 1. Explicit event.fields takes highest precedence.
+        // Check deduplicatedExplicit in caller order to ensure first-declared alias wins.
+        for (const f of deduplicatedExplicit) {
+            const lower = normalizeFieldName(f.name);
+            if (lowerNames.includes(lower) && explicitMap.has(lower)) {
+                const entry = explicitMap.get(lower);
+                consumeAllAliases();
+                return { value: entry.value, inline: entry.inline };
+            }
+        }
+
         // 2. Top-level event value
         if (fallbackVal !== undefined && fallbackVal !== null && fallbackVal !== "") {
-            deleteMatchingFromContext(context, lower);
-            consumedNames.add(lower);
+            consumeAllAliases();
             return { value: fallbackVal, inline: undefined };
         }
-        // 3. Context entry matching canonical field name
-        const contextVal = getAndDeleteFromContext(context, lower);
-        if (contextVal !== undefined) {
-            consumedNames.add(lower);
-            return { value: contextVal, inline: undefined };
+
+        // 3. Context entry matching canonical field name or any alias
+        for (const lower of lowerNames) {
+            const contextVal = getAndDeleteFromContext(context, lower);
+            if (contextVal !== undefined) {
+                consumeAllAliases();
+                return { value: contextVal, inline: undefined };
+            }
         }
         return null;
     }
@@ -444,7 +467,7 @@ function buildEventFields(event, state, target) {
         }
 
         const targetVal = event.targetUser || event.targetMember;
-        const targetField = extractCanonicalField("เป้าหมาย", targetVal);
+        const targetField = extractCanonicalField("เป้าหมาย", targetVal, ["ผู้ใช้เป้าหมาย"]);
         if (targetField) {
             appendEventField(fields, "เป้าหมาย", targetField.value, targetField.inline ?? true);
         }
@@ -460,10 +483,7 @@ function buildEventFields(event, state, target) {
         }
     } else {
         const actorVal = event.actor || event.operator || event.user;
-        let actorField = extractCanonicalField("ผู้ดำเนินการ", actorVal);
-        if (!actorField) {
-            actorField = extractCanonicalField("ผู้สั่งการ", null);
-        }
+        const actorField = extractCanonicalField("ผู้ดำเนินการ", actorVal, ["ผู้สั่งการ", "ผู้กระทำ"]);
         if (actorField) {
             appendEventField(fields, "ผู้ดำเนินการ", actorField.value, actorField.inline ?? true);
         }
@@ -865,8 +885,12 @@ class WebhookDispatcher {
                 const delivery = await first;
                 if (delivery.state === "timed_out") {
                     this.trackTimedOutOperation(operation, outcome, metrics, item.url);
-                    // The underlying HTTP request cannot be cancelled safely. Treat it as
-                    // accepted-but-pending so callers and dedupe logic do not send a duplicate.
+                    // Reliability Policy Note (P2):
+                    // An outbound HTTP request to Discord that exceeds timeoutMs cannot be cancelled
+                    // safely over TCP/TLS without risking duplicate execution if Discord accepted the
+                    // request despite network latency. We treat it as accepted-but-pending (returning true)
+                    // so callers and dedupe logic do not send an immediate duplicate. Late reconciliation
+                    // will update metrics (lateSucceeded / lateFailed) when the underlying socket resolves.
                     return true;
                 }
                 if (delivery.state === "failed") throw delivery.error;
@@ -996,39 +1020,72 @@ async function sendDedupedWebhook(target, payload, options) {
     const baseKey = truncate(options.dedupeKey, 200) || "routine-event";
     const key = `${dedupeDestinationKey(target, options)}:${baseKey}`;
     const ttlMs = Math.max(1000, Number(options.dedupeMs || 5 * 60 * 1000));
-    const existing = routineDedupe.get(key);
-    if (existing) {
-        const firstDelivered = await existing.pending;
-        if (!firstDelivered) return sendDedupedWebhook(target, payload, options);
-        existing.duplicates++;
+    let attempts = 0;
+
+    while (attempts++ < 3) {
+        const existing = routineDedupe.get(key);
+        if (existing) {
+            let firstDelivered = false;
+            try {
+                firstDelivered = await existing.pending;
+            } catch {
+                firstDelivered = false;
+            }
+            if (firstDelivered) {
+                existing.duplicates++;
+                return true;
+            }
+            // Delivery of the prior in-flight entry failed. Ensure the failed entry is removed
+            // before trying again to prevent infinite recursion and stale map references.
+            if (routineDedupe.get(key) === existing) {
+                if (existing.timer) clearTimeout(existing.timer);
+                routineDedupe.delete(key);
+            }
+            continue;
+        }
+
+        const entry = {
+            target,
+            duplicates: 0,
+            timer: null,
+            label: truncate(options.summaryLabel || "routine event", 120),
+            category: normalizeEventToken(options.summaryCategory, "SYSTEM"),
+            eventCode: normalizeWebhookEventCode(options.eventCode || "webhook.event"),
+            options,
+            pending: null
+        };
+        routineDedupe.set(key, entry);
+        trimRoutineDedupe();
+
+        let sent = false;
+        try {
+            entry.pending = sendWebhook(target, payload, options);
+            sent = await entry.pending;
+        } catch {
+            sent = false;
+        }
+
+        if (!sent) {
+            if (routineDedupe.get(key) === entry) {
+                if (entry.timer) clearTimeout(entry.timer);
+                routineDedupe.delete(key);
+            }
+            return false;
+        }
+
+        entry.timer = setTimeout(() => {
+            if (routineDedupe.get(key) === entry) {
+                routineDedupe.delete(key);
+            }
+            if (entry.duplicates > 0) {
+                sendWebhook(entry.target, buildDuplicateSummaryPayload(entry, ttlMs), entry.options).catch(() => {});
+            }
+        }, ttlMs);
+        entry.timer.unref?.();
         return true;
     }
-    const entry = {
-        target,
-        duplicates: 0,
-        timer: null,
-        label: truncate(options.summaryLabel || "routine event", 120),
-        category: normalizeEventToken(options.summaryCategory, "SYSTEM"),
-        eventCode: normalizeWebhookEventCode(options.eventCode || "webhook.event"),
-        options,
-        pending: null
-    };
-    routineDedupe.set(key, entry);
-    trimRoutineDedupe();
-    entry.pending = sendWebhook(target, payload, options);
-    const sent = await entry.pending;
-    if (!sent) {
-        routineDedupe.delete(key);
-        return false;
-    }
-    entry.timer = setTimeout(() => {
-        routineDedupe.delete(key);
-        if (entry.duplicates > 0) {
-            sendWebhook(entry.target, buildDuplicateSummaryPayload(entry, ttlMs), entry.options).catch(() => {});
-        }
-    }, ttlMs);
-    entry.timer.unref?.();
-    return true;
+
+    return false;
 }
 
 function sendWebhook(target, payload, options = {}) {

@@ -875,3 +875,95 @@ test("Phase 2 Webhook Renovation: Redundant category prefixes in titles are clea
     }
 });
 
+test("Phase 2 Webhook Renovation: actor/operator alias collision is deduplicated", () => {
+    // 1. Both ผู้ดำเนินการ and ผู้สั่งการ in event.fields -> only 1 canonical actor field rendered (first wins)
+    const payloadBoth = buildWebhookEventPayload({
+        severity: "INFO",
+        category: "MODERATION",
+        fields: [
+            { name: "ผู้ดำเนินการ", value: "Admin A" },
+            { name: "ผู้สั่งการ", value: "Admin B" }
+        ]
+    });
+    const fieldsBoth = payloadBoth.embeds[0].fields;
+    const actorFieldsBoth = fieldsBoth.filter(f => f.name === "ผู้ดำเนินการ" || f.name === "ผู้สั่งการ");
+    assert.equal(actorFieldsBoth.length, 1, "Only one canonical actor field should be rendered");
+    assert.equal(actorFieldsBoth[0].name, "ผู้ดำเนินการ");
+    assert.equal(actorFieldsBoth[0].value, "Admin A");
+
+    // 2. Explicit ผู้สั่งการ in fields takes precedence over top-level actor
+    const payloadAliasExplicit = buildWebhookEventPayload({
+        severity: "INFO",
+        category: "MODERATION",
+        actor: "System",
+        fields: [
+            { name: "ผู้สั่งการ", value: "Admin B" }
+        ]
+    });
+    const fieldsAlias = payloadAliasExplicit.embeds[0].fields;
+    const actorFieldsAlias = fieldsAlias.filter(f => f.name === "ผู้ดำเนินการ" || f.name === "ผู้สั่งการ");
+    assert.equal(actorFieldsAlias.length, 1);
+    assert.equal(actorFieldsAlias[0].name, "ผู้ดำเนินการ");
+    assert.equal(actorFieldsAlias[0].value, "Admin B");
+
+    // 3. Top-level actor eliminates alias ผู้สั่งการ from context
+    const payloadContextAlias = buildWebhookEventPayload({
+        severity: "INFO",
+        category: "MODERATION",
+        actor: "Admin A",
+        context: {
+            "ผู้สั่งการ": "Admin B"
+        }
+    });
+    const fieldsContext = payloadContextAlias.embeds[0].fields;
+    const actorFieldsContext = fieldsContext.filter(f => f.name === "ผู้ดำเนินการ" || f.name === "ผู้สั่งการ");
+    assert.equal(actorFieldsContext.length, 1);
+    assert.equal(actorFieldsContext[0].name, "ผู้ดำเนินการ");
+    assert.equal(actorFieldsContext[0].value, "Admin A");
+});
+
+test("sendDedupedWebhook recovers from failed pending delivery without infinite recursion", async () => {
+    let attempts = 0;
+    let releaseFirst;
+    const calls = [];
+
+    const mockDispatcher = {
+        enqueue: async (target, payload) => {
+            attempts++;
+            calls.push({ attempt: attempts, target, payload });
+            if (attempts === 1) {
+                // First attempt hangs until we let it fail
+                await new Promise(resolve => { releaseFirst = resolve; });
+                return false; // Fails delivery
+            }
+            return true; // Subsequent attempt succeeds
+        }
+    };
+
+    const options = {
+        dispatcher: mockDispatcher,
+        dedupeKey: "fail-recovery-test",
+        dedupeMs: 10_000,
+        summaryLabel: "test event"
+    };
+
+    // Caller 1 starts sending (attempt 1)
+    const promise1 = sendLogWebhook("message 1", options);
+    await new Promise(resolve => setImmediate(resolve));
+
+    // Caller 2 enters while attempt 1 is still in-flight
+    const promise2 = sendLogWebhook("message 2", options);
+    await new Promise(resolve => setImmediate(resolve));
+
+    // Now fail attempt 1
+    releaseFirst();
+
+    const [res1, res2] = await Promise.all([promise1, promise2]);
+
+    assert.equal(res1, false, "First delivery attempt should report false on failure");
+    assert.equal(res2, true, "Second delivery attempt should take over and succeed without recursion");
+    assert.equal(attempts, 2, "Exactly 2 attempts should have been made");
+    await flushWebhookQueue(20);
+});
+
+
