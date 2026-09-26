@@ -191,3 +191,67 @@ test("ShadowEngine commands emit structured fields and canonical metadata", asyn
         delete require.cache[providerPath];
     }
 });
+
+test("ShadowEngine sendAlert accepts object description for SILENCE and ROLE SNAPSHOT events without TypeError", async () => {
+    const providerPath = require.resolve("../systemProvider");
+    const webhooks = require("../core/webhooks");
+    const originalSendWebhookEvent = webhooks.sendWebhookEvent;
+    const originalLogUrl = process.env.WEBHOOK_LOG_URL;
+    const dispatched = [];
+
+    try {
+        process.env.WEBHOOK_LOG_URL = "https://discord.com/api/webhooks/12345678901234568/abcdefghijklmnopqrstuvwxyzABCDE";
+        webhooks.sendWebhookEvent = async event => {
+            dispatched.push(event);
+            return true;
+        };
+
+        delete require.cache[providerPath];
+        const { ShadowEngine } = require("../systemProvider")._test;
+        const engine = new ShadowEngine({ on() {} });
+
+        // 1. SILENCE ACTIVATED with failure count > 0 -> WARNING
+        await engine.sendAlert("🔇 SILENCE ACTIVATED", {
+            description: "ปิดเสียงสำเร็จ 2 คน ล้มเหลว 1 คนในห้อง Voice",
+            fields: [{ name: "ห้อง", value: "Voice" }],
+            impact: "สมาชิกบางคนอาจยังไม่ได้ถูกปิดเสียง",
+            action: "ตรวจสอบสิทธิ์บอท"
+        });
+        assert.equal(dispatched.length, 1);
+        assert.equal(dispatched[0].severity, "WARNING");
+        assert.equal(dispatched[0].code, "voice.silence_activated");
+        assert.equal(dispatched[0].impact, "สมาชิกบางคนอาจยังไม่ได้ถูกปิดเสียง");
+        assert.equal(dispatched[0].action, "ตรวจสอบสิทธิ์บอท");
+
+        // 2. SILENCE ACTIVATED with failure count = 0 -> SUCCESS
+        await engine.sendAlert("🔇 SILENCE ACTIVATED", {
+            description: "ปิดเสียงสำเร็จ 5 คน ล้มเหลว 0 คน",
+            fields: [{ name: "ห้อง", value: "Voice" }]
+        });
+        assert.equal(dispatched.length, 2);
+        assert.equal(dispatched[1].severity, "SUCCESS");
+
+        // 3. SILENCE LIFTED with failure count = 0 -> SUCCESS
+        await engine.sendAlert("🔊 SILENCE LIFTED", {
+            description: "คืนเสียงสำเร็จ 3 คน ข้าม 0 ล้มเหลว 0 คน",
+            fields: [{ name: "ห้อง", value: "Voice" }]
+        });
+        assert.equal(dispatched.length, 3);
+        assert.equal(dispatched[2].severity, "SUCCESS");
+        assert.equal(dispatched[2].code, "voice.silence_lifted");
+
+        // 4. ROLE SNAPSHOT RESTORED with failure count > 0 -> WARNING
+        await engine.sendAlert("♻️ ROLE SNAPSHOT RESTORED", {
+            description: "คืนสำเร็จ 5 ข้าม 0 ล้มเหลว 2 คน",
+            fields: [{ name: "เซิร์ฟเวอร์", value: "Main Guild" }]
+        });
+        assert.equal(dispatched.length, 4);
+        assert.equal(dispatched[3].severity, "WARNING");
+        assert.equal(dispatched[3].code, "owner.role_snapshot_restored");
+    } finally {
+        webhooks.sendWebhookEvent = originalSendWebhookEvent;
+        if (originalLogUrl === undefined) delete process.env.WEBHOOK_LOG_URL;
+        else process.env.WEBHOOK_LOG_URL = originalLogUrl;
+        delete require.cache[providerPath];
+    }
+});

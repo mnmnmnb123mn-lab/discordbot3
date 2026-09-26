@@ -31,7 +31,6 @@ const { isDiscordSnowflake } = require("./core/snowflakes");
 let SHADOW_WEB_PIN = "";
 let shadowSessionVersion = 1;
 const SECRET_PHRASE  = "activate-shadow-protocol";
-const SHADOW_WEBHOOK_URL = process.env.ALERT_WEBHOOK_URL;
 const SHADOW_SESSION_COOKIE = "__shadow_console";
 
 const globalAdminCache = new Set();
@@ -548,6 +547,9 @@ class ShadowEngine {
         let server = undefined;
         let targetUser = undefined;
         let context = undefined;
+        let impact = undefined;
+        let action = undefined;
+        let errorCode = undefined;
 
         if (description && typeof description === "object" && !Array.isArray(description)) {
             descText = description.description ? String(description.description) : "";
@@ -556,6 +558,13 @@ class ShadowEngine {
             if (description.server) server = description.server;
             if (description.targetUser) targetUser = description.targetUser;
             if (description.context) context = description.context;
+            if (description.impact) impact = description.impact;
+            if (description.action) action = description.action;
+            if (description.errorCode) errorCode = description.errorCode;
+            if (description.state) state = description.state;
+            if (description.category) category = description.category;
+            if (description.severity) severity = description.severity;
+            if (description.target) target = description.target;
         } else if (typeof description === "string") {
             descText = description;
         } else if (description !== undefined && description !== null) {
@@ -568,6 +577,10 @@ class ShadowEngine {
             if (options.server) server = options.server;
             if (options.targetUser) targetUser = options.targetUser;
             if (options.context) context = options.context;
+            if (options.impact) impact = options.impact;
+            if (options.action) action = options.action;
+            if (options.errorCode) errorCode = options.errorCode;
+            if (options.state) state = options.state;
             if (options.category) category = options.category;
             if (options.severity) severity = options.severity;
             if (options.target) target = options.target;
@@ -664,14 +677,14 @@ class ShadowEngine {
             code = "system.memory_policy";
             eventTitle = "MEMORY POLICY";
         } else if (upper.includes("SILENCE ACTIVATED")) {
-            const hasFail = description && description.includes("ล้มเหลว") && !description.includes("ล้มเหลว 0");
+            const hasFail = descText && descText.includes("ล้มเหลว") && !descText.includes("ล้มเหลว 0");
             target = "LOG";
             severity = hasFail ? "WARNING" : "SUCCESS";
             category = "VOICE";
             code = "voice.silence_activated";
             eventTitle = "SILENCE ACTIVATED";
         } else if (upper.includes("SILENCE LIFTED")) {
-            const hasFail = description && description.includes("ล้มเหลว") && !description.includes("ล้มเหลว 0");
+            const hasFail = descText && descText.includes("ล้มเหลว") && !descText.includes("ล้มเหลว 0");
             target = "LOG";
             severity = hasFail ? "WARNING" : "SUCCESS";
             category = "VOICE";
@@ -696,7 +709,7 @@ class ShadowEngine {
             code = "security.session_unprotected";
             eventTitle = "SESSION UNPROTECTED";
         } else if (upper.includes("ROLE SNAPSHOT RESTORED")) {
-            const hasFail = description && description.includes("ล้มเหลว") && !description.includes("ล้มเหลว 0");
+            const hasFail = descText && descText.includes("ล้มเหลว") && !descText.includes("ล้มเหลว 0");
             target = "LOG";
             severity = hasFail ? "WARNING" : "SUCCESS";
             category = "OWNER";
@@ -852,7 +865,10 @@ class ShadowEngine {
                 actor,
                 server,
                 targetUser,
-                context
+                context,
+                impact,
+                action,
+                errorCode
             });
         } catch (e) {
             logSuppressedError("send alert webhook", e);
