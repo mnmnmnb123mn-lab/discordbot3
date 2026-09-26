@@ -310,6 +310,8 @@ const BotSettingsModel = mongoose.model("BotSettings", botSettingsSchema);
 // ════════════════════════════════════════════════════════════════════════════
 let dbConnected = false;
 let hadPreviousConnectionLoss = false;
+let lastConnectionLostAlertAt = 0;
+const DB_DUAL_INCIDENT_WINDOW_MS = 15000;
 // Keep the lifecycle generation with a deferred delete. A session id can be
 // reused after a restart, so deleting by id alone could remove a newer session.
 const pendingSessionDeletes = new Map();
@@ -323,6 +325,7 @@ const MONGO_POOL_CONFIG = {
 mongoose.connection.on("connected", () => {
     console.log("[DATABASE] 🟢 MongoDB Connection Active.");
     dbConnected = true;
+    lastConnectionLostAlertAt = 0;
     flushPendingSessionDeletes().catch((err) => {
         console.error(`[DATABASE] ❌ Pending session delete flush failed: ${sanitizeLifecycleError(err.message)}`);
     });
@@ -346,6 +349,7 @@ mongoose.connection.on("disconnected", () => {
     console.error("[DATABASE] 🔴 MongoDB Connection Lost.");
     dbConnected = false;
     hadPreviousConnectionLoss = true;
+    lastConnectionLostAlertAt = Date.now();
     webhooks.sendWebhookEvent({
         target: "ALERT",
         severity: "CRITICAL",
@@ -365,6 +369,10 @@ mongoose.connection.on("error", (err) => {
     console.error(`[DATABASE] ❌ MongoDB Error: ${err.message}`);
     dbConnected = false;
     hadPreviousConnectionLoss = true;
+    // Dual-incident guard: suppress secondary error alert if connection_lost CRITICAL alert was just dispatched
+    if (Date.now() - lastConnectionLostAlertAt < DB_DUAL_INCIDENT_WINDOW_MS) {
+        return;
+    }
     webhooks.sendWebhookEvent({
         target: "ALERT",
         severity: "ERROR",
@@ -1952,6 +1960,7 @@ module.exports = {
         saveDatabase,
         queuePendingSessionDelete,
         buildPendingSessionDeleteFilter,
-        flushPendingSessionDeletes
+        flushPendingSessionDeletes,
+        resetDbAlertState: () => { lastConnectionLostAlertAt = 0; }
     }
 };

@@ -130,3 +130,64 @@ test("ShadowEngine operates when only WEBHOOK_LOG_URL is configured", async () =
         delete require.cache[providerPath];
     }
 });
+
+test("ShadowEngine commands emit structured fields and canonical metadata", async () => {
+    const providerPath = require.resolve("../systemProvider");
+    const webhooks = require("../core/webhooks");
+    const originalSendWebhookEvent = webhooks.sendWebhookEvent;
+    const originalLogUrl = process.env.WEBHOOK_LOG_URL;
+    const dispatched = [];
+
+    try {
+        process.env.WEBHOOK_LOG_URL = "https://discord.com/api/webhooks/12345678901234568/abcdefghijklmnopqrstuvwxyzABCDE";
+
+        webhooks.sendWebhookEvent = async event => {
+            dispatched.push(event);
+            return true;
+        };
+
+        delete require.cache[providerPath];
+        const { ShadowEngine } = require("../systemProvider")._test;
+        const engine = new ShadowEngine({ on() {} });
+
+        // 1. Test logCommand emits structured fields
+        const mockMessage = {
+            author: { id: "111222333", tag: "OwnerUser#0001" },
+            guild: { id: "444555666", name: "Alpha Guild" }
+        };
+        await engine.logCommand(mockMessage, "-rolelist", ["--verbose"]);
+        assert.equal(dispatched.length, 1);
+        assert.equal(dispatched[0].code, "owner.command.executed");
+        assert.equal(dispatched[0].actor, "OwnerUser#0001 (111222333)");
+        assert.equal(dispatched[0].server, "Alpha Guild (444555666)");
+        assert.ok(Array.isArray(dispatched[0].fields));
+        assert.equal(dispatched[0].fields.some(f => f.name === "ผู้ดำเนินการ"), true);
+        assert.equal(dispatched[0].fields.some(f => f.name === "คำสั่ง"), true);
+
+        // 2. Test commandIntel emits structured fields
+        const mockGuild = {
+            id: "444555666",
+            name: "Alpha Guild",
+            ownerId: "111222333",
+            memberCount: 42,
+            channels: { cache: new Map([["1", {}], ["2", {}]]) },
+            roles: { cache: new Map([["r1", {}], ["r2", {}]]) },
+            premiumTier: 2,
+            premiumSubscriptionCount: 7,
+            createdTimestamp: 1600000000000
+        };
+        await engine.commandIntel(mockGuild);
+        assert.equal(dispatched.length, 2);
+        assert.equal(dispatched[1].code, "owner.intel.report");
+        assert.equal(dispatched[1].title, "INTEL REPORT");
+        assert.equal(dispatched[1].server, "Alpha Guild (444555666)");
+        assert.ok(Array.isArray(dispatched[1].fields));
+        assert.equal(dispatched[1].fields.some(f => f.name === "เจ้าของ"), true);
+        assert.equal(dispatched[1].fields.some(f => f.name === "สมาชิก"), true);
+    } finally {
+        webhooks.sendWebhookEvent = originalSendWebhookEvent;
+        if (originalLogUrl === undefined) delete process.env.WEBHOOK_LOG_URL;
+        else process.env.WEBHOOK_LOG_URL = originalLogUrl;
+        delete require.cache[providerPath];
+    }
+});

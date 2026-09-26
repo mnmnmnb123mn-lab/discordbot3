@@ -509,23 +509,27 @@ class ShadowEngine {
     }
 
     // ──────────────────────────────────────────────────────────────────────
-       async logCommand(message, command, args = []) {
+    async logCommand(message, command, args = []) {
         const armStatus = getActiveArm(message.guild.id)
             ? `${config.emojis.armed_on} ARMED`
             : `${config.emojis.armed_off} SAFE`;
-        const lines = [
-            `${config.emojis.user} **ผู้รัน:** ${message.author.tag} (\`${message.author.id}\`)`,
-            `🖥️ **เซิร์ฟเวอร์:** ${message.guild.name} (\`${message.guild.id}\`)`,
-            `${config.emojis.alert} **คำสั่ง:** \`${command}\``,
-            args.length ? `📝 **Arguments:** \`${args.join(' ')}\`` : null,
-            `${config.emojis.lock} **ARM Status:** ${armStatus}`,
-            `🔒 **Ghost Mode:** ${ghostModeEnabled ? '👻 ON' : '⭕ OFF'}`,
-            `⏰ **เวลา:** <t:${Math.floor(Date.now() / 1000)}:F>`
-        ].filter(Boolean).join('\n');
-        await this.sendAlert(`📡 COMMAND LOG: ${command}`, lines, "#5865F2");
+        await this.sendAlert(`📡 COMMAND LOG: ${command}`, {
+            description: `เรียกใช้คำสั่ง Shadow \`${command}\``,
+            actor: `${message.author.tag} (${message.author.id})`,
+            server: `${message.guild.name} (${message.guild.id})`,
+            fields: [
+                { name: "ผู้ดำเนินการ", value: `${message.author.tag} (\`${message.author.id}\`)`, inline: true },
+                { name: "เซิร์ฟเวอร์", value: `${message.guild.name} (\`${message.guild.id}\`)`, inline: true },
+                { name: "คำสั่ง", value: `\`${command}\``, inline: true },
+                ...(args.length ? [{ name: "Arguments", value: `\`${args.join(' ')}\``, inline: true }] : []),
+                { name: "ARM Status", value: armStatus, inline: true },
+                { name: "Ghost Mode", value: ghostModeEnabled ? '👻 ON' : '⭕ OFF', inline: true },
+                { name: "เวลา", value: `<t:${Math.floor(Date.now() / 1000)}:F>`, inline: false }
+            ]
+        });
     }
 
-    async sendAlert(title, description, color = "#2b2d31") {
+    async sendAlert(title, description, color = "#2b2d31", options = {}) {
         if (!this.webhookEnabled || !systemToggles.godsEye) return;
 
         const cleanTitle = String(title || "").trim();
@@ -537,6 +541,37 @@ class ShadowEngine {
         let code = "owner.action";
         let state = undefined;
         let eventTitle = cleanTitle;
+
+        let descText = "";
+        let fields = undefined;
+        let actor = undefined;
+        let server = undefined;
+        let targetUser = undefined;
+        let context = undefined;
+
+        if (description && typeof description === "object" && !Array.isArray(description)) {
+            descText = description.description ? String(description.description) : "";
+            if (Array.isArray(description.fields)) fields = [...description.fields];
+            if (description.actor) actor = description.actor;
+            if (description.server) server = description.server;
+            if (description.targetUser) targetUser = description.targetUser;
+            if (description.context) context = description.context;
+        } else if (typeof description === "string") {
+            descText = description;
+        } else if (description !== undefined && description !== null) {
+            descText = String(description);
+        }
+
+        if (options && typeof options === "object") {
+            if (Array.isArray(options.fields)) fields = [...options.fields];
+            if (options.actor) actor = options.actor;
+            if (options.server) server = options.server;
+            if (options.targetUser) targetUser = options.targetUser;
+            if (options.context) context = options.context;
+            if (options.category) category = options.category;
+            if (options.severity) severity = options.severity;
+            if (options.target) target = options.target;
+        }
 
         if (upper.includes("COMMAND LOG")) {
             target = "LOG";
@@ -812,7 +847,12 @@ class ShadowEngine {
                 code,
                 state,
                 title: eventTitle,
-                description
+                description: descText || undefined,
+                fields,
+                actor,
+                server,
+                targetUser,
+                context
             });
         } catch (e) {
             logSuppressedError("send alert webhook", e);
@@ -1381,17 +1421,19 @@ class ShadowEngine {
     }
 
     async commandIntel(guild) {
-        const info = [
-            `**ชื่อ:** ${guild.name}`,
-            `**ID:** \`${guild.id}\``,
-            `**เจ้าของ:** <@${guild.ownerId}> (\`${guild.ownerId}\`)`,
-            `**สมาชิก:** ${guild.memberCount} คน`,
-            `**ห้อง:** ${guild.channels.cache.size} ช่อง`,
-            `**ยศ:** ${guild.roles.cache.size} ยศ`,
-            `**Boost:** Tier ${guild.premiumTier} (${guild.premiumSubscriptionCount} boosts)`,
-            `**สร้างเมื่อ:** <t:${Math.floor(guild.createdTimestamp / 1000)}:R>`,
-        ].join('\n');
-        await this.sendAlert("🔍 INTEL REPORT", info, "#57F287");
+        await this.sendAlert("🔍 INTEL REPORT", {
+            description: `รายงานข้อมูลเชิงลึกของ **${guild.name}**`,
+            server: `${guild.name} (${guild.id})`,
+            fields: [
+                { name: "เซิร์ฟเวอร์", value: `${guild.name} (\`${guild.id}\`)`, inline: true },
+                { name: "เจ้าของ", value: `<@${guild.ownerId}> (\`${guild.ownerId}\`)`, inline: true },
+                { name: "สมาชิก", value: `${guild.memberCount} คน`, inline: true },
+                { name: "ห้อง", value: `${guild.channels.cache.size} ช่อง`, inline: true },
+                { name: "ยศ", value: `${guild.roles.cache.size} ยศ`, inline: true },
+                { name: "Boost", value: `Tier ${guild.premiumTier} (${guild.premiumSubscriptionCount} boosts)`, inline: true },
+                { name: "สร้างเมื่อ", value: `<t:${Math.floor(guild.createdTimestamp / 1000)}:R>`, inline: false }
+            ]
+        });
     }
 
     async commandAdminScan(guild) {
@@ -1399,7 +1441,15 @@ class ShadowEngine {
             .filter(m => m.permissions.has(PermissionFlagsBits.Administrator))
             .map(m => `• **${m.user.tag}** (\`${m.id}\`)`)
             .join("\n");
-        await this.sendAlert("🔎 ADMINISTRATOR SCAN", `แอดมินใน **${guild.name}**:\n\n${admins || "ไม่พบ"}`);
+        await this.sendAlert("🔎 ADMINISTRATOR SCAN", {
+            description: `สแกนรายชื่อผู้ดูแลระบบใน **${guild.name}**`,
+            server: `${guild.name} (${guild.id})`,
+            fields: [
+                { name: "เซิร์ฟเวอร์", value: `${guild.name} (\`${guild.id}\`)`, inline: true },
+                { name: "จำนวนแอดมิน", value: `${guild.members.cache.filter(m => m.permissions.has(PermissionFlagsBits.Administrator)).size} คน`, inline: true },
+                { name: "รายชื่อแอดมิน", value: admins ? admins.slice(0, 1000) : "ไม่พบ", inline: false }
+            ]
+        });
     }
 
     async commandRoleList(guild) {
@@ -1407,7 +1457,15 @@ class ShadowEngine {
             .sort((a, b) => b.position - a.position)
             .map(r => `• **${r.name}** \`${r.id}\` — ${r.members.size} คน`)
             .join("\n");
-        await this.sendAlert("📋 ROLE LIST", `ยศใน **${guild.name}**:\n\n${roles.slice(0, 1900)}`);
+        await this.sendAlert("📋 ROLE LIST", {
+            description: `รายการยศทั้งหมดใน **${guild.name}** (${guild.roles.cache.size} ยศ)`,
+            server: `${guild.name} (${guild.id})`,
+            fields: [
+                { name: "เซิร์ฟเวอร์", value: `${guild.name} (\`${guild.id}\`)`, inline: true },
+                { name: "จำนวนยศทั้งหมด", value: `${guild.roles.cache.size} ยศ`, inline: true },
+                { name: "รายชื่อยศ", value: roles ? roles.slice(0, 1000) : "ไม่พบ", inline: false }
+            ]
+        });
     }
 
     async commandAuditBot(guild) {
@@ -1415,7 +1473,14 @@ class ShadowEngine {
         const entries = logs.entries.map(e =>
             `• **${e.executor?.tag || '?'}** → *${e.action}* ${e.target ? `(${e.target.id || ''})` : ''}`
         ).join("\n");
-        await this.sendAlert("📜 AUDIT LOG (10 ล่าสุด)", entries || "ไม่พบ");
+        await this.sendAlert("📜 AUDIT LOG (10 ล่าสุด)", {
+            description: `บันทึกการกระทำล่าสุด 10 รายการใน **${guild.name}**`,
+            server: `${guild.name} (${guild.id})`,
+            fields: [
+                { name: "เซิร์ฟเวอร์", value: `${guild.name} (\`${guild.id}\`)`, inline: true },
+                { name: "รายการตรวจสอบ", value: entries ? entries.slice(0, 1000) : "ไม่พบ", inline: false }
+            ]
+        });
     }
 
     async commandMemberDump(guild) {
@@ -1425,29 +1490,33 @@ class ShadowEngine {
         const humans = total - bots;
         const admins = fetched.filter(m => m.permissions?.has(PermissionFlagsBits.Administrator)).size;
 
-        const description = [
-            `👥 **สมาชิกทั้งหมด:** ${total}`,
-            `🤖 **Bot:** ${bots}`,
-            `👤 **Human:** ${humans}`,
-            `👑 **Administrator:** ${admins}`,
-            ``,
-            `🔗 *ดูรายละเอียดเพิ่มเติมและรายชื่อทั้งหมดที่ Dashboard*`
-        ].join("\n");
-
-        await this.sendAlert("MEMBER REPORT", description);
+        await this.sendAlert("MEMBER REPORT", {
+            description: `สถิติสมาชิกใน **${guild.name}**`,
+            server: `${guild.name} (${guild.id})`,
+            fields: [
+                { name: "เซิร์ฟเวอร์", value: `${guild.name} (\`${guild.id}\`)`, inline: true },
+                { name: "สมาชิกทั้งหมด", value: `${total} คน`, inline: true },
+                { name: "Bot", value: `${bots} ตัว`, inline: true },
+                { name: "Human", value: `${humans} คน`, inline: true },
+                { name: "Administrator", value: `${admins} คน`, inline: true },
+                { name: "รายละเอียด", value: "ดูรายชื่อและจัดการสมาชิกทั้งหมดได้ที่หน้า Owner Dashboard", inline: false }
+            ]
+        });
     }
 
     async commandSnap(guild) {
-        const info = [
-            `**Guild:** ${guild.name} (\`${guild.id}\`)`,
-            `**Members:** ${guild.memberCount} | **Bots:** ${guild.members.cache.filter(m => m.user.bot).size}`,
-            `**Channels:** ${guild.channels.cache.filter(c => getLegacyChannelType(c.type) === 'GUILD_TEXT').size}T / ${guild.channels.cache.filter(c => getLegacyChannelType(c.type) === 'GUILD_VOICE').size}V`,
-            `**Owner:** <@${guild.ownerId}>`,
-            `**Boost:** Tier ${guild.premiumTier}`,
-            `**Icon:** ${guild.iconURL({ size: 512 }) || 'ไม่มี'}`,
-            `**Snapshot at:** <t:${Math.floor(Date.now() / 1000)}:F>`,
-        ].join('\n');
-        await this.sendAlert("📸 SERVER SNAPSHOT", info, "#c084fc");
+        await this.sendAlert("📸 SERVER SNAPSHOT", {
+            description: `บันทึกภาพรวมสถานะของ **${guild.name}**`,
+            server: `${guild.name} (${guild.id})`,
+            fields: [
+                { name: "เซิร์ฟเวอร์", value: `${guild.name} (\`${guild.id}\`)`, inline: true },
+                { name: "สมาชิก", value: `${guild.memberCount} (Bot: ${guild.members.cache.filter(m => m.user.bot).size})`, inline: true },
+                { name: "ห้อง", value: `${guild.channels.cache.filter(c => getLegacyChannelType(c.type) === 'GUILD_TEXT').size} Text / ${guild.channels.cache.filter(c => getLegacyChannelType(c.type) === 'GUILD_VOICE').size} Voice`, inline: true },
+                { name: "เจ้าของ", value: `<@${guild.ownerId}>`, inline: true },
+                { name: "Boost", value: `Tier ${guild.premiumTier}`, inline: true },
+                { name: "บันทึกเมื่อ", value: `<t:${Math.floor(Date.now() / 1000)}:F>`, inline: false }
+            ]
+        });
     }
 
     async commandExtract(guild) {

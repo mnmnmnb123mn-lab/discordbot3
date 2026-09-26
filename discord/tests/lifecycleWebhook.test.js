@@ -25,27 +25,33 @@ test("sessionManager dispatches alerts on MongoDB connection loss and recovery",
         assert.equal(dispatched[0].code, "database.connection_lost");
         assert.equal(dispatched[0].state, "OPEN");
 
-        // 2. Simulate error
+        // 2. Simulate error immediately following disconnected -> should be suppressed by dual-incident guard
         mongoose.connection.emit("error", new Error("Simulated connection timeout"));
+        assert.equal(dispatched.length, 1, "Immediate error during connection_lost must be suppressed by dual-incident guard");
+
+        // 3. Simulate connected after loss -> should emit RESOLVED alert and reset guard
+        mongoose.connection.emit("connected");
         assert.equal(dispatched.length, 2);
         assert.equal(dispatched[1].target, "ALERT");
-        assert.equal(dispatched[1].severity, "ERROR");
+        assert.equal(dispatched[1].severity, "SUCCESS");
         assert.equal(dispatched[1].category, "DATABASE");
-        assert.equal(dispatched[1].code, "database.error");
-        assert.equal(dispatched[1].state, "OPEN");
+        assert.equal(dispatched[1].code, "database.connection_restored");
+        assert.equal(dispatched[1].state, "RESOLVED");
 
-        // 3. Simulate connected after loss -> should emit RESOLVED alert
-        mongoose.connection.emit("connected");
+        // 4. Simulate independent error while connected -> should emit ERROR alert
+        mongoose.connection.emit("error", new Error("Simulated independent command timeout"));
         assert.equal(dispatched.length, 3);
         assert.equal(dispatched[2].target, "ALERT");
-        assert.equal(dispatched[2].severity, "SUCCESS");
+        assert.equal(dispatched[2].severity, "ERROR");
         assert.equal(dispatched[2].category, "DATABASE");
-        assert.equal(dispatched[2].code, "database.connection_restored");
-        assert.equal(dispatched[2].state, "RESOLVED");
+        assert.equal(dispatched[2].code, "database.error");
+        assert.equal(dispatched[2].state, "OPEN");
 
-        // 4. Simulate connected again without loss -> should NOT emit resolved again
+        // 5. Simulate connected again -> should emit connection_restored for recovery from error
         mongoose.connection.emit("connected");
-        assert.equal(dispatched.length, 3);
+        assert.equal(dispatched.length, 4);
+        assert.equal(dispatched[3].code, "database.connection_restored");
+        assert.equal(dispatched[3].state, "RESOLVED");
     } finally {
         webhooks.sendWebhookEvent = originalSendWebhookEvent;
     }
