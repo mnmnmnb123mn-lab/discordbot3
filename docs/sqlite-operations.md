@@ -22,7 +22,7 @@ Updated: 2026-09-23
 - `SQLITE_QUOTA_CRIT_MB` (ค่าเริ่มต้น: `3686`)
 - `SQLITE_QUOTA_HARD_MB` (ค่าเริ่มต้น: `4096`)
 
-### ⚡ นโยบายการตอบสนองต่อภาวะวิกฤต (Emergency Policy B)
+### ⚡ นโยบายการตอบสนองต่อภาวะวิกฤต (Emergency Policy B & P0 Journal Durability)
 ระบบแยกแยะภาวะวิกฤตออกเป็น 2 ประเภทอย่างชัดเจนตามสาเหตุทางเทคนิค:
 1. **Physical Storage Emergency (พื้นที่จัดเก็บดิสก์วิกฤต)**:
    - เงื่อนไข: Footprint รวม > Critical (`3,686 MB`), หรือ WAL > `500 MB`, หรือพื้นที่ดิสก์เครื่องเหลือน้อยกว่า `100 MB`
@@ -30,6 +30,19 @@ Updated: 2026-09-23
 2. **Buffer Queue Emergency (แรงกดดันคิวใน RAM / Writer Pressure)**:
    - เงื่อนไข: Write-behind buffer queue รวมสะสมในหน่วยความจำ RAM `≥ 2,000` รายการ
    - การตอบสนอง: ส่ง Webhook Alert (CRITICAL) ➔ สั่ง Drain Buffer ผ่านการ **Active Flush** และใช้ **Priority Drop** (สลัด Event ระดับต่ำ P2/P1 ทิ้ง โดยคุ้มครอง P0 ไม่ให้สูญหาย) **โดยไม่เรียก Emergency Trim บนไฟล์ดิสก์** เนื่องจากปัญหาคิวล้นใน RAM ไม่ได้เกิดจากดิสก์เต็ม และการลบแคชไฟล์บนดิสก์ไม่ได้ช่วยลดคิวใน RAM โดยตรง
+
+#### 🛡️ ระบบคุ้มครองความคงทนของข้อมูลระดับวิกฤต (P0 Emergency Journal Durability)
+สำหรับ Event ระดับ **P0 (Critical Telemetry & Security Lifecycle)** ระบบมีเกราะป้องกันข้อมูลสูญหาย 3 ชั้น (`database/sqlite/repositories/history/p0Journal.js`):
+1. **Direct Fast-Path Write**: เขียนลงฐานข้อมูล SQLite ทันที
+2. **Critical Retry Queue**: หาก SQLite ติด Busy/Lock ชั่วคราว Event P0 จะถูกพักไว้ใน `criticalRetryQueue` (จำกัดเพดาน 100 รายการ) เพื่อรอ Retry ในรอบถัดไป
+3. **Emergency Disk Journal (`data/p0-emergency.journal`)**: หาก Queue เต็มหรือฐานข้อมูลเขียนไม่ได้กะทันหัน ระบบจะ Spool ข้อมูล P0 ลงไฟล์ Emergency Journal บนดิสก์ทันที เพื่อรับประกัน **Zero Data Loss** และจะทำการ Drain อ่านกลับมาบันทึกลง SQLite อัตโนมัติเมื่อฐานข้อมูลพร้อมใช้งาน
+
+#### 💽 การเฝ้าระวังพื้นที่จัดเก็บแบบแยกไดรฟ์ (Multi-Volume Mount Monitoring)
+เครื่องยนต์ `storageCheck.js` มีระบบตรวจสอบดิสก์แบบแยกอิสระ 3 จุด:
+- **Database Volume**: ตรวจสอบพื้นที่ว่างของไดรฟ์ที่เก็บ `SQLITE_DB_PATH`
+- **Backup Volume**: ตรวจสอบพื้นที่ว่างของไดรฟ์ที่เก็บ `SQLITE_BACKUP_DIR`
+- **Asset Cache Volume**: ตรวจสอบพื้นที่ว่างของไดรฟ์ที่เก็บ `SQLITE_ASSET_DIR`
+หากแยก Mount point คนละไดรฟ์ ระบบจะประเมินพื้นที่ว่างแยกกันอย่างแม่นยำ ไม่รวมตัวเลขปะปนกัน พร้อมระบบ **Auto-Detection** ตรวจจับ Physical Mount `/persistent` บนโฮสติ้งให้อัตโนมัติ ป้องกันปัญหาพื้นที่ดิสก์เต็มแบบไม่รู้ตัว
 
 ---
 
@@ -85,13 +98,21 @@ Updated: 2026-09-23
    - ใช้ SQLite Native Backup API ไม่ล็อกระบบ บอททำงานต่อได้ตามปกติ
    - **การจำกัดจำนวนชุด (Rotation)**: เก็บไฟล์สำรองในเครื่องเพียง **2 ชุดล่าสุด** เป็นค่าเริ่มต้น เพื่อประหยัดพื้นที่ดิสก์
    - **การตรวจพื้นที่ว่าง (Disk Free Space Check)**: ตรวจสอบพื้นที่ว่างของ Filesystem ก่อนเริ่ม Backup เสมอ (ต้องมีที่ว่างอย่างน้อย 1.5 เท่าของขนาดฐานข้อมูล) หากไม่พอจะยกเลิกทันทีเพื่อป้องกันดิสก์เต็ม
-2. **Safe Restore Safeguards & Auto-Rollback**:
+2. **Safe Restore Safeguards, Process Lock & Auto-Rollback**:
    - คำสั่ง: `node scripts/db/restoreSqlite.js --source ./backups/sqlite_backup_<timestamp>.sqlite`
-   - ตรวจสอบ `PRAGMA integrity_check` ของไฟล์สำรองก่อนเริ่มแตะต้องฐานข้อมูลจริง (Pre-flight Verification)
-   - สร้างไฟล์สำรองย้อนกลับ (`.pre-restore-<timestamp>.bak`) ของฐานข้อมูลเดิมอัตโนมัติ โดยหมุนเวียนเก็บไว้ไม่เกิน 2 ชุดล่าสุด (Auto-pruning)
-   - **Auto-Rollback**: หากการกู้คืนล้มเหลว หรือตรวจสอบ `PRAGMA integrity_check` ของไฟล์ปลายทางไม่ผ่าน ระบบจะกู้คืนข้อมูลกลับจากไฟล์ `.bak` ทันทีโดยอัตโนมัติ เพื่อป้องกันฐานข้อมูลเสียหาย
-   - ลบไฟล์ `-wal` และ `-shm` เดิมทิ้งเพื่อป้องกันการ Replay Log ทับไฟล์ใหม่
-   - ตรวจสอบความสมบูรณ์หลังการกู้คืนเสร็จสิ้น (Post-flight Verification)
+   - **🔒 Process Lock & Split-Brain Prevention (`processLock.js`)**:
+     - ระบบตรวจเช็กสถานะการทำงานของบอทผ่านไฟล์ Lock (`data/discordbot.sqlite.lock`) ด้วย `isPidAlive(pid)` (POSIX signal 0)
+     - **คำสั่ง Restore จะปฏิเสธการทำงานทันที (Abort with Error)** หากตรวจพบบอทกำลังรันอยู่ เพื่อป้องกันการเขียนทับไฟล์ฐานข้อมูลในขณะที่มีการเปิดใช้งาน (Split-Brain / Database Corruption)
+     - หากจำเป็นต้องกู้คืนในกรณีฉุกเฉินขณะที่ Process ค้าง สามารถใส่แฟล็กข้ามได้:
+       ```bash
+       node scripts/db/restoreSqlite.js --source ./backups/sqlite_backup_<timestamp>.sqlite --force
+       ```
+   - **🔄 ลำดับการกู้คืนแบบ 4 ขั้นตอน (4-Stage Staging Verification Workflow)**:
+     1. **1/4 Verifying Source Backup Integrity**: ตรวจสอบ `PRAGMA user_version = 4` และความสมบูรณ์ของไฟล์ต้นทางก่อนแตะต้องฐานข้อมูลจริง
+     2. **2/4 Securing Current Target Database**: สร้างไฟล์สำรองย้อนกลับ (`.pre-restore-<timestamp>.bak`) ของฐานข้อมูลปัจจุบันอัตโนมัติ (เก็บหมุนเวียน 2 ชุดล่าสุด)
+     3. **3/4 Staging Copy & Isolation Check**: คัดลอกไฟล์แบ็กอัปไปยังไฟล์ชั่วคราว (`<target>.staging`) และรัน `PRAGMA integrity_check` บนไฟล์ Staging ก่อน หากพบข้อผิดพลาดจะยกเลิกทันทีโดยที่ไฟล์ฐานข้อมูลจริงยังไม่ถูกแตะต้อง
+     4. **4/4 Atomic Replacement & Post-Flight Integrity**: ย้ายไฟล์ Staging เข้าแทนที่ฐานข้อมูลจริง ลบไฟล์ `-wal` และ `-shm` เก่าทิ้งเพื่อป้องกัน Log replay ทับ และตรวจความสมบูรณ์หลังการกู้คืนเสร็จสิ้น
+   - **Auto-Rollback**: หากเกิดความผิดพลาดในขั้นตอนใด ๆ ระบบจะ Rollback ดึงข้อมูลจากไฟล์ `.bak` กลับมาคืนตำแหน่งเดิมทันทีโดยอัตโนมัติ
 
 3. **Schema Migrations Lineage (`PRAGMA user_version = 4`)**:
    - `001_initial_core.sql`: Core state tables, tokens, DMs, nonces, settings.
@@ -167,3 +188,23 @@ Updated: 2026-09-23
   npm run db:sqlite:check
   ```
   - หากระบบตรวจพบ In-Source Storage ในโหมด Production ระบบจะขึ้น `[STORAGE] ⚠️ pathWarning` เพื่อแจ้งเตือน แต่จะไม่สั่ง Crash หรือขัดขวางการทำงานของบอท
+
+---
+
+## 7. การจัดการ Asset Cache & ป้องกัน Orphan File บนดิสก์ (`assetCacheManager.js`)
+
+ระบบแคชไฟล์ไบนารีภายนอก (Avatar, Server Icon, Attachment) มีระบบควบคุมพื้นที่และสุขอนามัยของไฟล์บนดิสก์:
+- **โควตาความจุรวม (Quota)**: จำกัดพื้นที่ไดเรกทอรี `SQLITE_ASSET_DIR` รวมไม่เกิน **500 MB**
+- **การคำนวณพื้นที่แบบ Deduplicated**: คำนวณขนาดจริงตามไฟล์ไม่ซ้ำ (`relative_path`) แม้จะมีหลาย Cache Keys ชี้มาที่รูปเดียวกัน
+- **🛡️ Orphan File Prevention (การป้องกันไฟล์ขยะตกค้าง)**:
+  - การบันทึกไฟล์แคชลงดิสก์ใช้หลักการ Atomic: เขียนไฟล์ไบนารีลงดิสก์ก่อน ➔ บันทึก Metadata ลง SQLite
+  - **หากการ Insert หรือ Update ลง SQLite ล้มเหลว**: ระบบจะทำการ **`unlinkSync` ลบไฟล์บนดิสก์ทิ้งทันที** เพื่อไม่ให้เกิดไฟล์ขยะที่ไร้การอ้างอิงสะสมค้างบนดิสก์
+- **Phased LRU Eviction**: เมื่อขนาดพื้นที่เกิน 500 MB ระบบจะคัดกรองไฟล์ที่มี `last_accessed_at` เก่าที่สุดออกตามลำดับเพื่อคืนพื้นที่ให้ต่ำกว่าเพดาน
+
+---
+
+## 8. ระบบความปลอดภัยของข้อมูล Telemetry (Command Telemetry Sanitizer)
+
+ตาราง `command_events` และ `session_events` มีตัวกรอง Sanitizer อัตโนมัติก่อนบันทึกลง SQLite:
+- **🔒 Credential & Token Redaction**: ตรวจจับและแทนที่ Discord Token, Session Cookie, รหัสผ่าน, และ API Key ใน Interaction Details ให้เป็นค่า Safe Placeholder โดยอัตโนมัติ
+- **🧬 Bounded Object Depth (`depth >= 5`)**: วัตถุ JSON หรือ Options ที่มีความซ้อนลึกเกิน 5 ชั้น จะถูกแทนที่ด้วย `"[REDACTED_NESTED]"` เพื่อป้องกัน Denial-of-Service จาก Circular References และป้องกันการลักลอบบันทึก Payload ขนาดใหญ่เกินความจำเป็นลงฐานข้อมูล Local

@@ -76,3 +76,9 @@ All tables are defined in `database/sqlite/migrations/` and accessed via `databa
    - `DmNotificationRepository` and `VerificationStateNonceRepository` translate SQLite unique constraint violations (`SQLITE_CONSTRAINT_UNIQUE`) into Mongoose-compatible error objects (`code: 11000`) to guarantee drop-in compatibility.
 3. **Write-Behind History Buffer**:
    - High-throughput history events (`voice_events`, etc.) are held in RAM and flushed in transactions every 10 seconds or on process shutdown.
+4. **P0 Durability Emergency Journal**:
+   - Critical operational events (P0) feature out-of-band disk journaling (`p0Journal.js` / `data/p0-emergency.journal`) guaranteeing zero data loss if SQLite is locked or facing storage backpressure.
+5. **Telemetry Sanitization & Credential Shield**:
+   - `command_events` and `session_events` pass through recursive sanitization that redacts tokens/credentials and truncates object depth at `>= 5` (`[REDACTED_NESTED]`).
+6. **Asset Cache Orphan File Prevention**:
+   - `asset_cache` uses atomic disk file writes accompanied by an immediate `unlinkSync` rollback if SQLite metadata insertion fails, ensuring no unreferenced binary files accumulate in `SQLITE_ASSET_DIR`.

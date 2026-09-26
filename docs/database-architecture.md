@@ -96,6 +96,20 @@ The Phomueangtai Personal Multi-Tool Discord Bot employs a **3-Tier Hybrid Datab
 6. **Technical Debt & Migration Lifecycle**:
    - **Migration 004 Note (`DROP TABLE IF EXISTS asset_cache`)**: Migration 004 dropped and recreated `asset_cache` to transition from embedded binary BLOB storage to lean disk-backed filesystem metadata. In dev/test environments, this purged stale binary entries cleanly. In future production schema migrations, all table alterations **MUST** use additive `ALTER TABLE` or multi-step migration procedures without `DROP TABLE` to prevent data loss.
 
+7. **Process Lock & Split-Brain Prevention**:
+   - Single-instance enforcement via PID lockfile (`data/discordbot.sqlite.lock`) evaluated with `isPidAlive(pid)` using POSIX signal 0.
+   - Database restore operations abort with an error if an active bot process is detected holding the lock, preventing split-brain corruption unless `--force` is explicitly passed.
+
+8. **P0 Durability Emergency Journal**:
+   - Out-of-band disk journaling (`database/sqlite/repositories/history/p0Journal.js`) spools P0 critical telemetry to `data/p0-emergency.journal` on disk whenever SQLite is temporarily locked, busy, or experiencing storage backpressure, guaranteeing zero data loss. The journal drains into SQLite automatically on recovery.
+
+9. **Multi-Volume Mount Evaluation & Auto-Detection**:
+   - `storageCheck.js` independently probes disk free space for Database, Backup, and Asset Cache directories if mounted across separate volumes.
+   - Physical `/persistent` volume mounts in containerized environments are auto-detected, certifying persistence without mandatory manual environment variables.
+
+10. **Telemetry Sanitization & Depth Bounding**:
+    - All incoming command and session telemetry is recursively sanitized before SQLite persistence: credentials/tokens are redacted, and nested structures with `depth >= 5` are clamped to `"[REDACTED_NESTED]"` to prevent memory and storage abuse.
+
 ---
 
 ## 3. Compliance with Binding Owner Intent
