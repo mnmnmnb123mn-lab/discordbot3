@@ -2,6 +2,7 @@
 
 const { EventEmitter } = require('node:events');
 const crypto = require('node:crypto');
+const { safeError, sanitizeLogText } = require('./safeLogger');
 
 /**
  * TokenCoordinator (Universal Token Hub & Master Controller)
@@ -372,18 +373,54 @@ class TokenCoordinator extends EventEmitter {
      * Apply backoff to a token (e.g. from HTTP 429 Retry-After)
      * @param {string} token
      * @param {number} durationMs
+     * @param {object|string} [options]
      */
-    applyTokenBackoff(token, durationMs) {
+    applyTokenBackoff(token, durationMs, options = {}) {
         const hash = this.hashToken(token);
         if (!hash) return;
+        const subsystem = typeof options === 'string' ? options : (options?.subsystem || null);
+        const reason = (typeof options === 'object' && options?.reason) || '429_backoff';
+        const source = (typeof options === 'object' && options?.source) || 'rest_api';
         const state = this._getOrCreateState(hash);
         const until = Date.now() + Math.max(300, Number(durationMs) || 2000);
         state.backoffUntil = Math.max(state.backoffUntil || 0, until);
+        const waitMs = Math.max(0, state.backoffUntil - Date.now());
+        const backoffSeconds = Math.ceil(waitMs / 1000);
         this.emit('token:rate_limited', {
             tokenHash: hash,
+            subsystem,
             backoffUntil: state.backoffUntil,
-            waitMs: state.backoffUntil - Date.now()
+            waitMs,
+            backoffSeconds,
+            reason,
+            source
         });
+
+        if (backoffSeconds >= 15) {
+            try {
+                const { sendWebhookEvent } = require('./webhooks');
+                if (typeof sendWebhookEvent === 'function') {
+                    sendWebhookEvent({
+                        target: 'ALERT',
+                        severity: 'WARNING',
+                        category: 'TOKEN',
+                        code: 'token.rate_limit_backoff',
+                        state: 'OPEN',
+                        title: 'RATE LIMITED (429)',
+                        description: `ตรวจพบการติด Rate Limit (429) ระบบทำการถอยรอชั่วคราว ${backoffSeconds} วินาที`,
+                        fields: [
+                            { name: 'สถานะ', value: 'OPEN' },
+                            { name: 'ผลกระทบ', value: `กิจกรรมของโทเคนนี้จะหยุดพักชั่วคราว ${backoffSeconds} วินาที` },
+                            { name: 'สิ่งที่ควรทำ', value: 'ระบบจะจัดการหน่วงเวลาและทำงานต่อให้อัตโนมัติ' },
+                            { name: 'Token Hash', value: `\`${hash.slice(0, 16)}...\`` },
+                            { name: 'Subsystem', value: String(subsystem || 'general') }
+                        ],
+                        dedupeKey: `token-429:${hash}`,
+                        dedupeMs: 60 * 1000
+                    }).catch(() => {});
+                }
+            } catch {}
+        }
     }
 
     /**
@@ -510,7 +547,7 @@ class TokenCoordinator extends EventEmitter {
                         waitSec = typeof err.retry_after === 'number' ? (err.retry_after > 100 ? err.retry_after / 1000 : err.retry_after) : 2.5;
                     }
                     const waitMs = Math.ceil(waitSec * 1000) + 100;
-                    this.applyTokenBackoff(hash, waitMs);
+                    this.applyTokenBackoff(hash, waitMs, { subsystem, reason: '429_rate_limit', source: 'rest_api' });
 
                     if (attempt < maxAttempts) {
                         // Smooth pause and retry without dropping task
@@ -561,22 +598,29 @@ class TokenCoordinator extends EventEmitter {
         }
 
         let timeoutTimer;
+        let timedOut = false;
         try {
             const taskPromise = this.executeWithToken(token, subsystem, taskFn, options);
             if (timeoutMs > 0) {
                 const timeoutPromise = new Promise((_, reject) => {
                     timeoutTimer = setTimeout(() => {
+                        timedOut = true;
                         const err = new Error(`TASK_TIMEOUT: Subsystem ${subsystem} timed out after ${timeoutMs}ms`);
                         err.code = 'TASK_TIMEOUT';
                         reject(err);
                     }, timeoutMs);
+                });
+                taskPromise.catch(() => {}).finally(() => {
+                    if (timedOut && hash) {
+                        this.releaseActivity(token, subsystem);
+                    }
                 });
                 return await Promise.race([taskPromise, timeoutPromise]);
             }
             return await taskPromise;
         } finally {
             if (timeoutTimer) clearTimeout(timeoutTimer);
-            if (hash) {
+            if (!timedOut && hash) {
                 this.releaseActivity(token, subsystem);
             }
         }
@@ -592,11 +636,12 @@ class TokenCoordinator extends EventEmitter {
         const hash = this.hashToken(token);
         if (!hash) return false;
 
+        const safeReason = sanitizeLogText(String(reason || 'Token Invalid or Revoked'));
         const state = this._getOrCreateState(hash);
         const now = Date.now();
         state.quarantine = {
             quarantinedAt: now,
-            reason: String(reason)
+            reason: safeReason
         };
         state.lastActivity = now;
 
@@ -604,13 +649,13 @@ class TokenCoordinator extends EventEmitter {
         this.profileCache.delete(hash);
 
         // Emit high-speed In-Memory event to all listeners
-        this.emit('token:quarantined', { tokenHash: hash, reason, state });
+        this.emit('token:quarantined', { tokenHash: hash, reason: safeReason, state });
 
         // Notify registered subsystems to gracefully clean up
         for (const [subName, sub] of this.subsystems.entries()) {
             if (typeof sub?.onTokenQuarantined === 'function') {
                 try {
-                    sub.onTokenQuarantined(hash, reason, state);
+                    sub.onTokenQuarantined(hash, safeReason, state);
                 } catch {
                     // Safe swallow to avoid cascade
                 }
@@ -624,13 +669,25 @@ class TokenCoordinator extends EventEmitter {
         if (shouldSendAlert) {
             this.alertHistory.set(hash, now);
             try {
-                const { sendAlertWebhook, WEBHOOK_SEVERITIES } = require('./webhooks');
-                if (typeof sendAlertWebhook === 'function') {
-                    sendAlertWebhook({
-                        title: '🚨 Token Quarantined (โทเคนถูกกักกัน)',
-                        description: `ตรวจพบโทเคนหมดอายุหรือไม่ถูกต้อง ระบบได้ทำการกักกัน (Quarantine) และหยุดการทำงานของเซสชันที่เกี่ยวข้องอย่างปลอดภัย\n\n**Token Hash:** \`${hash.slice(0, 16)}...\`\n**เหตุผล:** ${reason}`,
-                        severity: WEBHOOK_SEVERITIES?.ERROR || 'ERROR',
-                        category: 'SECURITY'
+                const { sendWebhookEvent } = require('./webhooks');
+                if (typeof sendWebhookEvent === 'function') {
+                    sendWebhookEvent({
+                        target: 'ALERT',
+                        severity: 'ERROR',
+                        category: 'TOKEN',
+                        code: 'token.quarantined',
+                        state: 'OPEN',
+                        title: 'QUARANTINED',
+                        description: `ตรวจพบโทเคนหมดอายุหรือไม่ถูกต้อง ระบบได้กักกันและหยุดการทำงานที่เกี่ยวข้องอย่างปลอดภัย`,
+                        fields: [
+                            { name: 'สถานะ', value: 'OPEN' },
+                            { name: 'ผลกระทบ', value: 'เซสชันหรือกิจกรรมที่ใช้โทเคนนี้จะถูกระงับชั่วคราว' },
+                            { name: 'สิ่งที่ควรทำ', value: 'ตรวจสอบความถูกต้องของโทเคนหรือเปลี่ยนโทเคนใหม่ใน Dashboard' },
+                            { name: 'Token Hash', value: `\`${hash.slice(0, 16)}...\`` },
+                            { name: 'เหตุผล', value: safeReason }
+                        ],
+                        dedupeKey: `token-quarantine:${hash}`,
+                        dedupeMs: this.alertCooldownMs
                     }).catch(() => {});
                 }
             } catch {
@@ -656,6 +713,26 @@ class TokenCoordinator extends EventEmitter {
             state.lastActivity = Date.now();
             this.alertHistory.delete(hash);
             this.emit('token:released', { tokenHash: hash });
+
+            try {
+                const { sendWebhookEvent } = require('./webhooks');
+                if (typeof sendWebhookEvent === 'function') {
+                    sendWebhookEvent({
+                        target: 'LOG',
+                        severity: 'SUCCESS',
+                        category: 'TOKEN',
+                        code: 'token.quarantine_released',
+                        title: 'QUARANTINE RELEASED',
+                        description: `ปลดการกักกันโทเคนสำเร็จ โทเคนสามารถกลับมาใช้งานได้ตามปกติ`,
+                        fields: [
+                            { name: 'ผู้ดำเนินการ', value: 'Token Coordinator' },
+                            { name: 'เป้าหมาย', value: `\`${hash.slice(0, 16)}...\`` },
+                            { name: 'การกระทำ', value: 'release quarantine' },
+                            { name: 'ผลลัพธ์', value: 'ปลดกักกันสำเร็จ' }
+                        ]
+                    }).catch(() => {});
+                }
+            } catch {}
 
             if ((!state.activities || state.activities.size === 0) && !state.voice && !state.quest) {
                 this.tokenStates.delete(hash);
@@ -819,11 +896,87 @@ class TokenCoordinator extends EventEmitter {
         this.profileCache.clear();
         this.alertHistory.clear();
         this.removeAllListeners();
+        attachTelemetryListeners(this);
     }
+}
+
+function attachTelemetryListeners(coordinator) {
+    function getSessionEventRepo() {
+        try {
+            const db = require("../../database");
+            return db?.repositories?.sessionEvent || null;
+        } catch (_) {
+            return null;
+        }
+    }
+
+    coordinator.on("token:rate_limited", ({ tokenHash, subsystem, backoffSeconds, waitMs, reason, source }) => {
+        try {
+            const repo = getSessionEventRepo();
+            if (repo) {
+                const retryAfter = backoffSeconds || (waitMs ? Math.ceil(waitMs / 1000) : 0);
+                repo.record({
+                    sessionId: tokenHash ? tokenHash.slice(0, 16) : "global",
+                    eventType: "rate_limit_429",
+                    priority: "P1",
+                    metadata: {
+                        source: source || "rest_api",
+                        event: "rate_limit",
+                        retryAfter,
+                        subsystem: subsystem || "unknown",
+                        backoffSeconds: retryAfter,
+                        reason: sanitizeLogText(reason || "429_backoff")
+                    }
+                });
+            }
+        } catch (_) {}
+    });
+
+    coordinator.on("token:quarantined", ({ tokenHash, reason, state }) => {
+        try {
+            const repo = getSessionEventRepo();
+            if (repo) {
+                repo.record({
+                    sessionId: tokenHash ? tokenHash.slice(0, 16) : "global",
+                    eventType: "quarantined",
+                    priority: "P1",
+                    metadata: { reason: sanitizeLogText(reason || "quarantined"), state: state?.tokenType || "unknown" }
+                });
+            }
+        } catch (_) {}
+    });
+
+    coordinator.on("token:released", ({ tokenHash }) => {
+        try {
+            const repo = getSessionEventRepo();
+            if (repo) {
+                repo.record({
+                    sessionId: tokenHash ? tokenHash.slice(0, 16) : "global",
+                    eventType: "quarantine_cleared",
+                    metadata: {}
+                });
+            }
+        } catch (_) {}
+    });
+
+    coordinator.on("token:error", ({ tokenHash, subsystem, error }) => {
+        try {
+            const repo = getSessionEventRepo();
+            if (repo) {
+                repo.record({
+                    sessionId: tokenHash ? tokenHash.slice(0, 16) : "global",
+                    eventType: "token_error",
+                    metadata: { subsystem, error: safeError(error) }
+                });
+            }
+        } catch (_) {}
+    });
 }
 
 // Singleton instance across the unified runtime
 const tokenCoordinator = new TokenCoordinator();
+attachTelemetryListeners(tokenCoordinator);
 
 module.exports = tokenCoordinator;
 module.exports.TokenCoordinator = TokenCoordinator;
+module.exports.attachTelemetryListeners = attachTelemetryListeners;

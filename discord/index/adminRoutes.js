@@ -9,8 +9,7 @@ const {
     buildCommandAuditPayload
 } = require("./dashboardState");
 const { sendWebhookEvent, getDiscordGuildIconUrl } = require("../core/webhooks");
-const QuestLog = require("../quest/models/QuestLog");
-const ScheduledRunner = require("../quest/models/ScheduledRunner");
+const { getQuestLogRepository, getScheduledRunnerRepository } = require("../../database/repositories/quest");
 const { stopScheduledJob } = require("../quest");
 const tokenCoordinator = require("../core/tokenCoordinator");
 
@@ -314,12 +313,18 @@ function registerAdminRoutes({
     startRotateTimer,
     ROTATE_MESSAGES_MAX
 }) {
-    // ── Quest Logs & Scheduled Runners ──
     app.get("/api/quest-logs", auth.requirePin, async (req, res) => {
         try {
             const limit = Math.min(100, Math.max(1, Number(req.query.limit) || 50));
-            const logs = await QuestLog.find().sort({ createdAt: -1 }).limit(limit).lean();
-            res.json({ success: true, logs });
+            const logs = getQuestLogRepository().findRecent(limit);
+            const safeLogs = logs.map(l => {
+                const safeAccounts = (l.accounts || []).map(acc => {
+                    const { encryptedToken, ...safeAcc } = acc;
+                    return safeAcc;
+                });
+                return { ...l, accounts: safeAccounts };
+            });
+            res.json({ success: true, logs: safeLogs });
         } catch (e) {
             res.status(500).json({ success: false, error: e.message });
         }
@@ -327,8 +332,12 @@ function registerAdminRoutes({
 
     app.get("/api/quest-scheduled", auth.requirePin, async (req, res) => {
         try {
-            const list = await ScheduledRunner.find().sort({ createdAt: -1 }).lean();
-            res.json({ success: true, runners: list });
+            const list = getScheduledRunnerRepository().find();
+            const safeRunners = list.map(r => {
+                const { token_ciphertext, token_iv, token_tag, token_salt, ...safe } = r;
+                return safe;
+            });
+            res.json({ success: true, runners: safeRunners });
         } catch (e) {
             res.status(500).json({ success: false, error: e.message });
         }
@@ -337,12 +346,12 @@ function registerAdminRoutes({
     app.delete("/api/quest-scheduled/:id", auth.requirePin, async (req, res) => {
         try {
             const { id } = req.params;
-            if (!id || !/^[0-9a-fA-F]{24}$/.test(String(id).trim())) {
+            if (!id || (!/^[0-9a-fA-F]{24}$/.test(String(id).trim()) && !/^\d+$/.test(String(id).trim()))) {
                 return res.status(400).json({ success: false, error: "Invalid scheduled runner ID" });
             }
             const cleanId = String(id).trim();
-            const stopped = stopScheduledJob(null, cleanId);
-            const deleted = await ScheduledRunner.findByIdAndDelete(cleanId);
+            const stopped = stopScheduledJob(null, cleanId, { asAdmin: true });
+            const deleted = getScheduledRunnerRepository().deleteById(cleanId);
             res.json({ success: true, deleted: Boolean(deleted), stopped });
         } catch (e) {
             res.status(500).json({ success: false, error: e.message });

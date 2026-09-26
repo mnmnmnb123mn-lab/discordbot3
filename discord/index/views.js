@@ -11,6 +11,7 @@
 const auth = require("./auth");
 const { createViewHelpers } = require("./viewHelpers");
 const { buildJoinCampaignPage } = require("./joinCampaignPage");
+const { buildDatabaseCenterPage } = require("./databaseCenterPage");
 
 // ════════════════════════════════════════════════════════════════════════════
 //  🎨  SHARED CSS — ใช้ทุกหน้า
@@ -1905,6 +1906,10 @@ ${navBar("/approved")}
 
     app.get("/quests", auth.requirePin, (req, res) => {
         res.send(pageQuests());
+    });
+
+    app.get("/database", auth.requirePin, (req, res) => {
+        res.send(buildDatabaseCenterPage());
     });
 
     app.get("/session/:sessionId", auth.requirePin, (req, res) => {

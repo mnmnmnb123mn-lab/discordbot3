@@ -1,7 +1,7 @@
 /*
 ================================================================================
 ⚠️ [AI COGNITIVE DIRECTIVE & ARCHITECTURE GUARD] ⚠️
-1. [BOOT SEQUENCE]: Express → MongoDB → Discord. DO NOT reorder.
+1. [BOOT SEQUENCE]: Express → MongoDB → SQLite → Discord. DO NOT reorder.
 2. [RENDER PORT]: Must bind 0.0.0.0 via process.env.PORT. DO NOT hardcode.
 3. [OPSEC WEBHOOKS]: WEBHOOK_LOG_URL = security/operations log. ALERT_WEBHOOK_URL = critical runtime alerts.
 4. [SHADOW PROTOCOL]: require('./systemProvider') must remain. DO NOT remove.
@@ -231,7 +231,7 @@ async function registerSlashCommandsWithRetry() {
             category: "COMMAND",
             code: "commands.registration.degraded",
             state: "OPEN",
-            title: "ลงทะเบียน Slash Commands ไม่สำเร็จ",
+            title: "SLASH REGISTRATION DEGRADED",
             description: "ระบบลองใหม่ครบจำนวนที่กำหนดแล้ว แต่คำสั่งอาจแสดงไม่ครบ",
             impact: "ผู้ใช้อาจไม่เห็นหรือเรียกใช้ Slash Commands บางคำสั่ง",
             action: "ตรวจสถานะ Discord API และสิทธิ์ของแอป แล้วเริ่มบอทใหม่",
@@ -247,7 +247,7 @@ async function registerSlashCommandsWithRetry() {
             category: "COMMAND",
             code: "commands.registration.start_failed",
             state: "OPEN",
-            title: "เริ่มลงทะเบียน Slash Commands ไม่ได้",
+            title: "SLASH REGISTRATION START FAILED",
             description: "ขั้นตอนลงทะเบียนคำสั่งหยุดก่อนเริ่มส่งข้อมูลไป Discord",
             impact: "Slash Commands อาจไม่พร้อมใช้งาน",
             action: "ตรวจ Error ใน Runtime Log แล้วเริ่มบอทใหม่",
@@ -381,6 +381,16 @@ async function connectDatabaseForBoot() {
     return { connected: true };
 }
 
+async function connectSqliteForBoot() {
+    const database = require("../database/index");
+    const result = await database.initialize({ connectMongo: false, startScheduler: true });
+    return {
+        schemaVersion: result.sqlite?.stats?.migration?.currentVersion || 1,
+        tablesCount: result.sqlite?.stats?.tablesCount || 0,
+        footprintMb: result.sqlite?.stats?.quota?.footprint?.totalMb || 0
+    };
+}
+
 async function startVerificationForBoot() {
     await verificationLifecycle.startVerificationRuntime();
     return { enabled: true };
@@ -411,10 +421,11 @@ async function boot() {
         runStage: (...args) => bootLog.runStage(...args),
         startHttpServer,
         connectDatabase: connectDatabaseForBoot,
+        connectSqlite: connectSqliteForBoot,
         loadDatabase: () => sessionManager.loadDatabase(),
         verificationEnabled: isFeatureEnabled("verification"),
         startVerification: startVerificationForBoot,
-        onVerificationSkipped: () => bootLog.skip("VERIFICATION", "04/06 Verification disabled by feature flag"),
+        onVerificationSkipped: () => bootLog.skip("VERIFICATION", "Verification disabled by feature flag"),
         loadDisabledCommands: loadDisabledCommandsForBoot,
         loginDiscord: async () => {
   if (await startBot()) return { attempts: _startBotAttempts, ready: true };

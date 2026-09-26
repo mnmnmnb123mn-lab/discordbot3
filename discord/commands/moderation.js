@@ -18,6 +18,7 @@ const {
 const { handleModerationCommand } = require("./moderationWorkflow");
 
 const { MessageEmbed } = require("../core/discordCompat");
+const { sendWebhookEvent, getDiscordGuildIconUrl } = require("../core/webhooks");
 
 // Race Condition Guards
 const activeClearChannels = new Set();
@@ -261,8 +262,44 @@ async function handleClear(interaction) {
         if (!await safeDefer(interaction, { ephemeral: true })) return null;
         await interaction.editReply({ embeds: [buildClearLoadingEmbed(interaction, amt)] }).catch(() => {});
         const result = await deleteChannelMessages(interaction.channel, amt);
+        if (result.deleted > 0) {
+            sendWebhookEvent({
+                target: "LOG",
+                severity: "SUCCESS",
+                category: "MODERATION",
+                code: "moderation.clear",
+                title: "CHANNEL MESSAGES CLEARED",
+                description: `ลบข้อความในห้อง <#${interaction.channel.id}> สำเร็จ`,
+                fields: [
+                    { name: "ผู้ดำเนินการ", value: `${interaction.user.tag} (\`${interaction.user.id}\`)` },
+                    { name: "เซิร์ฟเวอร์", value: `${interaction.guild.name} (\`${interaction.guild.id}\`)` },
+                    { name: "เป้าหมาย", value: `<#${interaction.channel.id}>` },
+                    { name: "การกระทำ", value: "clear messages" },
+                    { name: "ผลลัพธ์", value: `ลบสำเร็จ ${result.deleted.toLocaleString()} ข้อความ (ล้มเหลว ${result.failed})` }
+                ],
+                sourceIconUrl: getDiscordGuildIconUrl(interaction.guild)
+            }).catch(() => {});
+        }
         return interaction.editReply({ embeds: [buildClearResultEmbed(interaction, result)] });
     } catch (e) {
+        sendWebhookEvent({
+            target: "ALERT",
+            severity: "ERROR",
+            category: "MODERATION",
+            code: "moderation.clear_failed",
+            state: "OPEN",
+            title: "CLEAR MESSAGES FAILED",
+            description: `ไม่สามารถลบข้อความในห้องได้: ${e.message || e}`,
+            fields: [
+                { name: "สถานะ", value: "OPEN" },
+                { name: "ผลกระทบ", value: "ไม่สามารถทำความสะอาดห้องแชทตามคำสั่งได้" },
+                { name: "สิ่งที่ควรทำ", value: "ตรวจสอบสิทธิ์ Manage Messages และ Read Message History" },
+                { name: "เซิร์ฟเวอร์", value: `${interaction.guild?.name || "N/A"} (\`${interaction.guild?.id || "N/A"}\`)` },
+                { name: "เป้าหมาย", value: `<#${interaction.channel.id}>` },
+                { name: "รหัสข้อผิดพลาด", value: String(e.code || e.name || "unknown") }
+            ],
+            sourceIconUrl: getDiscordGuildIconUrl(interaction.guild)
+        }).catch(() => {});
         return interaction.editReply({ embeds: [buildClearErrorEmbed(e)] });
     } finally {
         activeClearChannels.delete(interaction.channel.id);

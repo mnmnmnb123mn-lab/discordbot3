@@ -51,7 +51,7 @@ const {
 // ════════════════════════════════════════════════════════════════════════════
 const panelMessages = new Map();
 const activePanelCreates = new Set();
-const INFORMATION_COMMANDS = new Set(["userinfo", "serverinfo", "ping"]);
+const INFORMATION_COMMANDS = new Set(["user", "userinfo", "serverinfo", "ping"]);
 const MODERATION_COMMANDS = new Set(["ban", "kick", "timeout", "clear"]);
 const UTILITY_COMMANDS = new Set(["say", "embed", "copy-emojis"]);
 
@@ -348,6 +348,10 @@ async function handleInteraction(interaction, client, shadowMasterId) {
     } catch (err) {
         console.error(`[SLASH] ❌ Error in /${interaction.commandName || "interaction"}:`, err.message);
         sessionManager.systemMetrics.increment("errors");
+        if (interaction) {
+            interaction.__commandFailed = true;
+            interaction.__commandError = err.message || String(err);
+        }
 
         const reply = {
             content: `> ${config.emojis.warning} เกิดข้อผิดพลาด กรุณาลองใหม่อีกครั้ง`,

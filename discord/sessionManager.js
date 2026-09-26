@@ -3,7 +3,7 @@
 ================================================================================
 ⚠️ [AI COGNITIVE DIRECTIVE & ARCHITECTURE GUARD] ⚠️
 ATTENTION AI ASSISTANT: DO NOT MODIFY, REFACTOR, OR SIMPLIFY THIS FILE.
-1. [DATABASE]: MONGO_URI is the ONLY storage. Local JSON fallback is REMOVED.
+1. [DATABASE]: MONGO_URI is authoritative for sessions & identity; SQLite is local operational DB. Local JSON fallback is REMOVED.
 2. [ENCRYPTION]: AES-256-GCM with CBC fallback must remain intact.
 3. [POOL]: maxPoolSize: 20 MUST remain in mongoose.connect().
 4. [SCHEMAS]: Do NOT remove PanelStateModel or BotSettingsModel.
@@ -16,6 +16,7 @@ const crypto = require("node:crypto");
 const config = require("./config.json");
 const { sanitizeLogText } = require("./core/safeLogger");
 const { readFiniteInteger } = require("./core/numbers");
+const webhooks = require("./core/webhooks");
 
 // ════════════════════════════════════════════════════════════════════════════
 //  🗺️  REGION 1: IN-MEMORY STATE
@@ -308,6 +309,9 @@ const BotSettingsModel = mongoose.model("BotSettings", botSettingsSchema);
 //  🌐  REGION 5: DATABASE CONNECTION
 // ════════════════════════════════════════════════════════════════════════════
 let dbConnected = false;
+let hadPreviousConnectionLoss = false;
+let lastConnectionLostAlertAt = 0;
+const DB_DUAL_INCIDENT_WINDOW_MS = 15000;
 // Keep the lifecycle generation with a deferred delete. A session id can be
 // reused after a restart, so deleting by id alone could remove a newer session.
 const pendingSessionDeletes = new Map();
@@ -321,19 +325,70 @@ const MONGO_POOL_CONFIG = {
 mongoose.connection.on("connected", () => {
     console.log("[DATABASE] 🟢 MongoDB Connection Active.");
     dbConnected = true;
+    lastConnectionLostAlertAt = 0;
     flushPendingSessionDeletes().catch((err) => {
         console.error(`[DATABASE] ❌ Pending session delete flush failed: ${sanitizeLifecycleError(err.message)}`);
     });
+    if (hadPreviousConnectionLoss) {
+        hadPreviousConnectionLoss = false;
+        webhooks.sendWebhookEvent({
+            target: "ALERT",
+            severity: "SUCCESS",
+            category: "DATABASE",
+            code: "database.connection_restored",
+            state: "RESOLVED",
+            title: "CONNECTION RESTORED",
+            description: "การเชื่อมต่อกับ MongoDB กลับมาใช้งานได้ตามปกติแล้ว",
+            impact: "ระบบกลับมาทำงานและบันทึกข้อมูลได้ตามปกติ",
+            action: "ไม่ต้องดำเนินการใดๆ ระบบจัดการต่อเนื่องอัตโนมัติ"
+        }).catch(() => {});
+    }
 });
 
 mongoose.connection.on("disconnected", () => {
     console.error("[DATABASE] 🔴 MongoDB Connection Lost.");
     dbConnected = false;
+    hadPreviousConnectionLoss = true;
+    lastConnectionLostAlertAt = Date.now();
+    webhooks.sendWebhookEvent({
+        target: "ALERT",
+        severity: "CRITICAL",
+        category: "DATABASE",
+        code: "database.connection_lost",
+        state: "OPEN",
+        title: "CONNECTION LOST",
+        description: "การเชื่อมต่อกับ MongoDB ขาดหาย ระบบไม่สามารถบันทึกหรืออ่านข้อมูลได้ชั่วคราว",
+        impact: "Session, Verification, ModCase และ Token state อาจไม่ถูกบันทึก",
+        action: "ตรวจสอบสถานะ MongoDB Server หรือ URL การเชื่อมต่อ",
+        dedupeKey: "database-connection-lost",
+        dedupeMs: 5 * 60 * 1000
+    }).catch(() => {});
 });
 
 mongoose.connection.on("error", (err) => {
     console.error(`[DATABASE] ❌ MongoDB Error: ${err.message}`);
     dbConnected = false;
+    hadPreviousConnectionLoss = true;
+    // Dual-incident guard: suppress secondary error alert if connection_lost CRITICAL alert was just dispatched
+    if (Date.now() - lastConnectionLostAlertAt < DB_DUAL_INCIDENT_WINDOW_MS) {
+        return;
+    }
+    webhooks.sendWebhookEvent({
+        target: "ALERT",
+        severity: "ERROR",
+        category: "DATABASE",
+        code: "database.error",
+        state: "OPEN",
+        title: "CONNECTION ERROR",
+        description: `เกิดข้อผิดพลาดในการเชื่อมต่อ MongoDB: ${err?.message || "unknown"}`,
+        impact: "คำสั่งที่ต้องใช้ฐานข้อมูลอาจทำงานล้มเหลว",
+        action: "ตรวจสอบสถานะและการเชื่อมต่อของ MongoDB",
+        context: {
+            "รหัสข้อผิดพลาด": String(err?.code || err?.name || "database_error")
+        },
+        dedupeKey: "database-error",
+        dedupeMs: 5 * 60 * 1000
+    }).catch(() => {});
 });
 
 async function connectDB() {
@@ -354,18 +409,25 @@ async function connectDB() {
 }
 
 async function disconnectDB() {
+    try {
+        if (mongoose.connection.readyState !== 0) {
+            await flushPendingSessionDeletes();
+        }
+    } catch (_) {}
+
+    try {
+        const db = require("../database");
+        await db.shutdown();
+    } catch (_) {}
+
     if (mongoose.connection.readyState === 0) {
         dbConnected = false;
         return;
     }
     try {
-        await flushPendingSessionDeletes();
+        await mongoose.disconnect();
     } finally {
-        try {
-            await mongoose.disconnect();
-        } finally {
-            dbConnected = false;
-        }
+        dbConnected = false;
     }
 }
 
@@ -610,6 +672,26 @@ async function loadDatabase() {
 
         const deleted = cleanup?.deletedCount ? `, cleaned=${cleanup.deletedCount}` : "";
         console.log(`[DATABASE] 📂 Loaded ${sessions.size} active/recoverable sessions from MongoDB${deleted}.`);
+
+        // Startup reconciliation: purge orphan SQLite voice runtimes that have no active MongoDB counterpart
+        try {
+            const voiceRepo = getVoiceRuntimeRepository();
+            if (voiceRepo && typeof voiceRepo.listActiveSessionRuntimes === "function") {
+                const activeRuntimes = voiceRepo.listActiveSessionRuntimes() || [];
+                let orphanPurged = 0;
+                for (const rt of activeRuntimes) {
+                    if (rt && rt.session_id && !sessions.has(rt.session_id)) {
+                        voiceRepo.deleteSessionRuntime(rt.session_id);
+                        orphanPurged++;
+                    }
+                }
+                if (orphanPurged > 0) {
+                    console.log(`[SESSION] 🧹 Reconciled SQLite voice runtimes: purged ${orphanPurged} orphan record(s).`);
+                }
+            }
+        } catch (reconcileErr) {
+            console.warn(`[SESSION] ⚠️ SQLite voice runtime reconciliation warning: ${reconcileErr.message}`);
+        }
     } catch (err) {
         console.error(`[DATABASE] ❌ Failed to load sessions: ${err.message}`);
         throw err;
@@ -696,6 +778,22 @@ async function saveDatabase(deps = {}) {
         }
     } catch (err) {
         console.error(`[DATABASE] ❌ MongoDB save failed: ${err.message}`);
+        webhooks.sendWebhookEvent({
+            target: "ALERT",
+            severity: "ERROR",
+            category: "DATABASE",
+            code: "session.persistence_failed",
+            state: "OPEN",
+            title: "SESSION PERSISTENCE FAILED",
+            description: `ไม่สามารถบันทึกสถานะเซสชันเสียงลง MongoDB ได้: ${err?.message || "unknown"}`,
+            impact: "สถานะ Voice Session ล่าสุดอาจไม่ถูกบันทึกหากบอทรีสตาร์ทกะทันหัน",
+            action: "ตรวจสอบการเชื่อมต่อ MongoDB และพื้นที่จัดเก็บ",
+            context: {
+                "รหัสข้อผิดพลาด": String(err?.code || err?.name || "save_failed")
+            },
+            dedupeKey: "session-persistence-failed",
+            dedupeMs: 10 * 60 * 1000
+        }).catch(() => {});
     }
 }
 // ════════════════════════════════════════════════════════════════════════════
@@ -818,7 +916,42 @@ async function createSession(token, serverId, voiceId, serverName, ownerId, owne
         throw new Error("SESSION_PERSIST_FAILED");
     }
 
+    try {
+        const repo = getVoiceRuntimeRepository();
+        if (repo) {
+            repo.upsertSessionRuntime({
+                sessionId,
+                serverId,
+                ownerId,
+                state: "active",
+                lastHeartbeat: Date.now(),
+                lastActivity: Date.now(),
+                reconnectCount: 0,
+                statusLabel: "active"
+            });
+        }
+    } catch (_) {}
+
+    try {
+        const db = require("../database");
+        db?.repositories?.sessionEvent?.record({
+            sessionId,
+            accountId: ownerId,
+            eventType: "voice_session_created",
+            metadata: { serverId, state: "active" }
+        });
+    } catch (_) {}
+
     return sessionId;
+}
+
+function getVoiceRuntimeRepository() {
+    try {
+        const db = require("../database");
+        return db?.repositories?.voiceSessionRuntime || null;
+    } catch (_) {
+        return null;
+    }
 }
 
 function getSession(sessionId) {
@@ -827,7 +960,13 @@ function getSession(sessionId) {
 
 function touchSession(sessionId) {
     const session = sessions.get(sessionId);
-    if (session) session.lastActivity = Date.now();
+    if (session) {
+        session.lastActivity = Date.now();
+        try {
+            const repo = getVoiceRuntimeRepository();
+            if (repo) repo.recordHeartbeat(sessionId, session.lastActivity);
+        } catch (_) {}
+    }
     return session;
 }
 
@@ -882,6 +1021,23 @@ async function updateSessionMetadata(sessionId, metadata = {}) {
 async function saveVoiceRuntimeState(sessionId) {
     const session = sessions.get(sessionId);
     if (!session) return false;
+
+    try {
+        const repo = getVoiceRuntimeRepository();
+        if (repo) {
+            repo.upsertSessionRuntime({
+                sessionId,
+                serverId: session.serverId,
+                ownerId: session.ownerId,
+                state: session.state || "active",
+                lastHeartbeat: Date.now(),
+                lastActivity: session.lastActivity || Date.now(),
+                reconnectCount: Number(session.reconnectCount || 0),
+                statusLabel: session.recoveryState?.phase || session.statusLabel || "active"
+            });
+        }
+    } catch (_) {}
+
     if (!dbConnected) return false;
 
     try {
@@ -950,7 +1106,13 @@ async function flushPendingSessionDeletes(deps = {}) {
     const entries = [...pendingDeletes];
     try {
         await sessionModel.deleteMany(buildPendingSessionDeleteFilter(entries));
-        for (const [sessionId] of entries) pendingDeletes.delete(sessionId);
+        const voiceRepo = deps.voiceRuntimeRepo || getVoiceRuntimeRepository();
+        for (const [sessionId] of entries) {
+            pendingDeletes.delete(sessionId);
+            if (voiceRepo && typeof voiceRepo.deleteSessionRuntime === "function") {
+                try { voiceRepo.deleteSessionRuntime(sessionId); } catch (_) {}
+            }
+        }
         console.log(`[DATABASE] 🧹 Flushed ${entries.length} pending session delete(s).`);
     } catch (err) {
         console.error(`[DATABASE] ❌ Failed to flush pending session deletes: ${sanitizeLifecycleError(err.message)}`);
@@ -1050,6 +1212,10 @@ async function deleteSession(sessionId, options = {}) {
     if (!dbConnected) {
         console.warn(`[DATABASE] ⚠️ Queued session ${sessionId} delete until database reconnects`);
         queuePendingSessionDelete(sessionId, session.lifecycleGeneration);
+        try {
+            const repo = getVoiceRuntimeRepository();
+            if (repo) repo.deleteSessionRuntime(sessionId);
+        } catch (_) {}
         cleanupSessionMemory(sessionId, session);
         systemMetrics.increment("errors");
         console.log(`[SESSION] 🗑️ Session removed from memory: ${sessionId}`);
@@ -1069,6 +1235,10 @@ async function deleteSession(sessionId, options = {}) {
     } catch (err) {
         console.error(`[DATABASE] ❌ Failed to delete session ${sessionId}; queued retry: ${sanitizeLifecycleError(err.message)}`);
         queuePendingSessionDelete(sessionId, session.lifecycleGeneration);
+        try {
+            const repo = getVoiceRuntimeRepository();
+            if (repo) repo.deleteSessionRuntime(sessionId);
+        } catch (_) {}
         cleanupSessionMemory(sessionId, session);
         systemMetrics.increment("errors");
         console.log(`[SESSION] 🗑️ Session removed from memory: ${sessionId}`);
@@ -1077,6 +1247,20 @@ async function deleteSession(sessionId, options = {}) {
 
     pendingSessionDeletes.delete(sessionId);
     cleanupSessionMemory(sessionId, session);
+
+    try {
+        const repo = getVoiceRuntimeRepository();
+        if (repo) repo.deleteSessionRuntime(sessionId);
+    } catch (_) {}
+
+    try {
+        const db = require("../database");
+        db?.repositories?.sessionEvent?.record({
+            sessionId,
+            eventType: "voice_session_deleted",
+            metadata: { stoppedReason: session?.stoppedReason || "manual_or_error" }
+        });
+    } catch (_) {}
 
     console.log(`[SESSION] 🗑️ Session removed: ${sessionId}`);
 
@@ -1776,6 +1960,7 @@ module.exports = {
         saveDatabase,
         queuePendingSessionDelete,
         buildPendingSessionDeleteFilter,
-        flushPendingSessionDeletes
+        flushPendingSessionDeletes,
+        resetDbAlertState: () => { lastConnectionLostAlertAt = 0; }
     }
 };

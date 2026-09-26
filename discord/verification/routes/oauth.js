@@ -2159,12 +2159,8 @@ async function validateCallbackStateNonce(body, res, requestId) {
     }
 
     if (stateObj?.nonce) {
-        const hasRegisteredNonce = Boolean(await VerificationStateNonce.exists({
-            nonceHash: nonceHash(stateObj.nonce),
-            guildId: stateObj.guildId,
-            roleId: stateObj.roleId
-        }));
-        if (hasRegisteredNonce && !await consumeVerificationState(stateObj)) {
+        const consumed = await consumeVerificationState(stateObj);
+        if (!consumed) {
             return {
                 ok: false,
                 response: jsonFail(

@@ -61,6 +61,8 @@ pnpm-debug.log*
 # -------------------------
 tmp/
 temp/
+!database/sqlite/repositories/temp/
+!database/sqlite/repositories/temp/**
 .tmp/
 .temp/
 .cache/
@@ -91,8 +93,15 @@ discord/*.db
 *.backup
 *.sqlite
 *.sqlite3
+*.sqlite-wal
+*.sqlite-shm
+*.sqlite-journal
 *.db
 *.dump
+backups/
+cache-assets/
+data/*
+!data/.gitkeep
 
 # -------------------------
 # OS files

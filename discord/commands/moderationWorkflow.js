@@ -130,10 +130,10 @@ async function performModeration(interaction, input, deps = {}) {
         if (!failedCase) {
             sendWebhookEvent({
                 severity: "ERROR",
-                category: "DATA",
+                category: "DATABASE",
                 code: "moderation.case.failure_state_missing",
                 state: "OPEN",
-                title: "บันทึกสถานะ ModCase ที่ไม่สำเร็จไม่ได้",
+                title: "MODCASE FAILURE STATE MISSING",
                 description: "การลงโทษไม่สำเร็จ และระบบไม่สามารถเปลี่ยน ModCase เป็นสถานะไม่สำเร็จได้",
                 impact: "สถานะในฐานข้อมูลอาจยังแสดงว่ารอดำเนินการ",
                 action: "ตรวจ ModCase และแก้สถานะให้ตรงกับผลจาก Discord",
@@ -160,10 +160,10 @@ async function performModeration(interaction, input, deps = {}) {
     if (!completedCase) {
         sendWebhookEvent({
             severity: "ERROR",
-            category: "DATA",
+            category: "DATABASE",
             code: "moderation.case.completion_state_missing",
             state: "OPEN",
-            title: "ดำเนินการลงโทษแล้ว แต่ ModCase ยังไม่ปิด",
+            title: "MODCASE COMPLETION STATE MISSING",
             description: "Discord ดำเนินการสำเร็จ แต่ระบบไม่สามารถเปลี่ยน ModCase เป็นสถานะเสร็จสิ้นได้",
             impact: "ประวัติ Moderation แสดงสถานะไม่ตรงกับการดำเนินการจริง",
             action: "ตรวจ ModCase และเปลี่ยนสถานะเป็นเสร็จสิ้น",
@@ -203,6 +203,23 @@ function successReply(interaction, input, result) {
 
 function failureReply(interaction, err) {
     sessionManager.systemMetrics.increment("errors");
+    sendWebhookEvent({
+        target: "ALERT",
+        severity: "ERROR",
+        category: "MODERATION",
+        code: "moderation.execution_failed",
+        state: "OPEN",
+        title: "ACTION FAILED",
+        description: `เกิดข้อผิดพลาดขณะดำเนินการ moderation: ${err.message || err}`,
+        fields: [
+            { name: "สถานะ", value: "OPEN" },
+            { name: "ผลกระทบ", value: "ไม่สามารถลงโทษสมาชิกเป้าหมายได้ตามที่ผู้ใช้ร้องขอ" },
+            { name: "สิ่งที่ควรทำ", value: "ตรวจสอบสิทธิ์ของบอทและตำแหน่ง Role ของบอท" },
+            { name: "เซิร์ฟเวอร์", value: `${interaction.guild?.name || "N/A"} (\`${interaction.guild?.id || "N/A"}\`)` },
+            { name: "รหัสข้อผิดพลาด", value: String(err.code || err.name || "unknown") }
+        ],
+        sourceIconUrl: getDiscordGuildIconUrl(interaction.guild)
+    }).catch(() => {});
     return interaction.editReply({ content: moderationErrorReply(err) });
 }
 
@@ -220,7 +237,26 @@ async function handleModerationCommand(interaction, client) {
     markCommandAccepted(interaction);
     if (!await safeDefer(interaction)) return null;
     try {
-        return successReply(interaction, input, await performModeration(interaction, input));
+        const result = await performModeration(interaction, input);
+        sendWebhookEvent({
+            target: "LOG",
+            severity: "SUCCESS",
+            category: "MODERATION",
+            code: `moderation.${input.action}`,
+            title: `MEMBER ${input.action.toUpperCase()}`,
+            description: `ดำเนินการคำสั่ง ${input.action} สำเร็จ`,
+            fields: [
+                { name: "ผู้ดำเนินการ", value: `${interaction.user.tag} (\`${interaction.user.id}\`)` },
+                { name: "เซิร์ฟเวอร์", value: `${interaction.guild.name} (\`${interaction.guild.id}\`)` },
+                { name: "เป้าหมาย", value: `${input.target?.user?.tag || input.target?.id || "N/A"} (\`${input.target?.id || "N/A"}\`)` },
+                { name: "การกระทำ", value: input.action },
+                { name: "ผลลัพธ์", value: `สำเร็จ (Case #${result.caseDoc?.caseNumber || "N/A"})` },
+                input.reason ? { name: "รายละเอียด", value: input.reason } : null
+            ].filter(Boolean),
+            sourceIconUrl: getDiscordGuildIconUrl(interaction.guild),
+            thumbnailUrl: getDiscordAvatarUrl(input.target?.user)
+        }).catch(() => {});
+        return successReply(interaction, input, result);
     } catch (err) {
         return failureReply(interaction, err);
     }

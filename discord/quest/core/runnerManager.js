@@ -70,7 +70,7 @@ const {
     sendQuestSummaryDM,
     sendQuestAuthFailureDM
 } = require('./questDm');
-const QuestLog = require('../models/QuestLog');
+const { getQuestLogRepository } = require('../../../database/repositories/quest');
 const { sendWebhookEvent } = require('../../core/webhooks');
 
 const jobs = new Map(); // key: jobKey -> jobRecord
@@ -143,24 +143,31 @@ function findAnyJobByAccount(accountId) {
     return null;
 }
 
-function stopJob(ownerId, key, { removeSchedule = true } = {}) {
+function stopJob(ownerId, key, { removeSchedule = true, asAdmin = false } = {}) {
     const job = jobs.get(key);
-    if (!job || job.ownerId !== ownerId) return false;
+    if (!job) return false;
+    if (!asAdmin && job.ownerId !== ownerId) return false;
     if (job.lifecycle !== 'stopping') {
         job.lifecycle = 'stopping';
         job.controller.abort();
     }
     if (removeSchedule && job.scheduleId != null) {
-        deleteScheduledRunner(job.scheduleId, ownerId).catch(() => {});
+        deleteScheduledRunner(job.scheduleId, asAdmin ? job.ownerId : ownerId).catch(() => {});
     }
     return true;
 }
 
-function stopScheduledJob(ownerId, scheduleId) {
+function stopScheduledJob(ownerId, scheduleId, { asAdmin = false } = {}) {
     const key = `scheduled:${scheduleId}`;
-    const stopped = stopJob(ownerId, key);
-    deleteScheduledRunner(scheduleId, ownerId).catch(() => {});
+    const stopped = stopJob(ownerId, key, { asAdmin });
+    if (!stopped) {
+        deleteScheduledRunner(scheduleId, asAdmin ? null : ownerId).catch(() => {});
+    }
     return stopped;
+}
+
+function stopScheduledJobAsAdmin(scheduleId) {
+    return stopScheduledJob(null, scheduleId, { asAdmin: true });
 }
 
 function stopAllForUser(ownerId, { mode = null } = {}) {
@@ -926,8 +933,9 @@ async function startRunner({
                 return;
             }
         } else if (isFatalAuthError(err)) {
-            addLog(`🔒 ${username}: AUTH FAILED (Token invalid)`);
-            persistSchedule({ lastError: 'Fatal auth failure (token invalid)' });
+            const authReason = err?.code === 'TOKEN_QUARANTINED' ? 'Token quarantined' : 'Token invalid';
+            addLog(`🔒 ${username}: AUTH FAILED (${authReason})`);
+            persistSchedule({ lastError: `Fatal auth failure (${authReason.toLowerCase()})` });
             if (liveMsg) {
                 const authFailEmbed = buildQuestAuthFailureEmbed({
                     username,
@@ -1046,24 +1054,26 @@ async function startUserQuestSession({
         const results = [];
         let startIndex = Date.now();
 
-        // Create QuestLog document in MongoDB
-        const questLog = new QuestLog({
-            invokerId,
-            invokerTag,
-            guildId,
-            channelId,
-            totalTokens: tokens.length,
-            overallStatus: 'in_progress',
-            accounts: tokens.map((t) => {
-                const encrypted = encryptToken(t, invokerId);
-                return {
-                    maskedToken: maskToken(t),
-                    encryptedToken: encrypted.packed,
-                    status: 'pending'
-                };
-            })
-        });
-        await questLog.save().catch(() => {});
+        // Create QuestLog in SQLite
+        let questLog = null;
+        try {
+            questLog = getQuestLogRepository().create({
+                invokerId,
+                invokerTag,
+                guildId,
+                channelId,
+                totalTokens: tokens.length,
+                overallStatus: 'in_progress',
+                accounts: tokens.map((t) => {
+                    const encrypted = encryptToken(t, invokerId);
+                    return {
+                        maskedToken: maskToken(t),
+                        encryptedToken: encrypted.packed,
+                        status: 'pending'
+                    };
+                })
+            });
+        } catch (_) {}
 
         // Emit startup webhook event
         sendWebhookEvent({
@@ -1156,6 +1166,7 @@ module.exports = {
     findAnyJobByAccount,
     stopJob,
     stopScheduledJob,
+    stopScheduledJobAsAdmin,
     stopAllForUser,
     stopRunner,
     shutdownRunners,

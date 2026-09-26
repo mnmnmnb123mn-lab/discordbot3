@@ -245,11 +245,11 @@ function initCrashShield(config) {
             await criticalAlerts.dispatch("transientGatewayError", err, buildWebhookEventPayload({
                 target: "ALERT",
                 severity: "WARNING",
-                category: "SYSTEM",
+                category: "GATEWAY",
                 code: "gateway.transient_error",
                 state: "UPDATE",
-                title: "Discord Gateway ขัดข้องชั่วคราว (ระบบรันต่อเนื่อง)",
-                description: `${safeError(err)}\n\nระบบตรวจพบความขัดข้องระหว่างเครือข่าย Cloudflare/Discord ระบบยังคงทำงานต่อเนื่องและจะเชื่อมต่อใหม่อัตโนมัติ`,
+                title: "TRANSIENT ERROR",
+                description: `${safeError(err)}\n\nระบบตรวจพบความขัดข้องชั่วคราวระหว่างเครือข่าย Cloudflare/Discord ระบบยังคงทำงานต่อเนื่องและจะเชื่อมต่อใหม่อัตโนมัติ`,
                 impact: "การเชื่อมต่อ Gateway หรือห้องเสียงอาจสะดุดชั่วขณะ ระบบกำลังเชื่อมต่อใหม่",
                 action: "ไม่ต้องดำเนินการใดๆ ระบบจะทำการ Reconnect เอง"
             })).catch(() => {});
@@ -260,10 +260,10 @@ function initCrashShield(config) {
         await criticalAlerts.dispatch("uncaughtException", err, buildWebhookEventPayload({
             target: "ALERT",
             severity: "CRITICAL",
-            category: "SYSTEM",
+            category: "RUNTIME",
             code: "runtime.uncaught_exception",
             state: "OPEN",
-            title: "Runtime เกิด Uncaught Exception",
+            title: "UNCAUGHT EXCEPTION",
             description: `${safeError(err)}\n\n${sanitizeLogText(err.stack || "").substring(0, 800)}`,
             impact: "Process อาจอยู่ในสถานะไม่สมบูรณ์หรือหยุดทำงานระหว่างเริ่มระบบ",
             action: "ตรวจ Stack Trace และ Runtime Log ทันที"
@@ -284,11 +284,11 @@ function initCrashShield(config) {
             await criticalAlerts.dispatch("transientGatewayError", error, buildWebhookEventPayload({
                 target: "ALERT",
                 severity: "WARNING",
-                category: "SYSTEM",
+                category: "GATEWAY",
                 code: "gateway.transient_error",
                 state: "UPDATE",
-                title: "Discord Gateway ขัดข้องชั่วคราว (ระบบรันต่อเนื่อง)",
-                description: sanitizeLogText(msg).substring(0, 900),
+                title: "TRANSIENT ERROR",
+                description: `${sanitizeLogText(msg).substring(0, 900)}\n\nระบบตรวจพบความขัดข้องชั่วคราวระหว่างเครือข่าย Cloudflare/Discord ระบบจะพยายามเชื่อมต่อใหม่อัตโนมัติ`,
                 impact: "การเชื่อมต่อ Gateway หรือห้องเสียงอาจสะดุดชั่วขณะ ระบบกำลังเชื่อมต่อใหม่",
                 action: "ไม่ต้องดำเนินการใดๆ ระบบจะทำการ Reconnect เอง"
             })).catch(() => {});
@@ -299,10 +299,10 @@ function initCrashShield(config) {
         await criticalAlerts.dispatch("unhandledRejection", error, buildWebhookEventPayload({
             target: "ALERT",
             severity: "CRITICAL",
-            category: "SYSTEM",
+            category: "RUNTIME",
             code: "runtime.unhandled_rejection",
             state: "OPEN",
-            title: "Runtime พบ Promise ที่ไม่มีตัวจัดการข้อผิดพลาด",
+            title: "UNHANDLED REJECTION",
             description: sanitizeLogText(msg).substring(0, 900),
             impact: "งานเบื้องหลังบางส่วนอาจหยุดหรือทิ้งสถานะไม่สมบูรณ์",
             action: "ตรวจ Runtime Log เพื่อหาต้นทางของ Promise"

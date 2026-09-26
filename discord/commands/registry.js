@@ -79,6 +79,27 @@ const slashCommandsData = [
     },
 
     {
+        name: "user",
+        description: "ดูรูปโปรไฟล์ของสมาชิก",
+        options: [
+            {
+                type: 1,
+                name: "avatar",
+                description: "แสดงรูปโปรไฟล์ของสมาชิก",
+                required: false,
+                options: [
+                    {
+                        type: 6,
+                        name: "member",
+                        description: "สมาชิกที่ต้องการดูรูปโปรไฟล์",
+                        required: false
+                    }
+                ]
+            }
+        ]
+    },
+
+    {
         name: "clear",
         description: "ลบข้อความในช่องปัจจุบัน รวมข้อความเกิน 14 วัน (สูงสุด 1,000)",
         options: [
