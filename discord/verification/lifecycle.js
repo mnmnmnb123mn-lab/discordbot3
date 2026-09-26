@@ -340,7 +340,7 @@ async function startVerificationRuntime(options = {}) {
                     category: "VERIFICATION",
                     code: "verification.maintenance_failed",
                     state: "OPEN",
-                    title: "VERIFICATION MAINTENANCE FAILED",
+                    title: "MAINTENANCE FAILED",
                     description: `การบำรุงรักษาระบบยืนยันตัวตนรอบปกติล้มเหลว: ${lastError}`,
                     fields: [
                         { name: "สถานะ", value: "OPEN" },

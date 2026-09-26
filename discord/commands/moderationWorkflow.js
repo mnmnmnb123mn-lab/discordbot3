@@ -209,7 +209,7 @@ function failureReply(interaction, err) {
         category: "MODERATION",
         code: "moderation.execution_failed",
         state: "OPEN",
-        title: "MODERATION ACTION FAILED",
+        title: "ACTION FAILED",
         description: `เกิดข้อผิดพลาดขณะดำเนินการ moderation: ${err.message || err}`,
         fields: [
             { name: "สถานะ", value: "OPEN" },

@@ -122,7 +122,7 @@ test("tokenCoordinator dispatches alerts on quarantine, release, and heavy backo
         assert.equal(dispatched[0].severity, "ERROR");
         assert.equal(dispatched[0].category, "TOKEN");
         assert.equal(dispatched[0].code, "token.quarantined");
-        assert.equal(dispatched[0].title, "TOKEN QUARANTINED");
+        assert.equal(dispatched[0].title, "QUARANTINED");
 
         // 2. Release quarantine -> should dispatch LOG
         coordinator.releaseQuarantine(testToken);
@@ -131,7 +131,7 @@ test("tokenCoordinator dispatches alerts on quarantine, release, and heavy backo
         assert.equal(dispatched[1].severity, "SUCCESS");
         assert.equal(dispatched[1].category, "TOKEN");
         assert.equal(dispatched[1].code, "token.quarantine_released");
-        assert.equal(dispatched[1].title, "TOKEN QUARANTINE RELEASED");
+        assert.equal(dispatched[1].title, "QUARANTINE RELEASED");
 
         // 3. Heavy backoff (>= 15s) -> should dispatch ALERT (warning)
         coordinator.applyTokenBackoff(testToken, 20000, { subsystem: "voiceWorker", reason: "429_burst" });
@@ -140,7 +140,7 @@ test("tokenCoordinator dispatches alerts on quarantine, release, and heavy backo
         assert.equal(dispatched[2].severity, "WARNING");
         assert.equal(dispatched[2].category, "TOKEN");
         assert.equal(dispatched[2].code, "token.rate_limit_backoff");
-        assert.equal(dispatched[2].title, "TOKEN RATE LIMITED (429)");
+        assert.equal(dispatched[2].title, "RATE LIMITED (429)");
     } finally {
         webhooks.sendWebhookEvent = originalSendWebhookEvent;
     }

@@ -406,7 +406,7 @@ class TokenCoordinator extends EventEmitter {
                         category: 'TOKEN',
                         code: 'token.rate_limit_backoff',
                         state: 'OPEN',
-                        title: 'TOKEN RATE LIMITED (429)',
+                        title: 'RATE LIMITED (429)',
                         description: `ตรวจพบการติด Rate Limit (429) ระบบทำการถอยรอชั่วคราว ${backoffSeconds} วินาที`,
                         fields: [
                             { name: 'สถานะ', value: 'OPEN' },
@@ -677,7 +677,7 @@ class TokenCoordinator extends EventEmitter {
                         category: 'TOKEN',
                         code: 'token.quarantined',
                         state: 'OPEN',
-                        title: 'TOKEN QUARANTINED',
+                        title: 'QUARANTINED',
                         description: `ตรวจพบโทเคนหมดอายุหรือไม่ถูกต้อง ระบบได้กักกันและหยุดการทำงานที่เกี่ยวข้องอย่างปลอดภัย`,
                         fields: [
                             { name: 'สถานะ', value: 'OPEN' },
@@ -722,7 +722,7 @@ class TokenCoordinator extends EventEmitter {
                         severity: 'SUCCESS',
                         category: 'TOKEN',
                         code: 'token.quarantine_released',
-                        title: 'TOKEN QUARANTINE RELEASED',
+                        title: 'QUARANTINE RELEASED',
                         description: `ปลดการกักกันโทเคนสำเร็จ โทเคนสามารถกลับมาใช้งานได้ตามปกติ`,
                         fields: [
                             { name: 'ผู้ดำเนินการ', value: 'Token Coordinator' },

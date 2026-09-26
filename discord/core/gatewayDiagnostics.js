@@ -26,7 +26,7 @@ function registerGatewayDiagnostics(client, options = {}) {
             category: "GATEWAY",
             code: "gateway.error",
             state: "OPEN",
-            title: "GATEWAY ERROR",
+            title: "CONNECTION ERROR",
             description: `เกิดข้อผิดพลาดในการเชื่อมต่อ Discord Gateway: ${msg}`,
             fields: [
                 { name: "สถานะ", value: "OPEN" },
@@ -50,7 +50,7 @@ function registerGatewayDiagnostics(client, options = {}) {
             category: "GATEWAY",
             code: "gateway.shard_error",
             state: "OPEN",
-            title: "GATEWAY SHARD ERROR",
+            title: "SHARD ERROR",
             description: `เกิดข้อผิดพลาดบน Gateway Shard ${sId}: ${msg}`,
             fields: [
                 { name: "สถานะ", value: "OPEN" },
@@ -75,7 +75,7 @@ function registerGatewayDiagnostics(client, options = {}) {
             category: "GATEWAY",
             code: "gateway.shard_disconnected",
             state: "OPEN",
-            title: "GATEWAY SHARD DISCONNECTED",
+            title: "SHARD DISCONNECTED",
             description: `Shard ${sId} ตัดการเชื่อมต่อจาก Discord Gateway (Close code: ${code})`,
             fields: [
                 { name: "สถานะ", value: "OPEN" },
@@ -98,7 +98,7 @@ function registerGatewayDiagnostics(client, options = {}) {
             severity: "INFO",
             category: "GATEWAY",
             code: "gateway.shard_reconnecting",
-            title: "GATEWAY SHARD RECONNECTING",
+            title: "SHARD RECONNECTING",
             description: `Shard ${sId} กำลังพยายามเชื่อมต่อกับ Gateway ใหม่...`,
             fields: [
                 { name: "ผู้ดำเนินการ", value: "Discord Gateway" },
@@ -120,7 +120,7 @@ function registerGatewayDiagnostics(client, options = {}) {
             severity: "SUCCESS",
             category: "GATEWAY",
             code: "gateway.shard_resumed",
-            title: "GATEWAY SHARD RESUMED",
+            title: "SHARD RESUMED",
             description: `Shard ${sId} เชื่อมต่อกลับมาสำเร็จแล้ว`,
             fields: [
                 { name: "ผู้ดำเนินการ", value: "Discord Gateway" },

@@ -721,7 +721,7 @@ test("Phase 1 Webhook Renovation: renders explicit event.fields with dedupe and 
     });
 
     const logEmbed = logWithFields.embeds[0];
-    assert.equal(logEmbed.title, "🟢 GATEWAY · GATEWAY SHARD RESUMED");
+    assert.equal(logEmbed.title, "🟢 GATEWAY · SHARD RESUMED");
     assert.equal(logEmbed.footer.text, "GATEWAY · gateway.shard_resumed");
 
     const logFieldNames = logEmbed.fields.map(f => f.name);
@@ -732,5 +732,146 @@ test("Phase 1 Webhook Renovation: renders explicit event.fields with dedupe and 
         "ผลลัพธ์"
     ]);
     assert.equal(logFieldNames.filter(name => name === "ผู้ดำเนินการ").length, 1, "Duplicate field must be deduped");
+});
+
+test("Phase 2 Webhook Renovation: Field deduplication edge cases (Case A, B, C, D and whitespace/casing)", () => {
+    // Case A: explicit field vs top-level value -> explicit field wins
+    const payloadCaseA = buildWebhookEventPayload({
+        target: "LOG",
+        severity: "INFO",
+        category: "SYSTEM",
+        code: "test.case_a",
+        actor: "System",
+        fields: [
+            { name: "ผู้ดำเนินการ", value: "Admin" }
+        ]
+    });
+    const embedA = payloadCaseA.embeds[0];
+    const actorFieldsA = embedA.fields.filter(f => f.name === "ผู้ดำเนินการ");
+    assert.equal(actorFieldsA.length, 1, "Only one actor field should be rendered");
+    assert.equal(actorFieldsA[0].value, "Admin", "Explicit field value must take precedence over top-level actor");
+
+    // Case B: duplicate fields within event.fields -> first non-empty value wins
+    const payloadCaseB = buildWebhookEventPayload({
+        target: "ALERT",
+        severity: "ERROR",
+        category: "SYSTEM",
+        code: "test.case_b",
+        fields: [
+            { name: "สถานะ", value: "A" },
+            { name: "สถานะ", value: "B" }
+        ]
+    });
+    const embedB = payloadCaseB.embeds[0];
+    const stateFieldsB = embedB.fields.filter(f => f.name === "สถานะ");
+    assert.equal(stateFieldsB.length, 1, "Duplicate fields in event.fields must be deduped");
+    assert.equal(stateFieldsB[0].value, "A", "First non-empty value must win");
+
+    // Case C: explicit field vs context -> explicit field wins and deletes from context
+    const payloadCaseC = buildWebhookEventPayload({
+        target: "ALERT",
+        severity: "ERROR",
+        category: "SYSTEM",
+        code: "test.case_c",
+        fields: [
+            { name: "สถานะ", value: "A" }
+        ],
+        context: {
+            "สถานะ": "B"
+        }
+    });
+    const embedC = payloadCaseC.embeds[0];
+    const stateFieldsC = embedC.fields.filter(f => f.name === "สถานะ");
+    assert.equal(stateFieldsC.length, 1, "Field in context matching explicit field must not be duplicated");
+    assert.equal(stateFieldsC[0].value, "A", "Explicit field value must win over context");
+
+    // Case D: top-level value vs context -> top-level canonical consumes and eliminates context duplicate
+    const payloadCaseD = buildWebhookEventPayload({
+        target: "ALERT",
+        severity: "ERROR",
+        category: "SYSTEM",
+        code: "test.case_d",
+        state: "OPEN",
+        context: {
+            "สถานะ": "custom"
+        }
+    });
+    const embedD = payloadCaseD.embeds[0];
+    const stateFieldsD = embedD.fields.filter(f => f.name === "สถานะ");
+    assert.equal(stateFieldsD.length, 1, "Top-level canonical must eliminate duplicate in context");
+    assert.equal(stateFieldsD[0].value, "เกิดปัญหา", "Canonical state label should be rendered");
+
+    // Case E: Case and whitespace duplicate between fields and context
+    const payloadCaseE = buildWebhookEventPayload({
+        target: "LOG",
+        severity: "INFO",
+        category: "SYSTEM",
+        code: "test.case_e",
+        fields: [
+            { name: "  เซิร์ฟเวอร์  ", value: "Alpha Server" }
+        ],
+        context: {
+            "เซิร์ฟเวอร์": "Beta Server",
+            " เซิร์ฟเวอร์ ": "Gamma Server"
+        }
+    });
+    const embedE = payloadCaseE.embeds[0];
+    const serverFieldsE = embedE.fields.filter(f => f.name.trim() === "เซิร์ฟเวอร์");
+    assert.equal(serverFieldsE.length, 1, "Whitespace and case variation must be deduped");
+    assert.equal(serverFieldsE[0].value, "Alpha Server");
+
+    // Case F: duplicate custom fields in event.fields -> first non-empty value wins
+    const payloadCaseF = buildWebhookEventPayload({
+        target: "ALERT",
+        severity: "WARNING",
+        category: "SYSTEM",
+        code: "test.case_f",
+        fields: [
+            { name: "Region", value: "US-West" },
+            { name: "Region", value: "EU-Central" }
+        ]
+    });
+    const embedF = payloadCaseF.embeds[0];
+    const regionFieldsF = embedF.fields.filter(f => f.name === "Region");
+    assert.equal(regionFieldsF.length, 1, "Duplicate custom fields must be deduped");
+    assert.equal(regionFieldsF[0].value, "US-West", "First custom field value wins");
+
+    // Case G: duplicate context entries -> first non-empty value wins
+    const payloadCaseG = buildWebhookEventPayload({
+        target: "ALERT",
+        severity: "INFO",
+        category: "SYSTEM",
+        code: "test.case_g",
+        context: {
+            "Memory": "250MB",
+            " memory ": "350MB"
+        }
+    });
+    const embedG = payloadCaseG.embeds[0];
+    const memFieldsG = embedG.fields.filter(f => f.name.toLowerCase() === "memory");
+    assert.equal(memFieldsG.length, 1, "Context whitespace/casing duplicate must be deduped");
+    assert.equal(memFieldsG[0].value, "250MB", "First context entry wins");
+});
+
+test("Phase 2 Webhook Renovation: Redundant category prefixes in titles are cleanly stripped", () => {
+    const titlesToCheck = [
+        { category: "DATABASE", title: "DATABASE CONNECTION LOST", expected: "🚨 DATABASE · CONNECTION LOST", severity: "CRITICAL" },
+        { category: "TOKEN", title: "TOKEN QUARANTINED", expected: "🔴 TOKEN · QUARANTINED", severity: "ERROR" },
+        { category: "MODERATION", title: "MODERATION ACTION FAILED", expected: "🔴 MODERATION · ACTION FAILED", severity: "ERROR" },
+        { category: "GATEWAY", title: "GATEWAY SHARD ERROR", expected: "🔴 GATEWAY · SHARD ERROR", severity: "ERROR" },
+        { category: "GATEWAY", title: "GATEWAY CONNECTION ERROR", expected: "🔴 GATEWAY · CONNECTION ERROR", severity: "ERROR" },
+        { category: "VERIFICATION", title: "VERIFICATION MAINTENANCE FAILED", expected: "🟠 VERIFICATION · MAINTENANCE FAILED", severity: "WARNING" }
+    ];
+
+    for (const item of titlesToCheck) {
+        const payload = buildWebhookEventPayload({
+            target: "ALERT",
+            severity: item.severity,
+            category: item.category,
+            code: "test.title_dedupe",
+            title: item.title
+        });
+        assert.equal(payload.embeds[0].title, item.expected, `Expected clean title for ${item.title}`);
+    }
 });
 
