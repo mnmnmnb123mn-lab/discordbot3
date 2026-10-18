@@ -50,6 +50,37 @@ describe("Verification Orchestrator Pure Units & Edge Cases", () => { // NOSONAR
                 latest: 1
             });
         });
+
+        test("returns ok: true when string panelRevision matches", () => {
+            const revision = "panel_m2k3j9_a1b2c3d4e5f60718";
+            const guildConfig = { verification: { panelRevision: revision } };
+            const stateObj = { panelRevision: revision };
+            expect(orchestrator.isPanelRevisionValid(guildConfig, stateObj)).toEqual({
+                ok: true,
+                stateRev: revision,
+                latest: revision
+            });
+        });
+
+        test("returns ok: false when string panelRevision does not match", () => {
+            const guildConfig = { verification: { panelRevision: "panel_latest_123" } };
+            const stateObj = { panelRevision: "panel_old_456" };
+            expect(orchestrator.isPanelRevisionValid(guildConfig, stateObj)).toEqual({
+                ok: false,
+                stateRev: "panel_old_456",
+                latest: "panel_latest_123"
+            });
+        });
+
+        test("handles numeric strings matching numbers", () => {
+            const guildConfig = { verification: { panelRevision: 2 } };
+            const stateObj = { panelRevision: "2" };
+            expect(orchestrator.isPanelRevisionValid(guildConfig, stateObj)).toEqual({
+                ok: true,
+                stateRev: 2,
+                latest: 2
+            });
+        });
     });
 
     describe("fitVerifyLogBudget", () => {

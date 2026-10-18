@@ -541,6 +541,13 @@ function mergeVerificationConfig(existing = {}, incoming = {}) {
     if (clean.securityRules && Object.hasOwn(clean.securityRules, "hosting")) {
       merged.blockHosting = merged.securityRules?.hosting?.enabled === true;
     }
+  } else {
+    if (Object.hasOwn(clean, "blockVPN") && merged.securityRules?.vpnProxyTor) {
+      merged.securityRules.vpnProxyTor.enabled = clean.blockVPN === true;
+    }
+    if (Object.hasOwn(clean, "blockHosting") && merged.securityRules?.hosting) {
+      merged.securityRules.hosting.enabled = clean.blockHosting === true;
+    }
   }
   return normalizeVerificationConfig(merged);
 }
@@ -548,6 +555,12 @@ function mergeVerificationConfig(existing = {}, incoming = {}) {
 function serializeConfig(doc) {
   const raw = doc?.toObject ? doc.toObject() : doc || {};
   const verification = normalizeVerificationConfig(raw.verification || {});
+  if (verification.securityRules?.vpnProxyTor) {
+    verification.blockVPN = verification.securityRules.vpnProxyTor.enabled === true;
+  }
+  if (verification.securityRules?.hosting) {
+    verification.blockHosting = verification.securityRules.hosting.enabled === true;
+  }
   const security = {
     ...raw.security,
     storeOAuthTokens: true,

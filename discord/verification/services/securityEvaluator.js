@@ -62,14 +62,25 @@ function evaluateProfilePolicy({ profile, policySnapshot, connections, findings,
         });
     }
 
-    if (policySnapshot.requireConnections && !connections?.length) {
-        findings.push("no_connections");
-        violations.push({
-            key: "requireConnections",
-            action: "deny_role",
-            reason: "no_connections",
-            userError: "เซิร์ฟเวอร์นี้ต้องการให้บัญชี Discord ของคุณเชื่อมต่อกับบริการภายนอก (เช่น Steam, YouTube, GitHub) ก่อนยืนยันตัวตน"
-        });
+    if (policySnapshot.requireConnections) {
+        const connCount = Array.isArray(connections) ? connections.length : 0;
+        const parsedMin = Number(policySnapshot.minConnections);
+        const minRequired = Number.isFinite(parsedMin) && parsedMin > 0
+            ? Math.floor(parsedMin)
+            : 1;
+
+        if (connCount < minRequired) {
+            const reason = connCount === 0 ? "no_connections" : `insufficient_connections:${connCount}/${minRequired}`;
+            findings.push(connCount === 0 ? "no_connections" : "insufficient_connections");
+            violations.push({
+                key: "requireConnections",
+                action: "deny_role",
+                reason,
+                userError: minRequired > 1
+                    ? `เซิร์ฟเวอร์นี้ต้องการให้บัญชี Discord ของคุณเชื่อมต่อกับบริการภายนอกอย่างน้อย ${minRequired} บัญชีก่อนยืนยันตัวตน (ปัจจุบันเชื่อมต่อแล้ว ${connCount} บัญชี)`
+                    : "เซิร์ฟเวอร์นี้ต้องการให้บัญชี Discord ของคุณเชื่อมต่อกับบริการภายนอก (เช่น Steam, YouTube, GitHub) ก่อนยืนยันตัวตน"
+            });
+        }
     }
 }
 

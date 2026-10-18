@@ -219,5 +219,19 @@ describe('Discord API memory guards', () => {
         expect(discordAPI.toBigIntPermission(undefined)).toBe(0n);
         expect(discordAPI.toBigIntPermission('invalid')).toBe(0n);
     });
+
+    test('addMemberToGuild handles options as object with roles or direct array', async () => {
+        const resMissing = await discordAPI.addMemberToGuild(null, null, null);
+        expect(resMissing.ok).toBe(false);
+        expect(resMissing.status).toBe(400);
+
+        const resNoToken = await discordAPI.addMemberToGuild('123', '456', 'tok', ['role1']);
+        expect(resNoToken.ok).toBe(false);
+        expect(resNoToken.status).toBe(500);
+
+        const resNoTokenObj = await discordAPI.addMemberToGuild('123', '456', 'tok', { roles: ['role1'] });
+        expect(resNoTokenObj.ok).toBe(false);
+        expect(resNoTokenObj.status).toBe(500);
+    });
 });
 

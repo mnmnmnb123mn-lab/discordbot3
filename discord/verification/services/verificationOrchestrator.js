@@ -95,19 +95,27 @@ function getConfiguredRoleName(guildConfig, fallback = "Member") {
     return guildConfig?.verification?.roleName || fallback;
 }
 
+function normalizePanelRevision(raw) {
+    if (raw === null || raw === undefined || raw === "") return 1;
+    if (typeof raw === "number" && Number.isFinite(raw)) return raw;
+    const str = String(raw).trim();
+    if (/^\d+$/.test(str)) return Number(str);
+    return str;
+}
+
 function getLatestPanelRevision(guildConfig) {
-    return Number(guildConfig?.verification?.panelRevision || 1);
+    return normalizePanelRevision(guildConfig?.verification?.panelRevision);
 }
 
 function getStatePanelRevision(stateObj = {}) {
-    return Number(stateObj?.panelRevision || 1);
+    return normalizePanelRevision(stateObj?.panelRevision);
 }
 
 function isPanelRevisionValid(guildConfig, stateObj = {}) {
     if (!guildConfig?.verification) return { ok: true };
     const latest = getLatestPanelRevision(guildConfig);
     const stateRev = getStatePanelRevision(stateObj);
-    if (stateRev !== latest) {
+    if (String(stateRev) !== String(latest)) {
         return { ok: false, stateRev, latest };
     }
     return { ok: true, stateRev, latest };
@@ -687,7 +695,8 @@ async function _evaluateVerificationSecurity({
         isVPN: false,
         isProxy: false,
         isTOR: false,
-        hosting: false
+        hosting: false,
+        lookupStatus: "lookup_failed"
     });
 
     const device = await safeSideEffect("extractDevice", () => extractDevice(req), {
@@ -708,14 +717,22 @@ async function _evaluateVerificationSecurity({
         requireEmail: Boolean(verificationConfig.requireEmail),
         requireEmailVerified: Boolean(verificationConfig.requireEmailVerified),
         requireConnections: Boolean(verificationConfig.requireConnections),
+        minConnections: Number.isFinite(Number(verificationConfig.minConnections))
+            ? Number(verificationConfig.minConnections)
+            : (verificationConfig.requireConnections ? 1 : 0),
         securityRules
     };
+
+    // Stale fallback connections cannot satisfy live requireConnections policy
+    const liveConnections = fetchMetadata?.isConnectionsFallback
+        ? []
+        : (discordData?.connections || []);
 
     const securityEval = evaluateSecurity({
         profile,
         ipInfo,
         device,
-        connections: discordData?.connections || [],
+        connections: liveConnections,
         existingIpLink: ipLinkContext.existingIpLink,
         securityRules,
         policySnapshot,
@@ -789,13 +806,24 @@ async function _resolveMemberRoleAssignment({ guildId, profileId, accessToken, c
             roleAssignResult = { ok: true, alreadyHadRole: true };
         } else if (!memberInfo) {
             joinResult = await safeSideEffect("addMemberToGuild", () =>
-                discord.addMemberToGuild(guildId, profileId, accessToken, [configuredRoleId]),
+                discord.addMemberToGuild(guildId, profileId, accessToken, {
+                    roles: [configuredRoleId]
+                }),
                 { ok: false, error: "join_failed" }
             );
 
             if (!joinResult?.ok) {
                 finalReason = "guild_join_failed";
                 roleAssignResult = { ok: false, error: "join_failed" };
+            } else if (joinResult.status === 204) {
+                // Member was already in guild; Discord 204 does not update roles, assign explicitly
+                roleAssignResult = await safeSideEffect("addRoleToMember", () =>
+                    discord.addRoleToMember(guildId, profileId, configuredRoleId),
+                    { ok: false, error: "role_assign_failed" }
+                );
+                if (!roleAssignResult?.ok) {
+                    finalReason = "role_assign_failed";
+                }
             } else {
                 roleAssignResult = { ok: true, joinedWithRole: true };
             }
