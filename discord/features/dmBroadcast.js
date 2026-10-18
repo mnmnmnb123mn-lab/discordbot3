@@ -9,7 +9,7 @@ const {
 const { MessageEmbed } = require('../core/discordCompat');
 const { delay, withTimeoutReject } = require('../core/timers');
 const { isDiscordSnowflake } = require('../core/snowflakes');
-const tokenCoordinator = require('../core/tokenCoordinator');
+const tokenCoordinator = require('../tokens/tokenCoordinator');
 const config = require('../config.json');
 
 const DISCORD_WEBHOOK_PATTERN = /^https:\/\/(?:(?:ptb|canary)\.)?discord(?:app)?\.com\/api\/webhooks\/\d{17,22}\/[a-z0-9_-]+$/i;
@@ -102,13 +102,17 @@ function buildMemberLogEmbed({
     success,
     errorReason = null
 }) {
+    const successEmoji = config.emojis?.check_alt || config.emojis?.success || '✅';
+    const errorEmoji = config.emojis?.red_card || config.emojis?.error || '❌';
+    const userEmoji = config.emojis?.user || '👤';
+
     const color = success
         ? (config.system?.themeColors?.success || '#57F287')
         : (config.system?.themeColors?.error || '#ED4245');
 
     const statusText = success
-        ? '✅ **ส่งสำเร็จ (Delivered)**'
-        : `❌ **ล้มเหลว** (${errorReason || 'ผู้ใช้ปิด DM หรือบล็อกบอท'})`;
+        ? `${successEmoji} **ส่งสำเร็จ**`
+        : `${errorEmoji} **ล้มเหลว** (${errorReason || 'ผู้ใช้ปิด DM หรือบล็อกบอท'})`;
 
     const userTag = member.user?.tag || member.user?.username || member.id;
     const avatarUrl = typeof member.user?.displayAvatarURL === 'function'
@@ -119,14 +123,11 @@ function buildMemberLogEmbed({
         .setColor(color)
         .setTitle(`[${index}/${total}] แจ้งเตือนการส่ง DM`)
         .addFields(
-            { name: '👤 ผู้รับ', value: `<@${member.id}> (\`${userTag}\`)`, inline: true },
+            { name: `${userEmoji} ผู้รับ`, value: `<@${member.id}> (\`${userTag}\`)`, inline: true },
             { name: '🆔 User ID', value: `\`${member.id}\``, inline: true },
             { name: '📊 สถานะ', value: statusText, inline: false },
             { name: '⏰ เวลาที่ส่ง', value: `<t:${Math.floor(Date.now() / 1000)}:T> (<t:${Math.floor(Date.now() / 1000)}:R>)`, inline: false }
         )
-        .setFooter({
-            text: `บอทตัวรอง: ${botUser?.tag || 'Helper Bot'} • Phomueangtai DM System`
-        })
         .setTimestamp();
 
     if (avatarUrl) {
@@ -146,22 +147,23 @@ function buildFinalSummaryEmbed({
 }) {
     const color = config.system?.themeColors?.info || '#5865F2';
     const universeEmoji = config.emojis?.universe || '✨';
-    const successEmoji = config.emojis?.success || '✅';
-    const errorEmoji = config.emojis?.error || '❌';
+    const successEmoji = config.emojis?.check_alt || config.emojis?.success || '✅';
+    const errorEmoji = config.emojis?.red_card || config.emojis?.error || '❌';
+    const membersEmoji = config.emojis?.members || '👥';
+    const serverEmoji = config.emojis?.server_icon || '🌐';
 
     const embed = new MessageEmbed()
         .setColor(color)
         .setTitle(`${universeEmoji} : รายงานสรุปการกระจายข้อความ DM`)
         .setDescription(`ภารกิจส่งข้อความไปยังสมาชิกในเซิร์ฟเวอร์ **${guild?.name || 'Unknown Guild'}** ดำเนินการเสร็จสิ้นสมบูรณ์`)
         .addFields(
-            { name: '👥 สมาชิกเป้าหมายทั้งหมด', value: `**${total}** คน (ไม่รวมบอท)`, inline: true },
+            { name: `${membersEmoji} สมาชิกเป้าหมายทั้งหมด`, value: `**${total}** คน (ไม่รวมบอท)`, inline: true },
             { name: `${successEmoji} ส่งสำเร็จ`, value: `**${sent}** คน`, inline: true },
             { name: `${errorEmoji} ล้มเหลว (ปิด DM)`, value: `**${failed}** คน`, inline: true },
             { name: '⏱️ เวลาที่ใช้ทั้งหมด', value: `\`${formatDuration(durationMs)}\``, inline: true },
             { name: '🤖 บอทผู้ส่ง (ตัวรอง)', value: `\`${botUser?.tag || botUser?.id || 'Unknown'}\``, inline: true },
-            { name: '🌐 เซิร์ฟเวอร์', value: `\`${guild?.name}\` (\`${guild?.id}\`)`, inline: true }
+            { name: `${serverEmoji} เซิร์ฟเวอร์`, value: `\`${guild?.name}\` (\`${guild?.id}\`)`, inline: true }
         )
-        .setFooter({ text: 'Phomueangtai Personal Multi-Tool • One-shot Session Ended' })
         .setTimestamp();
 
     if (guild?.iconUrl) {
@@ -191,7 +193,7 @@ function mapSecondaryBotLoginError(err) {
     if (msg.includes('401') || msg.includes('TOKEN_INVALID') || msg.includes('An invalid token')) {
         return 'Bot Token ไม่ถูกต้อง (Invalid Discord Token) กรุณาตรวจสอบ Token อีกครั้ง';
     }
-    return `เกิดข้อผิดพลาดในการตรวจสอบบอทตัวรอง: ${err.message}`;
+    return 'เกิดข้อผิดพลาดในการตรวจสอบบอทตัวรอง กรุณาตรวจสอบความถูกต้องของ Bot Token';
 }
 
 function mapMemberFetchError(fetchErr) {
@@ -199,7 +201,7 @@ function mapMemberFetchError(fetchErr) {
     if (errMsg.includes('Disallowed') || errMsg.includes('intent') || fetchErr?.code === 4014) {
         return "บอทตัวรองไม่ได้เปิดใช้งาน **'Server Members Intent'** ใน Discord Developer Portal (หมวด Bot -> Privileged Gateway Intents)";
     }
-    return `ไม่สามารถดึงรายชื่อสมาชิกในเซิร์ฟเวอร์ได้: ${fetchErr.message}`;
+    return 'ไม่สามารถดึงรายชื่อสมาชิกในเซิร์ฟเวอร์ได้ กรุณาตรวจสอบสิทธิ์ของบอทตัวรองในเซิร์ฟเวอร์เป้าหมาย';
 }
 
 function calculateAdaptiveThrottleMs(isClosedDm = false) {
@@ -225,31 +227,28 @@ function parseDmError(err) {
     return err?.message || 'ไม่สามารถส่งข้อความได้';
 }
 
-async function sendDmWithRetry(member, dmPayload, maxRetries = 5) {
-    let attempt = 0;
-    while (attempt <= maxRetries) {
-        try {
-            await member.send(dmPayload);
-            return { success: true, errorReason: null, isClosedDm: false };
-        } catch (dmErr) {
-            const isRateLimit = dmErr?.status === 429 || dmErr?.code === 429;
-            if (!isRateLimit) {
-                const isClosed = dmErr?.code === 50007;
-                return { success: false, errorReason: parseDmError(dmErr), isClosedDm: isClosed };
-            }
-
-            attempt++;
-            if (attempt > maxRetries) {
-                return {
-                    success: false,
-                    errorReason: `Rate limit retry failed after ${maxRetries} attempts: ${dmErr.message}`,
-                    isClosedDm: false
-                };
-            }
-
-            const retryAfterMs = getRetryAfterMs(dmErr);
-            await delay(retryAfterMs);
+async function sendDmWithRetry(member, dmPayload, maxRetries = 5, attempt = 0) {
+    try {
+        await member.send(dmPayload);
+        return { success: true, errorReason: null, isClosedDm: false };
+    } catch (dmErr) {
+        const isRateLimit = dmErr?.status === 429 || dmErr?.code === 429;
+        if (!isRateLimit) {
+            const isClosed = dmErr?.code === 50007;
+            return { success: false, errorReason: parseDmError(dmErr), isClosedDm: isClosed };
         }
+
+        if (attempt >= maxRetries) {
+            return {
+                success: false,
+                errorReason: `ส่งข้อความไม่สำเร็จหลังลองใหม่ครบ ${maxRetries} ครั้ง (ติด Rate Limit)`,
+                isClosedDm: false
+            };
+        }
+
+        const retryAfterMs = getRetryAfterMs(dmErr);
+        await delay(retryAfterMs);
+        return sendDmWithRetry(member, dmPayload, maxRetries, attempt + 1);
     }
 }
 
@@ -290,8 +289,8 @@ async function notifyFatalError(webhookClient, { jobErr, activeJob }) {
     try {
         const errorEmbed = new MessageEmbed()
             .setColor(config.system?.themeColors?.error || '#ED4245')
-            .setTitle('❌ การกระจายข้อความ DM หยุดชะงัก')
-            .setDescription(`เกิดข้อผิดพลาดร้ายแรงระหว่างการทำงาน: \`${jobErr.message}\``)
+            .setTitle(`${config.emojis?.error || '❌'} การกระจายข้อความ DM หยุดชะงัก`)
+            .setDescription('เกิดข้อผิดพลาดขัดข้องระหว่างการทำงาน กรุณาตรวจสอบบันทึกระบบ')
             .addFields(
                 {
                     name: '📊 สถิติก่อนหยุดทำงาน',
@@ -460,6 +459,37 @@ async function validateSecondaryBot(token, guildId, options = {}) {
     }
 }
 
+async function executeBroadcastMemberList({ memberList, dmPayload, webhookClient, botUser, onProgress }) {
+    let index = 0;
+    for (const member of memberList) {
+        if (activeBroadcastJob?.aborted) {
+            console.warn(`[DM_BROADCAST] ⚠️ Broadcast job aborted: ${activeBroadcastJob.abortReason || 'Quarantined or cancelled'}`);
+            break;
+        }
+        index++;
+        await processMemberBroadcast({
+            member,
+            index,
+            total: memberList.length,
+            dmPayload,
+            webhookClient,
+            botUser,
+            activeJob: activeBroadcastJob,
+            onProgress
+        });
+    }
+}
+
+function safeInvokeOnComplete(onComplete, payload) {
+    if (typeof onComplete === 'function') {
+        try {
+            onComplete(payload);
+        } catch {
+            // Ignore callback exceptions
+        }
+    }
+}
+
 async function runBroadcastJobLoop({
     broadcastClient,
     webhookClient,
@@ -492,24 +522,7 @@ async function runBroadcastJobLoop({
 
         const dmPayload = buildDmPayload(cleanMessage, cleanImageUrl);
 
-        let index = 0;
-        for (const member of memberList) {
-            if (activeBroadcastJob?.aborted) {
-                console.warn(`[DM_BROADCAST] ⚠️ Broadcast job aborted: ${activeBroadcastJob.abortReason || 'Quarantined or cancelled'}`);
-                break;
-            }
-            index++;
-            await processMemberBroadcast({
-                member,
-                index,
-                total: memberList.length,
-                dmPayload,
-                webhookClient,
-                botUser,
-                activeJob: activeBroadcastJob,
-                onProgress
-            });
-        }
+        await executeBroadcastMemberList({ memberList, dmPayload, webhookClient, botUser, onProgress });
 
         const durationMs = Date.now() - startTime;
         await notifyFinalSummary(webhookClient, {
@@ -521,31 +534,23 @@ async function runBroadcastJobLoop({
             durationMs
         });
 
-        if (typeof onComplete === 'function') {
-            try {
-                onComplete({
-                    ok: true,
-                    total: memberList.length,
-                    sent: activeBroadcastJob.sent,
-                    failed: activeBroadcastJob.failed,
-                    durationMs
-                });
-            } catch {}
-        }
+        safeInvokeOnComplete(onComplete, {
+            ok: true,
+            total: memberList.length,
+            sent: activeBroadcastJob.sent,
+            failed: activeBroadcastJob.failed,
+            durationMs
+        });
     } catch (jobErr) {
         console.error('[DM_BROADCAST] ❌ Broadcast job fatal error:', jobErr.message);
         await notifyFatalError(webhookClient, { jobErr, activeJob: activeBroadcastJob });
 
-        if (typeof onComplete === 'function') {
-            try {
-                onComplete({
-                    ok: false,
-                    error: jobErr.message,
-                    sent: activeBroadcastJob?.sent || 0,
-                    failed: activeBroadcastJob?.failed || 0
-                });
-            } catch {}
-        }
+        safeInvokeOnComplete(onComplete, {
+            ok: false,
+            error: jobErr.message,
+            sent: activeBroadcastJob?.sent || 0,
+            failed: activeBroadcastJob?.failed || 0
+        });
     } finally {
         tokenCoordinator.releaseActivity(trimmedToken, 'dmBroadcast');
         activeBroadcastJob = null;
@@ -607,7 +612,7 @@ async function startBroadcastJob({
     try {
         webhookClient = new WebhookClientClass({ url: cleanWebhookUrl });
     } catch (err) {
-        return { ok: false, error: `ไม่สามารถเชื่อมต่อกับ Webhook ได้: ${err.message}` };
+        return { ok: false, error: 'ไม่สามารถเชื่อมต่อกับ Webhook ได้ กรุณาตรวจสอบ URL ของ Webhook อีกครั้ง' };
     }
 
     ensureSubsystemRegistered();

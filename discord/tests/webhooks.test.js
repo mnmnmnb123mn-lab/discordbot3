@@ -121,7 +121,7 @@ test("webhook events route by severity and render one consistent embed", () => {
     assert.equal(payload.embeds.length, 1);
     assert.match(payload.embeds[0].author.name, /ACTION REQUIRED/);
     assert.match(payload.embeds[0].title, /Session เชื่อมต่อกลับไม่ได้/);
-    assert.match(payload.embeds[0].footer.text, /voice\.session\.dead/);
+    assert.equal(payload.embeds[0].footer, undefined);
     assert.equal(payload.embeds[0].fields.some(field => field.name === "สิ่งที่ควรทำ"), true);
     assert.equal(payload.embeds[0].fields.some(field => field.value.includes("\n") || field.value.includes("`")), false);
     const sessionField = payload.embeds[0].fields.find(field => field.name === "Session");
@@ -321,7 +321,7 @@ test("deduplication applies independently to alert events", async () => { // NOS
 
     assert.equal(calls.length, 2);
     assert.equal(calls.every(call => call.target === "ALERT"), true);
-    assert.match(calls[1].payload.embeds[0].footer.text, /runtime\.critical\.repeated/);
+    assert.equal(calls[1].payload.embeds[0].footer, undefined);
 });
 
 test("sendWebhookEvent selects the destination and keeps the event code", async () => { // NOSONAR -- node:test assertions are not recognized by Sonar S2699.
@@ -334,7 +334,7 @@ test("sendWebhookEvent selects the destination and keeps the event code", async 
         title: "ลงทะเบียนคำสั่งไม่สำเร็จ"
     }, { dispatcher });
     assert.equal(calls[0].target, "ALERT");
-    assert.match(calls[0].payload.embeds[0].footer.text, /commands\.registration\.degraded/);
+    assert.equal(calls[0].payload.embeds[0].footer, undefined);
 });
 
 test("sendWebhookEvent preserves event-level summary metadata for duplicate reports", async () => { // NOSONAR -- node:test assertions are not recognized by Sonar S2699.
@@ -360,8 +360,7 @@ test("sendWebhookEvent preserves event-level summary metadata for duplicate repo
     const duplicateEmbed = calls[1].payload.embeds[0];
     assert.match(duplicateEmbed.title, /สรุปเหตุการณ์ที่เกิดซ้ำ/);
     assert.equal(duplicateEmbed.description, "เหตุการณ์ทดสอบ");
-    assert.match(duplicateEmbed.footer.text, /SECURITY/);
-    assert.match(duplicateEmbed.footer.text, /security\.owner_mismatch\.repeated/);
+    assert.equal(duplicateEmbed.footer, undefined);
 });
 
 test("normalization enforces Discord payload limits without overriding mentions", () => { // NOSONAR -- node:test assertions are not recognized by Sonar S2699.
@@ -591,7 +590,7 @@ test("Phase 1 Webhook Renovation: unified visual system and title formatting", (
     });
     assert.equal(logPayload.embeds[0].author.name, "PHOMUEANGTAI • ACTIVITY & AUDIT");
     assert.equal(logPayload.embeds[0].title, "🟢 SYSTEM · BOT READY");
-    assert.equal(logPayload.embeds[0].footer.text, "SYSTEM · system.ready");
+    assert.equal(logPayload.embeds[0].footer, undefined);
 
     const alertPayload = buildWebhookEventPayload({
         severity: "CRITICAL",
@@ -601,7 +600,7 @@ test("Phase 1 Webhook Renovation: unified visual system and title formatting", (
     });
     assert.equal(alertPayload.embeds[0].author.name, "PHOMUEANGTAI • ACTION REQUIRED");
     assert.equal(alertPayload.embeds[0].title, "🚨 RUNTIME · UNCAUGHT EXCEPTION");
-    assert.equal(alertPayload.embeds[0].footer.text, "RUNTIME · runtime.uncaught_exception");
+    assert.equal(alertPayload.embeds[0].footer, undefined);
 
     // Test stripping redundant emojis and prefixes
     const strippedPayload = buildWebhookEventPayload({
@@ -684,7 +683,7 @@ test("Phase 1 Webhook Renovation: renders explicit event.fields with dedupe and 
 
     const alertEmbed = alertWithFields.embeds[0];
     assert.equal(alertEmbed.title, "🔴 VOICE ADMIN · ENFORCEMENT FAILED");
-    assert.equal(alertEmbed.footer.text, "VOICE ADMIN · voiceadmin.enforcement_failed");
+    assert.equal(alertEmbed.footer, undefined);
 
     const alertFieldNames = alertEmbed.fields.map(f => f.name);
     // Canonical fields come first, custom fields appended after
@@ -722,7 +721,7 @@ test("Phase 1 Webhook Renovation: renders explicit event.fields with dedupe and 
 
     const logEmbed = logWithFields.embeds[0];
     assert.equal(logEmbed.title, "🟢 GATEWAY · SHARD RESUMED");
-    assert.equal(logEmbed.footer.text, "GATEWAY · gateway.shard_resumed");
+    assert.equal(logEmbed.footer, undefined);
 
     const logFieldNames = logEmbed.fields.map(f => f.name);
     assert.deepEqual(logFieldNames, [
@@ -965,5 +964,66 @@ test("sendDedupedWebhook recovers from failed pending delivery without infinite 
     assert.equal(attempts, 2, "Exactly 2 attempts should have been made");
     await flushWebhookQueue(20);
 });
+
+test("WEBHOOK_LOG_URL visual renovation: vibrant category neon colors and emojis", () => {
+    const { _test } = require("../core/webhooks");
+
+    // 1. Verify category-specific neon colors for target: LOG with severity: INFO
+    const categoriesToTest = [
+        { category: "GUILD", expectedColor: 0x00F5D4, expectedEmoji: "🏰" },
+        { category: "MODERATION", expectedColor: 0xFF5722, expectedEmoji: "⚖️" },
+        { category: "OWNER", expectedColor: 0xFFD700, expectedEmoji: "👑" },
+        { category: "ADMIN", expectedColor: 0xFFA000, expectedEmoji: "⚙️" },
+        { category: "QUEST", expectedColor: 0x9D4EDD, expectedEmoji: "🚀" },
+        { category: "TOKEN", expectedColor: 0x00BBF9, expectedEmoji: "🔑" },
+        { category: "SECURITY", expectedColor: 0xF72585, expectedEmoji: "🛡️" },
+        { category: "VOICE", expectedColor: 0x38B6FF, expectedEmoji: "🔊" },
+        { category: "VERIFICATION", expectedColor: 0x48CAE4, expectedEmoji: "📋" },
+        { category: "COMMAND", expectedColor: 0x7209B7, expectedEmoji: "⚡" },
+        { category: "DATABASE", expectedColor: 0x06D6A0, expectedEmoji: "💾" },
+        { category: "GATEWAY", expectedColor: 0x4361EE, expectedEmoji: "🌐" },
+        { category: "SYSTEM", expectedColor: 0x00D2FF, expectedEmoji: "✨" }
+    ];
+
+    for (const item of categoriesToTest) {
+        const payload = buildWebhookEventPayload({
+            target: "LOG",
+            severity: "INFO",
+            category: item.category,
+            code: `${item.category.toLowerCase()}.event`,
+            title: "EVENT TRIGGERED"
+        });
+        const embed = payload.embeds[0];
+        assert.equal(embed.color, item.expectedColor, `Color mismatch for ${item.category}`);
+        assert.equal(embed.title, `${item.expectedEmoji} ${item.category} · EVENT TRIGGERED`, `Emoji mismatch for ${item.category}`);
+    }
+
+    // 2. Verify severity SUCCESS in LOG uses vibrant emerald green and green circle
+    const successPayload = buildWebhookEventPayload({
+        target: "LOG",
+        severity: "SUCCESS",
+        category: "SYSTEM",
+        code: "system.ok",
+        title: "ONLINE"
+    });
+    assert.equal(successPayload.embeds[0].color, 0x00E676);
+    assert.equal(successPayload.embeds[0].title, "🟢 SYSTEM · ONLINE");
+
+    // 3. Verify event.reason maps cleanly to canonical รายละเอียด field
+    const reasonPayload = buildWebhookEventPayload({
+        target: "LOG",
+        severity: "INFO",
+        category: "MODERATION",
+        code: "moderation.warn",
+        title: "MEMBER WARNED",
+        actor: "Moderator",
+        targetUser: "BadActor",
+        reason: "Repeated spam in chat"
+    });
+    const detailField = reasonPayload.embeds[0].fields.find(f => f.name === "รายละเอียด");
+    assert.ok(detailField, "รายละเอียด field must be present when reason is provided");
+    assert.equal(detailField.value, "Repeated spam in chat");
+});
+
 
 

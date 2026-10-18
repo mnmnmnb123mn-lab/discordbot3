@@ -1,3 +1,5 @@
+"use strict";
+
 /* eslint-disable complexity -- Legacy dashboard routes keep stable response shapes; refactor separately. */
 const { requireCsrf } = require('../../index/auth');
 /*
@@ -61,6 +63,23 @@ const verifiedMemberService = require("../services/verifiedMemberService");
 const verificationOwnerService = require("../ownerService");
 const { runMemberPrivacyDeletion } = require("../services/privacyDeletion");
 const { runGuildPreflight } = require("../services/guildPreflightService");
+const { verificationWebhookManager } = require("../services/webhook/verificationWebhookManager");
+const { verificationWebhookRepository } = require("../../../database/sqlite/repositories/core/VerificationWebhookRepository");
+
+function maskWebhookUrl(url) {
+  if (!url || typeof url !== "string") return null;
+  try {
+    const parsed = new URL(url);
+    const parts = parsed.pathname.split("/").filter(Boolean);
+    if (parts.length >= 4) {
+      const id = parts[2];
+      return `https://${parsed.host}/api/webhooks/${id}/••••••••••••`;
+    }
+    return `https://${parsed.host}${parsed.pathname.slice(0, 20)}••••••••••••`;
+  } catch {
+    return "••••••••••••";
+  }
+}
 
 const SNOWFLAKE_RE = /^\d{17,22}$/;
 const OBJECT_ID_RE = /^[a-fA-F0-9]{24}$/;
@@ -383,7 +402,7 @@ function sanitizeVerificationBasicFlags(input = {}) {
   }
 
   if ("minConnections" in input) {
-    out.minConnections = Math.max(1, Math.min(20, Number.parseInt(input.minConnections, 10) || 1));
+    out.minConnections = Math.max(0, Math.min(100, Number.parseInt(input.minConnections, 10) || 0));
   }
 
   const SNOWFLAKE_FIELDS = ["roleId", "channelId", "messageId"];
@@ -391,8 +410,6 @@ function sanitizeVerificationBasicFlags(input = {}) {
     if (field in input) out[field] = cleanOptionalSnowflake(input[field]);
   }
 
-  if ("allowedCountries" in input) out.allowedCountries = normalizeStringArray(input.allowedCountries);
-  if ("blockedCountries" in input) out.blockedCountries = normalizeStringArray(input.blockedCountries);
   return out;
 }
 
@@ -518,8 +535,12 @@ function mergeVerificationConfig(existing = {}, incoming = {}) {
   merged.verifyType = merged.oauthMode;
   merged.panel.verifyType = merged.oauthMode;
   if (hasIncomingSecurityRules) {
-    merged.blockVPN = merged.securityRules?.vpnProxyTor?.enabled === true;
-    merged.blockHosting = merged.securityRules?.hosting?.enabled === true;
+    if (clean.securityRules && Object.hasOwn(clean.securityRules, "vpnProxyTor")) {
+      merged.blockVPN = merged.securityRules?.vpnProxyTor?.enabled === true;
+    }
+    if (clean.securityRules && Object.hasOwn(clean.securityRules, "hosting")) {
+      merged.blockHosting = merged.securityRules?.hosting?.enabled === true;
+    }
   }
   return normalizeVerificationConfig(merged);
 }
@@ -676,19 +697,18 @@ function makePanelPayload(req, { guildId, verification }) {
 }
 
 async function ensureGuildConfig(guildId, guildName = "") {
-  let config = await GuildConfig.findOne({ guildId });
-
-  if (!config) {
-    config = await GuildConfig.create({
-      guildId,
-      guildName,
-      verification: normalizeVerificationConfig({}),
-      createdAt: now(),
-      updatedAt: now()
-    });
-  }
-
-  return config;
+  return await GuildConfig.findOneAndUpdate(
+    { guildId },
+    {
+      $setOnInsert: {
+        guildId,
+        guildName: guildName || "",
+        verification: normalizeVerificationConfig({}),
+        createdAt: now()
+      }
+    },
+    { upsert: true, new: true, setDefaultsOnInsert: true }
+  );
 }
 
 async function loadValidationContext(guildId, verification) {
@@ -1001,7 +1021,7 @@ router.get("/api/guilds", requireAdmin, async (req, res) => {
    Config / Resources
 ============================================================================= */
 
-router.get("/api/guild/:guildId/config", requireAdmin, requireGuildAdmin, async (req, res) => {
+async function handleGetGuildConfig(req, res, logContext, failMsg) {
   try {
     const { guildId } = req.params;
     const config = await ensureGuildConfig(guildId, req.adminGuild?.name);
@@ -1012,9 +1032,11 @@ router.get("/api/guild/:guildId/config", requireAdmin, requireGuildAdmin, async 
       config: serializeConfig(config)
     });
   } catch (err) {
-    return sendServerError(res, "config", err);
+    return sendServerError(res, logContext, err, failMsg);
   }
-});
+}
+
+router.get("/api/guild/:guildId/config", requireAdmin, requireGuildAdmin, (req, res) => handleGetGuildConfig(req, res, "config"));
 
 router.post("/api/guild/:guildId/settings", requireAdmin, requireGuildAdmin, requireCsrf, async (req, res) => {
   try {
@@ -1496,6 +1518,199 @@ router.get("/api/guild/:guildId/logs", requireAdmin, requireGuildAdmin, async (r
     return sendServerError(res, "logs", err, "โหลด logs ไม่สำเร็จ");
   }
 });
+
+function resolveUrlFormatText(readiness) {
+  if (readiness.urlValid) {
+    return "รูปแบบ Webhook URL ถูกต้องและพร้อมส่งข้อมูล";
+  }
+  if (readiness.urlConfigured) {
+    return "รูปแบบ Webhook URL ไม่ถูกต้อง";
+  }
+  return "ยังไม่ได้ระบุ Webhook URL";
+}
+
+function resolveWorkerReadyText(readiness) {
+  if (!readiness.databaseReady?.ok) {
+    return "ฐานข้อมูลไม่พร้อมทำงาน ไม่สามารถส่งข้อมูลได้";
+  }
+  if (!readiness.queueReady?.ok) {
+    return "ระบบคิวส่งข้อมูลไม่พร้อมทำงาน";
+  }
+  if (!readiness.urlValid) {
+    return "รูปแบบ Webhook URL ไม่ถูกต้อง";
+  }
+  if (!readiness.enabled) {
+    return "ระบบยังไม่เริ่มทำงาน กรุณาบันทึก URL และกดเริ่มทำงาน";
+  }
+  if (readiness.activeJob) {
+    return "ระบบกำลังส่งข้อมูลประวัติย้อนหลัง";
+  }
+  if (readiness.stats?.retry > 0) {
+    return "ระบบทำงานอยู่ (มีรายการรอส่งใหม่)";
+  }
+  if (readiness.stats?.failed > 0) {
+    return "ระบบทำงานอยู่ (พบข้อผิดพลาดบางรายการ)";
+  }
+  return "ระบบพร้อมส่งข้อมูลตามเวลาจริง";
+}
+
+router.get("/api/guild/:guildId/webhook-log/status", requireAdmin, requireGuildAdmin, async (req, res) => {
+  try {
+    res.set("Cache-Control", "no-store");
+    const { guildId } = req.params;
+    const readiness = await verificationWebhookManager.getReadiness(guildId);
+    const config = await GuildConfig.findOne().where("guildId").equals(String(guildId)).lean();
+    const rawUrl = config?.verification?.webhookLog?.url || null;
+    const urlMasked = rawUrl ? maskWebhookUrl(rawUrl) : null;
+
+    res.json({
+      success: true,
+      ...readiness,
+      urlMasked,
+      checklist: {
+        urlFormat: {
+          ok: readiness.urlValid,
+          text: resolveUrlFormatText(readiness)
+        },
+        databaseReady: {
+          ok: readiness.databaseReady?.ok === true,
+          text: readiness.databaseReady?.ok === true ? "ระบบฐานข้อมูลเชื่อมต่อเรียบร้อย" : "การเชื่อมต่อฐานข้อมูลไม่พร้อมทำงาน"
+        },
+        queueReady: {
+          ok: readiness.queueReady?.ok === true,
+          text: readiness.queueReady?.ok === true ? "ระบบคิวส่งข้อมูล (SQLite Queue) พร้อมทำงาน" : "ระบบคิวส่งข้อมูลไม่พร้อมทำงาน"
+        },
+        workerReady: {
+          ok: Boolean(readiness.enabled && readiness.urlValid && readiness.databaseReady?.ok && readiness.queueReady?.ok),
+          text: resolveWorkerReadyText(readiness)
+        }
+      }
+    });
+  } catch (err) {
+    return sendServerError(res, "webhook-log.status", err, "โหลดสถานะ Webhook ไม่สำเร็จ");
+  }
+});
+
+router.post("/api/guild/:guildId/webhook-log/url", requireAdmin, requireGuildAdmin, requireCsrf, async (req, res) => {
+  try {
+    const { guildId } = req.params;
+    const { url } = req.body || {};
+
+    if (!url || typeof url !== "string") {
+      return res.status(400).json({
+        success: false,
+        code: "invalid_url",
+        error: "กรุณาระบุ Discord Webhook URL"
+      });
+    }
+
+    const validation = verificationWebhookManager.validateUrl(url);
+    if (!validation.valid) {
+      return res.status(400).json({
+        success: false,
+        code: validation.code || "invalid_webhook_url",
+        error: "ลิงก์ที่ระบุไม่ใช่ Discord Webhook URL ที่ถูกต้อง กรุณาตรวจสอบลิงก์อีกครั้ง"
+      });
+    }
+
+    const config = await GuildConfig.findOne().where("guildId").equals(String(guildId));
+    const previousUrl = config?.verification?.webhookLog?.url || "";
+    const isNewUrl = previousUrl.trim() !== url.trim();
+    let currentVersion = config?.verification?.webhookLog?.destinationVersion || 1;
+    if (isNewUrl && previousUrl) {
+      currentVersion += 1;
+      // Cancel any ongoing backfill jobs associated with the old destination URL (P1-5)
+      verificationWebhookRepository.cancelOrFailOldJobs(guildId, "webhook_url_changed", currentVersion);
+    }
+
+    await GuildConfig.updateOne(
+      { guildId: String(guildId) },
+      {
+        $set: {
+          "verification.webhookLog.url": url.trim(),
+          "verification.webhookLog.destinationVersion": currentVersion,
+          "verification.webhookLog.valid": true,
+          "verification.updatedAt": Date.now()
+        }
+      },
+      { upsert: true }
+    );
+
+    return res.json({
+      success: true,
+      message: "บันทึกและตรวจสอบ Discord Webhook URL เรียบร้อยแล้ว",
+      destinationVersion: currentVersion,
+      urlMasked: maskWebhookUrl(url)
+    });
+  } catch (err) {
+    return sendServerError(res, "webhook-log.url", err, "บันทึก Webhook URL ไม่สำเร็จ");
+  }
+});
+
+router.post("/api/guild/:guildId/webhook-log/retry", requireAdmin, requireGuildAdmin, requireCsrf, async (req, res) => {
+  try {
+    const { guildId } = req.params;
+    verificationWebhookManager.triggerWorker(guildId);
+    return res.json({
+      success: true,
+      message: "สั่งให้ระบบลองส่งข้อมูลที่รออยู่ในคิวใหม่เรียบร้อยแล้ว"
+    });
+  } catch (err) {
+    return sendServerError(res, "webhook-log.retry", err, "สั่งลองส่งข้อมูลใหม่ไม่สำเร็จ");
+  }
+});
+
+router.post("/api/guild/:guildId/webhook-log/mode", requireAdmin, requireGuildAdmin, requireCsrf, async (req, res) => {
+  try {
+    const { guildId } = req.params;
+    const { mode, force } = req.body || {};
+
+    if (mode === "live") {
+      const activeJob = verificationWebhookManager.repo.getActiveJob(guildId);
+      if (activeJob && (activeJob.status === "RUNNING" || activeJob.status === "PENDING") && !force) {
+        return res.status(409).json({
+          success: false,
+          code: "backfill_in_progress",
+          error: "มีงานส่งข้อมูลประวัติย้อนหลังกำลังทำงานอยู่ กรุณารอให้ระบบประมวลผลเสร็จสิ้น หรือยืนยันหากต้องการสลับโหมดทันที",
+          activeJob: {
+            jobId: activeJob.job_id,
+            status: activeJob.status,
+            processedCount: activeJob.processed_count,
+            totalEligible: activeJob.total_eligible
+          }
+        });
+      }
+      const result = await verificationWebhookManager.startLiveMode(guildId);
+      return res.json({
+        success: true,
+        mode: "live",
+        message: "ระบบเริ่มส่งข้อมูลแบบเรียลไทม์เรียบร้อยแล้ว",
+        ...result
+      });
+    } else if (mode === "backfill") {
+      const result = await verificationWebhookManager.startBackfillMode(guildId);
+      return res.json({
+        success: true,
+        mode: "backfill",
+        message: "เริ่มการส่งข้อมูลประวัติทั้งหมดและจะทำงานต่อแบบเรียลไทม์",
+        ...result
+      });
+    } else {
+      return res.status(400).json({
+        success: false,
+        code: "invalid_mode",
+        error: "กรุณาเลือกโหมดการทำงานที่ถูกต้อง"
+      });
+    }
+  } catch (err) {
+    return res.status(400).json({
+      success: false,
+      code: "mode_change_failed",
+      error: err.message || "ไม่สามารถเปลี่ยนโหมดการทำงานได้"
+    });
+  }
+});
+
 router.get("/api/guild/:guildId/members", requireAdmin, requireGuildAdmin, async (req, res) => {
   try {
     res.set("Cache-Control", "no-store");
@@ -1705,22 +1920,10 @@ router.delete("/api/guild/:guildId/member/:userId", requireAdmin, requireGuildAd
    Compatibility aliases
 ============================================================================= */
 
-router.get("/api/guild/:guildId", requireAdmin, requireGuildAdmin, async (req, res) => {
-  try {
-    const { guildId } = req.params;
-    const config = await ensureGuildConfig(guildId, req.adminGuild?.name);
-
-    res.json({
-      success: true,
-      guild: serializeGuildFromSession(req.adminGuild),
-      config: serializeConfig(config)
-    });
-  } catch (err) {
-    return sendServerError(res, "get-guild", err, "โหลดการตั้งค่าเซิร์ฟเวอร์ไม่สำเร็จ");
-  }
-});
+router.get("/api/guild/:guildId", requireAdmin, requireGuildAdmin, (req, res) => handleGetGuildConfig(req, res, "get-guild", "โหลดการตั้งค่าเซิร์ฟเวอร์ไม่สำเร็จ"));
 
 router._test = {
+  maskWebhookUrl,
   mergeVerificationConfig,
   tokenRevealErrorStatus,
   saveConfigWithRetry,
@@ -1731,7 +1934,18 @@ router._test = {
   comparablePanel,
   panelDifferences,
   persistedPanelMatches,
-  rollbackDiscordPanel
+  rollbackDiscordPanel,
+  resolveUrlFormatText,
+  resolveWorkerReadyText,
+  cleanText,
+  cleanHexColor,
+  cleanUrl,
+  parsePage,
+  parseLimit,
+  ipHistoryErrorStatus,
+  pagination,
+  sanitizeVerificationBasicFlags,
+  sanitizeSingleSecurityRule
 };
 
 module.exports = router;

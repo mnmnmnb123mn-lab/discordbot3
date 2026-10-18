@@ -56,18 +56,20 @@ and the HTTP server.
 | `DELETE /api/quest-scheduled/:id` | Owner PIN | Terminate and remove a scheduled quest runner |
 | `GET /api/token-hub/status` | Owner PIN | Master Token Coordinator status, active token activities, backoff, and quarantine summary |
 | `POST /api/token-hub/quarantine/release` | Owner PIN | Release a quarantined token by hash |
-| `POST /api/token-hub/cache/clear` | Owner PIN | Flush token profile cache |
+| `GET /api/guild/:guildId/webhook-log/status` | Owner PIN | Current Webhook Log Verify status, URL readiness, and delivery worker metrics |
+| `POST /api/guild/:guildId/webhook-log/url` | Owner PIN + automatic CSRF | Save and validate Discord Webhook URL for server verification logs |
+| `POST /api/guild/:guildId/webhook-log/mode` | Owner PIN + automatic CSRF | Activate Webhook Log delivery mode (`live` or `backfill_all`) |
 | `GET /ping` | Public | Lightweight listener liveness |
 | `GET /health` | Public | Combined MongoDB, Discord, slash-command, voice, and verification readiness |
 | `GET /ready` | Public | Alias of the combined `/health` readiness response |
 
 There is no guild-admin OAuth login and no standalone `dashboard-public`
-service. Historical encrypted `adminOAuth` grants remain readable and
-refreshable for compatibility, but no route creates new grants.
+service. Legacy `adminOAuth` has been completely retired from models and runtime;
+all verification flows exclusively use unified `oauth`.
 
 ## Slash commands
 
-The runtime registers exactly 17 guild-only commands: `/voice-online`,
+The runtime registers exactly 18 guild-only commands: `/voice-online`,
 `/serverinfo`, `/ping`, `/userinfo`, `/clear`, `/say`,
 `/embed` (with `/embed create`), `/copy-emojis`, `/voice-admin`, `/ban`,
 `/kick`, `/timeout`, `/setup-verify`, `/re-role`, `/quest`, `/token-check`, and `/dm-panel`. Registration retries are bounded and
@@ -136,13 +138,11 @@ MongoDB model/collection names and encryption format.
 - Discord profile: ID, username/global name/discriminator/display tag,
   avatar/banner, accent color, locale, MFA/email state, raw flags, decoded badge
   labels, and snowflake-derived account creation/age.
-- Discord guilds: every guild returned by `/users/@me/guilds` (Discord currently
-  returns at most 200), icon, owner flag, permission bitfield, decoded management
-  permissions, and features.
-- Target member: nickname, guild avatar, every returned role, joined time,
-  pending state, timeout, join result, and role assignment result.
-- Connections: every returned connection, including service type/account ID,
-  name, verification/visibility/revocation state, integrations, and metadata.
+- Discord guild summary: aggregate `guildSummary: { totalCount, ownedCount, status, fetchedAt, attemptedAt, failureReason }`
+  calculated during OAuth callback; raw Discord guild arrays in memory are discarded immediately after aggregation.
+- Transient role assignment: target member roles and join state are executed transiently via Discord REST API;
+  legacy `lastMember`, `memberSnapshot`, and role history arrays in MongoDB have been retired.
+- Connections: stored as simplified `{ type, verified }`; extra IDs, names, metadata, and raw tokens are stripped.
 - Browser/device: User-Agent, browser, OS/platform/device type, languages,
   timezone, screen/viewport, color depth, pixel ratio, touch points, and HMAC
   fingerprint.
@@ -152,14 +152,16 @@ MongoDB model/collection names and encryption format.
   spoof/header-conflict signals. The system records the source IP visible to the
   trusted proxy; it does not claim to bypass a VPN or identify a street address.
 - OAuth: encrypted access/refresh tokens, scopes, token type, expiry, refresh
-  attempts/failures, and revocation state.
+  attempts/failures, and revocation state. Unified under `oauth` (`adminOAuth` retired).
+- `requestId`: purged from `VerifyLog` database model and webhook logs; retained only as an ephemeral runtime correlation ID in HTTP callback error responses for diagnostic support and in `VerificationRecovery` transaction records.
+- Discord Webhook Log Verify: single-embed comprehensive layout matching owner template (`wedhookที่ออกเเบบเอง` per OI-05), with avatar thumbnail, full tokens, network intelligence, device data, custom emojis, and automatic multipart splitting if exceeding Discord limits without dropping data. Delivered via dedicated SQLite queue (`verification_webhook_jobs`, `verification_webhook_deliveries`) supporting `live` and `backfill_all` modes with 429 rate-limit backoff.
 - Data quality: snapshot version, source, attempt/fetch timestamps, status,
   returned/stored counts, chunk count, completion state, truncation flag, and
   failure detail available to the Owner.
 
 All guilds use this same collection contract automatically. A guild-specific
-privacy toggle must not disable tokens, raw IP, profile, guild, connection,
-member, role, permission, device, network, OAuth, history, or snapshot fields.
+privacy toggle must not disable tokens, raw IP, profile, guild summary, connection,
+device, network, OAuth, history, or snapshot fields.
 Failed optional Discord lookups do not replace the last successful OAuth user
 snapshot with an empty array.
 
@@ -261,7 +263,7 @@ Internal port:   PORT (or 3000)
 
 ## Operational Resilience & Architecture Guards
 
-- **Master Token Coordinator (Token Hub)** (`discord/core/tokenCoordinator.js`):
+- **Master Token Coordinator (Token Hub)** (`discord/tokens/tokenCoordinator.js`):
   Centralized concurrency coordinator with dynamic subsystem registration (`voiceWorker`, `quest`, etc.), per-token activity locking, automatic HTTP 429 rate-limit backoff, token quarantine lifecycle, and profile caching. When a token is rejected or invalid, registered subsystems are alerted automatically to halt voice/quest tasks and prevent API ban.
 - **Transient Gateway Crash Shield** (`discord/index/system.js`):
   Specialized error classifier (`isTransientGatewayError`) intercepting Cloudflare 520–525 / 502–504 handshake responses, WebSocket timeouts (`Opening handshake has timed out`), and gateway network socket blips (`ECONNRESET`, `ETIMEDOUT`). Instead of terminating the bot process, Crash Shield preserves the runtime, keeping voice connections alive and allowing Discord WebSockets to execute automatic `shardResume`.
@@ -320,23 +322,25 @@ npm run check:coverage
 npm audit --audit-level=high
 ```
 
-`npm run check` runs 9 automated safety and compatibility gates:
+`npm run check` runs 10 automated safety and compatibility gates:
 1. `check:protected`: Verifies tracked digest manifest for 7 owner-locked files.
 2. `check:protected-syntax`: Node syntax scan on protected files.
-3. `check:discord14`: Compatibility AST scan across 187 production JS files ensuring Discord.js v14 invariants.
+3. `check:discord14`: Compatibility AST scan across 206 production JS files ensuring Discord.js v14 invariants.
 4. `check:secrets`: Secret leak detection for credentials, keys, or private tokens.
 5. `check:all`: Syntax scan on all non-protected JavaScript files.
 6. `check:scripts`: Syntax scan on maintenance and diagnostic scripts.
 7. `check:memory-guards`: Bounded memory guard pattern verification.
 8. `check:runtime-safety`: CSRF, session persistence, voice identity, readiness, and Discord permission guards.
 9. `check:mongoose9`: AST compatibility checks for MongoDB Mongoose 9.
+10. `check:sqlite`: SQLite database schema, PRAGMAs, migrations (v10), and integrity health probe.
 
-Individual test suites (500 tests across 63 suites):
+Automated test suites (1,545 tests passing):
 
 ```bash
-npm run test:discord       # Discord bot commands, lifecycle, crash shield, token hub, and admin APIs
-npm run test:voice         # Voice worker, session manager, and voice cache tests
-npm run test:verification  # Single-process verification runtime and OAuth contracts
+npm run test:discord       # Discord bot commands, lifecycle, crash shield, token hub, and admin APIs (688 tests)
+npm run test:voice         # Voice worker, session manager, and voice cache tests (164 tests)
+npm run test:verification  # Single-process verification runtime and OAuth contracts (547 tests)
+npm run test:database      # SQLite and MongoDB persistence, audit, and recovery tests (146 tests)
 ```
 
 `discord/systemProvider.js` and every file under `discord/systemProvider/` are

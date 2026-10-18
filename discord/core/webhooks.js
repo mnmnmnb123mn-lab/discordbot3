@@ -54,6 +54,52 @@ const EVENT_CATEGORY_LABELS = Object.freeze({
     DATA: "DATA",
     CAMPAIGN: "CAMPAIGN"
 });
+const LOG_CATEGORY_COLORS = Object.freeze({
+    GUILD: 0x00F5D4,          // Electric Mint / Turquoise
+    MODERATION: 0xFF5722,     // Vibrant Coral Orange
+    OWNER: 0xFFD700,          // Radiant Gold
+    ADMIN: 0xFFA000,          // Vibrant Amber
+    QUEST: 0x9D4EDD,          // Cyber Violet / Neon Purple
+    TOKEN: 0x00BBF9,          // Vivid Cyan / Electric Diamond
+    SECURITY: 0xF72585,       // Hot Neon Pink
+    PROTECTION: 0xF72585,     // Hot Neon Pink
+    TRACE: 0xE0AAFF,          // Lavender Neon
+    VOICE: 0x38B6FF,          // Sky Electric Blue
+    VOICE_ADMIN: 0x0077B6,    // Ocean Deep Blue
+    VERIFICATION: 0x48CAE4,   // Crystal Ice Blue
+    COMMAND: 0x7209B7,        // Electric Indigo
+    DATABASE: 0x06D6A0,       // Neon Emerald Mint
+    GATEWAY: 0x4361EE,        // Vivid Cobalt
+    RUNTIME: 0x3A86FF,        // Vivid Azure
+    CHANNEL: 0x2EC4B6,        // Teal Sea
+    CAMPAIGN: 0xFF006E,       // Electric Rose
+    DATA: 0x2A9D8F,           // Ocean Pine
+    WEBHOOK: 0x8338EC,        // Neon Grape
+    SYSTEM: 0x00D2FF          // Vibrant Aqua Blue
+});
+const LOG_CATEGORY_EMOJIS = Object.freeze({
+    GUILD: "🏰",
+    MODERATION: "⚖️",
+    OWNER: "👑",
+    ADMIN: "⚙️",
+    QUEST: "🚀",
+    TOKEN: "🔑",
+    SECURITY: "🛡️",
+    PROTECTION: "🛡️",
+    TRACE: "🔍",
+    VOICE: "🔊",
+    VOICE_ADMIN: "🎙️",
+    VERIFICATION: "📋",
+    COMMAND: "⚡",
+    DATABASE: "💾",
+    GATEWAY: "🌐",
+    RUNTIME: "⚡",
+    CHANNEL: "💬",
+    WEBHOOK: "📡",
+    DATA: "📊",
+    CAMPAIGN: "🎯",
+    SYSTEM: "✨"
+});
 const DISCORD_WEBHOOK_HOSTS = new Set([
     "discord.com",
     "discordapp.com",
@@ -335,27 +381,58 @@ function appendEventField(fields, name, value, inline) {
     });
 }
 
-function buildWebhookEventTitle(event, presentation, category) {
-    let title = String(event.title || "").trim();
+function buildWebhookEventTitle(event, presentation, category, target = "LOG") {
+    const severity = normalizeEventToken(event?.severity, WEBHOOK_SEVERITIES.INFO);
+    let emoji = presentation?.emoji || "🔵";
+    if (target === "LOG" && severity === "INFO") {
+        const categoryToken = normalizeEventToken(event?.category, category);
+        emoji = LOG_CATEGORY_EMOJIS[categoryToken] || "✨";
+    }
+
+    let title = String(event?.title || "").trim();
     if (!title) {
-        return `${presentation.emoji} ${category}`;
+        return `${emoji} ${category}`;
     }
     title = title.replace(/^(?:SHADOW REPORT:\s*|COMMAND LOG:\s*|ACTION:\s*|REPORT:\s*)/i, "");
     title = title.replace(/^(?:[🔵🟢🟠🔴🚨]|[\u{1F300}-\u{1FAFF}\u{2600}-\u{27BF}])+\s*/u, "");
-    title = title.replace(new RegExp(`^${category}\\s*[·•]\\s*`, "i"), "");
+    const escapedCat = String(category).replace(/[.*+?^${}()|[\]\\]/g, String.raw`\$&`);
+    title = title.replace(new RegExp(String.raw`^${escapedCat}\s*[·•]\s*`, "i"), "");
     title = title.replace(/^[A-Z_]{3,15}\s*[·•]\s*/, "");
     title = title.trim();
 
     // If title redundantly begins with the category name (e.g. "GATEWAY SHARD ERROR" in category "GATEWAY"),
     // strip the redundant category prefix to yield e.g. "SHARD ERROR".
-    const escapedCat = String(category).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-    const redundantCategoryRegex = new RegExp(`^${escapedCat}\\s+(?=\\S)`, "i");
+    const redundantCategoryRegex = new RegExp(String.raw`^${escapedCat}\s+(?=\S)`, "i");
     if (redundantCategoryRegex.test(title)) {
         title = title.replace(redundantCategoryRegex, "").trim();
     }
 
-    return `${presentation.emoji} ${category} · ${title}`;
+    return `${emoji} ${category} · ${title}`;
 }
+
+function resolveWebhookEventColor(event, severity, categoryToken, target) {
+    if (Number.isFinite(Number(event?.color))) {
+        return Number(event.color);
+    }
+    // High-severity events retain standard priority colors across all targets
+    if (severity === "CRITICAL") return Colors.DarkRed;
+    if (severity === "ERROR") return Colors.Red;
+    if (severity === "WARNING") return Colors.Yellow;
+
+    // For ALERT targets, preserve standard presentation colors
+    if (target === "ALERT") {
+        return (EVENT_PRESENTATION[severity] || EVENT_PRESENTATION.INFO).color;
+    }
+
+    // For LOG targets:
+    if (severity === "SUCCESS") {
+        return 0x00E676; // Vivid Emerald Green (clean, punchy neon)
+    }
+
+    // Default INFO severity in LOG: vibrant category-specific neon color
+    return LOG_CATEGORY_COLORS[categoryToken] || 0x00D2FF;
+}
+
 
 function normalizeFieldName(name) {
     return String(name ?? "").trim().toLowerCase();
@@ -370,7 +447,7 @@ function deleteMatchingFromContext(context, normalizedTarget) {
 }
 
 function getAndDeleteFromContext(context, normalizedTarget) {
-    let foundValue = undefined;
+    let foundValue;
     for (const key of Object.keys(context)) {
         if (normalizeFieldName(key) === normalizedTarget) {
             if (foundValue === undefined && context[key] !== undefined && context[key] !== null && context[key] !== "") {
@@ -382,14 +459,7 @@ function getAndDeleteFromContext(context, normalizedTarget) {
     return foundValue;
 }
 
-function buildEventFields(event, state, target) {
-    const fields = [];
-    const context = { ...(event.context || {}) };
-    const rawExplicit = Array.isArray(event.fields)
-        ? event.fields.filter(f => f && f.name && f.value !== undefined && f.value !== null && f.value !== "")
-        : [];
-
-    // Policy: First non-empty value wins across duplicate fields
+function deduplicateExplicitFields(rawExplicit) {
     const deduplicatedExplicit = [];
     const explicitMap = new Map();
     for (const f of rawExplicit) {
@@ -401,10 +471,11 @@ function buildEventFields(event, state, target) {
             deduplicatedExplicit.push(entry);
         }
     }
+    return { deduplicatedExplicit, explicitMap };
+}
 
-    const consumedNames = new Set();
-
-    function extractCanonicalField(name, fallbackVal, aliases = []) {
+function createCanonicalFieldExtractor(deduplicatedExplicit, explicitMap, context, consumedNames) {
+    return function extractCanonicalField(name, fallbackVal, aliases = []) {
         const namesToTry = [name, ...aliases];
         const lowerNames = namesToTry.map(normalizeFieldName);
 
@@ -417,7 +488,6 @@ function buildEventFields(event, state, target) {
         }
 
         // 1. Explicit event.fields takes highest precedence.
-        // Check deduplicatedExplicit in caller order to ensure first-declared alias wins.
         for (const f of deduplicatedExplicit) {
             const lower = normalizeFieldName(f.name);
             if (lowerNames.includes(lower) && explicitMap.has(lower)) {
@@ -442,83 +512,46 @@ function buildEventFields(event, state, target) {
             }
         }
         return null;
+    };
+}
+
+function _appendCanonical(fields, extractCanonicalField, name, fallbackVal, defaultInline = true, aliases = []) {
+    const field = extractCanonicalField(name, fallbackVal, aliases);
+    if (field) {
+        appendEventField(fields, name, field.value, field.inline ?? defaultInline);
     }
+}
 
-    if (target === "ALERT") {
-        const stateField = extractCanonicalField("สถานะ", state ? (EVENT_STATE_LABELS[state] || state) : null);
-        if (stateField) {
-            appendEventField(fields, "สถานะ", stateField.value, stateField.inline ?? true);
-        }
+function appendAlertCanonicalFields(fields, event, state, extractCanonicalField) {
+    const serverVal = event.server || (event.guildName ? `${event.guildName} (${event.guildId})` : event.guildId);
+    const targetVal = event.targetUser || event.targetMember;
 
-        const impactField = extractCanonicalField("ผลกระทบ", event.impact);
-        if (impactField) {
-            appendEventField(fields, "ผลกระทบ", impactField.value, impactField.inline ?? false);
-        }
+    _appendCanonical(fields, extractCanonicalField, "สถานะ", state ? (EVENT_STATE_LABELS[state] || state) : null, true);
+    _appendCanonical(fields, extractCanonicalField, "ผลกระทบ", event.impact, false);
+    _appendCanonical(fields, extractCanonicalField, "สิ่งที่ควรทำ", event.action, false);
+    _appendCanonical(fields, extractCanonicalField, "เซิร์ฟเวอร์", serverVal, true);
+    _appendCanonical(fields, extractCanonicalField, "เป้าหมาย", targetVal, true, ["ผู้ใช้เป้าหมาย"]);
+    _appendCanonical(fields, extractCanonicalField, "รหัสข้อผิดพลาด", event.errorCode, true);
+    _appendCanonical(fields, extractCanonicalField, "รายละเอียด", event.details, false);
+}
 
-        const actionField = extractCanonicalField("สิ่งที่ควรทำ", event.action);
-        if (actionField) {
-            appendEventField(fields, "สิ่งที่ควรทำ", actionField.value, actionField.inline ?? false);
-        }
+function appendLogCanonicalFields(fields, event, extractCanonicalField) {
+    const actorVal = event.actor || event.operator || event.user;
+    const serverVal = event.server || (event.guildName ? `${event.guildName} (${event.guildId})` : event.guildId);
+    const targetVal = event.targetUser || event.targetMember;
+    const actionVal = event.actionName || event.operation;
+    const resultVal = event.result || event.outcome;
+    const detailsVal = event.details || event.reason;
 
-        const serverVal = event.server || (event.guildName ? `${event.guildName} (${event.guildId})` : event.guildId);
-        const serverField = extractCanonicalField("เซิร์ฟเวอร์", serverVal);
-        if (serverField) {
-            appendEventField(fields, "เซิร์ฟเวอร์", serverField.value, serverField.inline ?? true);
-        }
+    _appendCanonical(fields, extractCanonicalField, "ผู้ดำเนินการ", actorVal, true, ["ผู้สั่งการ", "ผู้กระทำ"]);
+    _appendCanonical(fields, extractCanonicalField, "เซิร์ฟเวอร์", serverVal, true);
+    _appendCanonical(fields, extractCanonicalField, "เป้าหมาย", targetVal, true);
+    _appendCanonical(fields, extractCanonicalField, "การกระทำ", actionVal, true);
+    _appendCanonical(fields, extractCanonicalField, "ผลลัพธ์", resultVal, true);
+    _appendCanonical(fields, extractCanonicalField, "รายละเอียด", detailsVal, false, ["เหตุผล", "reason"]);
+}
 
-        const targetVal = event.targetUser || event.targetMember;
-        const targetField = extractCanonicalField("เป้าหมาย", targetVal, ["ผู้ใช้เป้าหมาย"]);
-        if (targetField) {
-            appendEventField(fields, "เป้าหมาย", targetField.value, targetField.inline ?? true);
-        }
-
-        const errorField = extractCanonicalField("รหัสข้อผิดพลาด", event.errorCode);
-        if (errorField) {
-            appendEventField(fields, "รหัสข้อผิดพลาด", errorField.value, errorField.inline ?? true);
-        }
-
-        const detailsField = extractCanonicalField("รายละเอียด", event.details);
-        if (detailsField) {
-            appendEventField(fields, "รายละเอียด", detailsField.value, detailsField.inline ?? false);
-        }
-    } else {
-        const actorVal = event.actor || event.operator || event.user;
-        const actorField = extractCanonicalField("ผู้ดำเนินการ", actorVal, ["ผู้สั่งการ", "ผู้กระทำ"]);
-        if (actorField) {
-            appendEventField(fields, "ผู้ดำเนินการ", actorField.value, actorField.inline ?? true);
-        }
-
-        const serverVal = event.server || (event.guildName ? `${event.guildName} (${event.guildId})` : event.guildId);
-        const serverField = extractCanonicalField("เซิร์ฟเวอร์", serverVal);
-        if (serverField) {
-            appendEventField(fields, "เซิร์ฟเวอร์", serverField.value, serverField.inline ?? true);
-        }
-
-        const targetVal = event.targetUser || event.targetMember;
-        const targetField = extractCanonicalField("เป้าหมาย", targetVal);
-        if (targetField) {
-            appendEventField(fields, "เป้าหมาย", targetField.value, targetField.inline ?? true);
-        }
-
-        const actionVal = event.actionName || event.operation;
-        const actionField = extractCanonicalField("การกระทำ", actionVal);
-        if (actionField) {
-            appendEventField(fields, "การกระทำ", actionField.value, actionField.inline ?? true);
-        }
-
-        const resultVal = event.result || event.outcome;
-        const resultField = extractCanonicalField("ผลลัพธ์", resultVal);
-        if (resultField) {
-            appendEventField(fields, "ผลลัพธ์", resultField.value, resultField.inline ?? true);
-        }
-
-        const detailsField = extractCanonicalField("รายละเอียด", event.details);
-        if (detailsField) {
-            appendEventField(fields, "รายละเอียด", detailsField.value, detailsField.inline ?? false);
-        }
-    }
-
-    // Append remaining custom explicit fields in caller order
+function appendRemainingCustomFields(fields, deduplicatedExplicit, explicitMap, context, consumedNames) {
     for (const f of deduplicatedExplicit) {
         const lower = normalizeFieldName(f.name);
         if (explicitMap.has(lower)) {
@@ -529,18 +562,34 @@ function buildEventFields(event, state, target) {
         }
     }
 
-    // Append remaining unconsumed context entries (first non-empty value wins)
     for (const [rawName, rawValue] of Object.entries(context)) {
         const lower = normalizeFieldName(rawName);
-        if (!lower || consumedNames.has(lower)) {
-            continue;
-        }
-        if (rawValue === undefined || rawValue === null || rawValue === "") {
+        if (!lower || consumedNames.has(lower) || rawValue === undefined || rawValue === null || rawValue === "") {
             continue;
         }
         consumedNames.add(lower);
         appendEventField(fields, String(rawName || "รายละเอียด").trim().slice(0, 100), rawValue, true);
     }
+}
+
+function buildEventFields(event, state, target) {
+    const fields = [];
+    const context = { ...event.context };
+    const rawExplicit = Array.isArray(event.fields)
+        ? event.fields.filter(f => f?.name && f?.value != null && f?.value !== "")
+        : [];
+
+    const { deduplicatedExplicit, explicitMap } = deduplicateExplicitFields(rawExplicit);
+    const consumedNames = new Set();
+    const extractCanonicalField = createCanonicalFieldExtractor(deduplicatedExplicit, explicitMap, context, consumedNames);
+
+    if (target === "ALERT") {
+        appendAlertCanonicalFields(fields, event, state, extractCanonicalField);
+    } else {
+        appendLogCanonicalFields(fields, event, extractCanonicalField);
+    }
+
+    appendRemainingCustomFields(fields, deduplicatedExplicit, explicitMap, context, consumedNames);
     return fields.slice(0, FIELD_COUNT_MAX);
 }
 
@@ -561,22 +610,21 @@ function buildWebhookEventPayload(event = {}) {
     const severity = normalizeEventToken(event.severity, WEBHOOK_SEVERITIES.INFO);
     const presentation = EVENT_PRESENTATION[severity] || EVENT_PRESENTATION.INFO;
     const categoryToken = normalizeEventToken(event.category, "SYSTEM");
-    const displayCategory = EVENT_CATEGORY_LABELS[categoryToken] || categoryToken.replace(/_/g, " ");
-    const code = normalizeWebhookEventCode(event.code);
+    const displayCategory = EVENT_CATEGORY_LABELS[categoryToken] || categoryToken.replaceAll("_", " ");
     const target = resolveWebhookEventTarget({ ...event, severity });
     const state = event.state ? normalizeEventToken(event.state, "UPDATE") : null;
     const fields = buildEventFields(event, state, target);
 
     const sourceIconUrl = normalizeDiscordMediaUrl(event.sourceIconUrl);
     const thumbnailUrl = normalizeDiscordMediaUrl(event.thumbnailUrl);
+    const color = resolveWebhookEventColor(event, severity, categoryToken, target);
     return {
         embeds: [{
-            color: presentation.color,
+            color,
             author: buildEventAuthor(target, sourceIconUrl),
-            title: buildWebhookEventTitle(event, presentation, displayCategory),
+            title: buildWebhookEventTitle(event, presentation, displayCategory, target),
             description: event.description ? String(event.description) : undefined,
             fields,
-            footer: { text: `${displayCategory} · ${code}` },
             ...(thumbnailUrl ? { thumbnail: { url: thumbnailUrl } } : {}),
             timestamp: resolveEventTimestamp(event.timestamp).toISOString()
         }]
@@ -630,7 +678,6 @@ function buildWebhookEventPayloads(event = {}, options = {}) {
                 author: primary.embeds[0].author,
                 title: "Owner event continuation",
                 fields,
-                footer: primary.embeds[0].footer,
                 timestamp: primary.embeds[0].timestamp
             }]
         });
@@ -1016,6 +1063,63 @@ function buildDuplicateSummaryPayload(entry, ttlMs, stopping = false) {
     });
 }
 
+function _cleanDedupeEntry(key, entry) {
+    if (routineDedupe.get(key) === entry) {
+        if (entry.timer) clearTimeout(entry.timer);
+        routineDedupe.delete(key);
+    }
+}
+
+async function _handleExistingDedupe(key, existing) {
+    let firstDelivered = false;
+    try {
+        firstDelivered = await existing.pending;
+    } catch {
+        firstDelivered = false;
+    }
+    if (firstDelivered) {
+        existing.duplicates++;
+        return { handled: true, success: true };
+    }
+    // Delivery of the prior in-flight entry failed. Clean it up before retrying.
+    _cleanDedupeEntry(key, existing);
+    return { handled: false };
+}
+
+function _armDedupeTimer(key, entry, ttlMs) {
+    entry.timer = setTimeout(() => {
+        if (routineDedupe.get(key) === entry) {
+            routineDedupe.delete(key);
+        }
+        if (entry.duplicates > 0) {
+            sendWebhook(entry.target, buildDuplicateSummaryPayload(entry, ttlMs), entry.options).catch(() => {});
+        }
+    }, ttlMs);
+    entry.timer.unref?.();
+}
+
+async function _dispatchDedupeEntry(key, entry, target, payload, options, ttlMs) {
+    routineDedupe.set(key, entry);
+    trimRoutineDedupe();
+
+    let sent = false;
+    try {
+        const sendPromise = sendWebhook(target, payload, options);
+        entry.pending = sendPromise;
+        sent = await sendPromise;
+    } catch {
+        sent = false;
+    }
+
+    if (!sent) {
+        _cleanDedupeEntry(key, entry);
+        return false;
+    }
+
+    _armDedupeTimer(key, entry, ttlMs);
+    return true;
+}
+
 async function sendDedupedWebhook(target, payload, options) {
     const baseKey = truncate(options.dedupeKey, 200) || "routine-event";
     const key = `${dedupeDestinationKey(target, options)}:${baseKey}`;
@@ -1025,22 +1129,8 @@ async function sendDedupedWebhook(target, payload, options) {
     while (attempts++ < 3) {
         const existing = routineDedupe.get(key);
         if (existing) {
-            let firstDelivered = false;
-            try {
-                firstDelivered = await existing.pending;
-            } catch {
-                firstDelivered = false;
-            }
-            if (firstDelivered) {
-                existing.duplicates++;
-                return true;
-            }
-            // Delivery of the prior in-flight entry failed. Ensure the failed entry is removed
-            // before trying again to prevent infinite recursion and stale map references.
-            if (routineDedupe.get(key) === existing) {
-                if (existing.timer) clearTimeout(existing.timer);
-                routineDedupe.delete(key);
-            }
+            const result = await _handleExistingDedupe(key, existing);
+            if (result.handled) return result.success;
             continue;
         }
 
@@ -1054,35 +1144,8 @@ async function sendDedupedWebhook(target, payload, options) {
             options,
             pending: null
         };
-        routineDedupe.set(key, entry);
-        trimRoutineDedupe();
 
-        let sent = false;
-        try {
-            entry.pending = sendWebhook(target, payload, options);
-            sent = await entry.pending;
-        } catch {
-            sent = false;
-        }
-
-        if (!sent) {
-            if (routineDedupe.get(key) === entry) {
-                if (entry.timer) clearTimeout(entry.timer);
-                routineDedupe.delete(key);
-            }
-            return false;
-        }
-
-        entry.timer = setTimeout(() => {
-            if (routineDedupe.get(key) === entry) {
-                routineDedupe.delete(key);
-            }
-            if (entry.duplicates > 0) {
-                sendWebhook(entry.target, buildDuplicateSummaryPayload(entry, ttlMs), entry.options).catch(() => {});
-            }
-        }, ttlMs);
-        entry.timer.unref?.();
-        return true;
+        return _dispatchDedupeEntry(key, entry, target, payload, options, ttlMs);
     }
 
     return false;
@@ -1223,6 +1286,9 @@ module.exports = {
         normalizeEventContextText,
         escapeDiscordMarkdown,
         buildEventFields,
-        buildWebhookEventTitle
+        buildWebhookEventTitle,
+        resolveWebhookEventColor,
+        LOG_CATEGORY_COLORS,
+        LOG_CATEGORY_EMOJIS
     }
 };

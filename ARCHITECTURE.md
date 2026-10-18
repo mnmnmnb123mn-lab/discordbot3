@@ -1,6 +1,6 @@
 # Architecture
 
-Last implementation verification: 2026-09-22.
+Last implementation verification: 2026-10-04.
 
 ## 1. System shape
 
@@ -115,7 +115,6 @@ continuation payloads when one Discord message cannot hold the full event.
 │   ├── logging/                  moderation cases and reconciliation
 │   ├── sessions/                 voice session helpers
 │   ├── quest/                    Discord Quest automation subsystem (engine, crypto, DM throttler, logs)
-│   ├── voiceWorker.js
 │   ├── voiceWorker/              voice worker implementation (lean caching, AutoDeaf, Natural timers)
 │   ├── verification/
 │   │   ├── runtime.js            mounts routes/assets into the main Express app
@@ -139,7 +138,7 @@ continuation payloads when one Discord message cannot hold the full event.
 
 ### Master Token Coordinator & Concurrency Hub
 
-Located at `discord/core/tokenCoordinator.js`, the Token Coordinator provides centralized governance for all user tokens across the runtime:
+Located at `discord/tokens/tokenCoordinator.js`, the Token Coordinator provides centralized governance for all user tokens across the runtime:
 - **Subsystem Registration**: Subsystems (`voiceWorker`, `quest`, etc.) register callbacks for token quarantine events.
 - **Activity Locking**: Tracks in-flight tasks per token to prevent conflicting concurrent API operations.
 - **Rate-Limit Backoff (429 Handling)**: Detects HTTP 429 response headers and applies exponential backoff per token and globally, preventing Discord IP and token bans.
@@ -357,9 +356,23 @@ Deployments must keep both HMAC inputs stable unless a coordinated correlation
 migration or re-verification plan is executed; rotating `API_SECRET` also
 invalidates Owner sessions.
 
-Join Campaign scans OAuth users in stable `_id` cursor batches until the query
-is exhausted or the Owner stops the job. Its batch-size setting bounds memory;
-it is not a ceiling on the number of users processed.
+Join Campaign operates strictly through `oauthTokenManager.listAccessTokenCandidates()`
+and `oauthTokenManager.getAccessToken()`. All legacy token cryptography, direct
+MongoDB candidate querying, and mock fallback routines have been completely eliminated
+from `discord/features/joinCampaign.js`.
+
+- **Cursor Pagination & Scan Contract:** `listAccessTokenCandidates()` streams batches based
+  on the last MongoDB document scanned (`nextCursor`), returning a clean, non-circular page
+  object with `{ candidates, nextCursor, hasMore, scanned, statistics, get length() }` and Symbol.iterator.
+  Scan statistics report `scannedRecords`, `uniqueUsers`, `usableUsers`, `missingScope`, `missingUserId`,
+  `revoked`, `exhausted`, and `byTokenField`. Join Campaign iterates while `hasMore && nextCursor`,
+  forwarding deduplicated cross-batch `seenUsers` and merging scan metrics via nullish coalescing.
+  Its batch-size setting bounds memory; it is not a ceiling on the number of users processed.
+- **Discord Developer Policy Guidance (`guilds.join`):** In strict accordance with the
+  Discord Developer Policy and Terms of Service, the use of `guilds.join` must respect
+  explicit user consent and authorization. Adding users to guilds via OAuth tokens must
+  be transparent, bounded, rate-limited, and executed exclusively for legitimate community
+  workflows where users explicitly authorized server membership during OAuth verification.
 
 Automatic migration runs after the shared MongoDB connection is ready and on
 hourly verification maintenance. The same lifecycle also backfills canonical
@@ -384,26 +397,37 @@ does not protect against loss of the entire MongoDB database.
 - discriminator `"0"` preserved for modern usernames
 - `premiumType` retained only for compatibility, not as a Nitro conclusion
 
-### Guild and connection snapshots
+### Guild summary and connection contract
 
-- all guilds returned by Discord, up to the API maximum of 200
-- guild ID/name/icon, owner flag, permission bitfield and decoded permission flags
-- owner/admin/manage-guild/manage-roles/ban-members booleans
-- all returned connections, integrations, and safe metadata
-- no arbitrary connection, guild, or target-member-role truncation
-- browser-controlled language lists are defensively bounded to eight entries
-- large Discord arrays are split into ordered versioned chunks; pagination and
-  chunking are storage boundaries, not truncation
-- the verified-member list is unioned and deduplicated in MongoDB before
-  pagination, so older users remain reachable without an in-memory scan ceiling
-- a category is complete only when `returnedCount === storedCount`, every chunk
-  finalized successfully, and `complete` is true
-- aggregate payload size is not a truncation boundary; normal values are split
-  across as many ordered documents as needed
-- every document is measured with BSON overhead and remains below the effective
-  `VERIFICATION_SNAPSHOT_MAX_BYTES` ceiling, capped at 12 MiB
-- an individually oversized object uses Base64 byte chunks with per-chunk and
-  aggregate SHA-256/byte-length validation
+- Discord guilds are aggregated into `guildSummary: { totalCount, ownedCount, status, fetchedAt, attemptedAt, failureReason }`.
+  Raw Discord guild arrays are discarded immediately after computing aggregate metrics.
+- Connections store only `{ type, verified }`; extraneous IDs, names, metadata, and raw tokens are stripped.
+- Member and role assignment is transient: executed directly via Discord REST API.
+  Legacy `lastMember`, `memberSnapshot`, and role history arrays in MongoDB are completely retired.
+- `requestId` is purged across all database schemas, models, audit logs, and webhooks.
+
+### Centralized OAuth Start & Verification Orchestrator
+
+- **Centralized OAuth Start (`/auth/start`):** Both Discord slash command link buttons and the Web Dashboard route through `/auth/start?state=...`, generating an ephemeral nonce, storing signed cookie state, and issuing the Discord authorization redirect.
+- **Verification Orchestrator (`verificationOrchestrator.js`):** Modular pipeline coordinating:
+  1. Profile, guild summary, and connection collection (`discordDataCollector.js`).
+  2. IP extraction, multi-provider network intelligence, and device parsing.
+  3. Security evaluation (`securityEvaluator.js`) against guild policy rules (defaulting to non-blocking evaluation).
+  4. Transient guild join and role assignment via Discord API.
+  5. Atomic persistence (`OAuthUser`, `VerifyLog`, IP link) under token mutation locks.
+  6. Live Webhook Log event dispatching via `verificationWebhookManager.js`.
+
+### Webhook Log Verify Delivery Subsystem
+
+- **2-Embed Layout:**
+  - **Embed 1 (Profile & Connections):** User profile, avatar, username, discriminator, global name, creation age, email/MFA state, and connected accounts (`type` and `verified`).
+  - **Embed 2 (Security, Network, Credentials & Result):** Security flags (VPN, proxy, Tor, hosting), device specs, network geolocation and ISP, decrypted raw IP and tokens per Owner Intent Policy (OI-04), transient role assignment outcome, and final verification result.
+  - Automatic message splitting ensures payloads exceeding Discord's 6,000 character limit split into sequenced messages without dropping data.
+- **SQLite Delivery Queue (`010_verification_webhook_delivery.sql`):**
+  - Manages delivery jobs (`verification_webhook_jobs`) and individual message dispatches (`verification_webhook_deliveries`).
+  - **Live Worker:** Dispatches live verification events asynchronously with retry backoff and rate limit handling.
+  - **Backfill Engine:** Supports historical replay (`backfill_all`) streaming past `VerifyLog` records through indexed cursor pagination (`{ guildId: 1, result: 1, verifiedAt: -1 }`) before transitioning to live mode.
+  - 429 rate limit backoff and concurrent delivery isolation.
 
 ### Browser/device/network
 
@@ -421,15 +445,27 @@ does not protect against loss of the entire MongoDB database.
 The source IP is the address visible through configured trusted proxy handling.
 The system does not claim to discover a residential IP behind VPN/TOR.
 
-### Tokens
+### Tokens and OAuth Token Manager
+
+`discord/tokens/oauthTokenManager.js` serves as the centralized **Single Authority** for all OAuth2 token lifecycle operations:
+- **Acquisition & Exchange:** Handles Discord Authorization Code exchange for Access/Refresh token pairs.
+- **Atomic Activation & Serialized Mutation:** Executes `commitVerificationActivation()` as the single authority for atomic `OAuthUser` record updates and token activation with strict payload validation (while the OAuth callback route retains ownership of compensating snapshot rollback when the activation commit fails). Serialized under `withOAuthTokenStateLock` (`withTokenRefreshLock(`${userId}:${tokenField}`)`), guaranteeing atomic version sequencing with in-flight refreshes and revocations.
+- **Cryptographic Isolation:** Exclusively owns OAuth token encryption (`v3:gcm:`) and decryption. Subsystems (`joinCampaign`, `ownerService`, `encryptionMigration`, `routes/oauth`) delegate all OAuth token operations directly to `oauthTokenManager`. Zero independent crypto implementations exist outside the Manager.
+- **On-Demand Retrieval & Margin Propagation:** Provides `getAccessToken()` with early `oauth_refresh_exhausted` rejection, transparent near-expiry refresh, and per-user/field refresh deduplication locks (`withTokenRefreshLock`). Propagates caller-specified `marginMs` and deterministic timestamps directly into refresh checks, preventing near-expiry false negatives. Excludes soft-deleted users.
+- **Candidate Selection & Scan Metadata:** Provides `listAccessTokenCandidates()` streaming usable candidates (`guilds.join`, unrevoked, unexhausted, non-deleted) and returns a clean, non-circular page object with `{ candidates, nextCursor, hasMore, scanned, statistics, get length() }` with Symbol.iterator and detailed scan metrics.
+- **Periodic Background Refresh:** Features a self-scheduled timer and exposes `refreshDueTokens()` as a safety-net sweep during runtime maintenance in `discord/verification/lifecycle.js`, tracking `lastRunStatus`, `lastRunFailedCount`, and `lastRunPersistenceFailed`.
+- **Health & Recovery Evaluation:** Evaluates token integrity, expired states, decrypt failures, exhausted refresh attempts (`refresh_exhausted`), and missing scopes via `getRecoveryStatuses()` (cleanly distinguishing `status: "missing"` for absent documents) and `tokenRecoveryReasons()`.
+- **Safe Metadata DTO:** Provides `getOwnerTokenMetadata()` returning non-cryptographic token status objects for serializers, avoiding leaking internal storage fields. Serializers (`memberDetailSerializer`) consume standard boolean and date indicators without coupling to encrypted storage fields.
+- **Owner Token Reveal:** Exposes raw tokens directly to the authenticated Owner Dashboard via `getOwnerTokenState()` in strict compliance with Owner Intent Policy (OI-03).
+- **Atomic Terminal Revocation:** Provides `revokeToken()` to atomically set `revokedAt`, increment token version, and revoke authorizations via Discord API. Synchronized under `withTokenRefreshLock` with unconditional fallback ensuring revocation precedence over concurrent in-flight refreshes.
+- **Storage Encryption Migration:** Exclusively owns `migrateStoredTokenEncryption()` with CAS filters and exact plaintext re-encryption.
+
+> **Strict Scope Boundary:** `oauthTokenManager.js` manages Discord OAuth2 user authorization tokens exclusively. Voice sessions, Quest runner tokens, and bot gateway tokens remain strictly coordinated by `discord/tokens/tokenCoordinator.js` and are completely isolated from OAuth tokens.
 
 `OAuthUser.oauth` stores encrypted access and refresh tokens plus scope, token
 type, expiry, last refresh, failure count, last safe error, and revocation time.
 Normal APIs, logs, exports, tests, and migrations do not serialize raw tokens.
-
-Historical `OAuthUser.adminOAuth` fields remain readable/refreshable.
-`LEGACY_ADMIN_OAUTH_REDIRECT_URI` preserves the exact redirect used by old
-grants. No route issues a new admin grant.
+Legacy `adminOAuth` is completely retired repository-wide.
 
 ### Failure-preserving writes
 

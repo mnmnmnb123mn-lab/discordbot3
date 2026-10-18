@@ -48,13 +48,13 @@ const diagnostics = {
 };
 
 function parseMinutes(envVar, defaultMinutes) {
-    const val = parseInt(process.env[envVar], 10);
-    return !isNaN(val) && val > 0 ? val : defaultMinutes;
+    const val = Number.parseInt(process.env[envVar], 10);
+    return !Number.isNaN(val) && val > 0 ? val : defaultMinutes;
 }
 
 function parseHours(envVar, defaultHours) {
-    const val = parseInt(process.env[envVar], 10);
-    return !isNaN(val) && val > 0 ? val : defaultHours;
+    const val = Number.parseInt(process.env[envVar], 10);
+    return !Number.isNaN(val) && val > 0 ? val : defaultHours;
 }
 
 async function runWalCheckpoint() {
@@ -69,7 +69,7 @@ async function runWalCheckpoint() {
 
     try {
         const res = await executeSqliteAction("checkpoint", {}, "system_scheduler");
-        if (res && res.ok) {
+        if (res?.ok) {
             diagnostics.wal.lastStatus = "success";
             diagnostics.wal.lastError = null;
             diagnostics.wal.runCount++;
@@ -102,7 +102,7 @@ async function runCleanup() {
     try {
         // 1. Cleanup database expired records (nonces, history)
         const res = await executeSqliteAction("cleanup_all", {}, "system_scheduler");
-        if (!res || !res.ok) {
+        if (!res?.ok) {
             diagnostics.cleanup.lastStatus = "error";
             const errDetail = res?.message || res?.error || "Unknown cleanup error";
             diagnostics.cleanup.lastError = errDetail;
@@ -144,7 +144,7 @@ async function runVacuum() {
 
     try {
         const res = await executeSqliteAction("vacuum", {}, "system_scheduler");
-        if (res && res.ok) {
+        if (res?.ok) {
             diagnostics.vacuum.lastStatus = "success";
             diagnostics.vacuum.lastError = null;
             diagnostics.vacuum.runCount++;
@@ -175,9 +175,9 @@ async function runAutoBackup() {
     diagnostics.backup.lastStatus = "running";
 
     try {
-        const retention = parseInt(process.env.SQLITE_BACKUP_RETENTION, 10) || 2;
+        const retention = Number.parseInt(process.env.SQLITE_BACKUP_RETENTION, 10) || 2;
         const res = await executeSqliteAction("backup", { retention }, "system_scheduler");
-        if (res && res.ok) {
+        if (res?.ok) {
             diagnostics.backup.lastStatus = "success";
             diagnostics.backup.lastError = null;
             diagnostics.backup.runCount++;
@@ -247,6 +247,174 @@ async function runAutoBackup() {
     }
 }
 
+function sendEmergencyOutcomeWebhook(trim, initialReason, isResolved) {
+    try {
+        const severity = isResolved ? "SUCCESS" : "WARNING";
+        const code = isResolved ? "sqlite.emergency.resolved" : "sqlite.emergency.warning_cleared";
+        const title = isResolved
+            ? "🟢 ระบบฐานข้อมูล SQLite คืนสู่สภาวะปกติสมบูรณ์แล้ว"
+            : "🟡 ภาวะวิกฤตลดระดับสู่เกณฑ์เฝ้าระวัง (Soft Warning)";
+        const description = isResolved
+            ? "Emergency Auto-Trim ดำเนินการสำเร็จ และระดับพื้นที่จัดเก็บกลับเข้าสู่เกณฑ์ปลอดภัยสมบูรณ์ (Safe/OK)"
+            : "Emergency Auto-Trim สามารถคืนพื้นที่บางส่วนได้ แต่ระดับพื้นที่จัดเก็บยังอยู่ในเกณฑ์เฝ้าระวัง (Soft Quota) ยังไม่กลับสู่สถานะปกติสมบูรณ์";
+
+        sendWebhookEvent({
+            target: "ALERT",
+            severity,
+            category: "DATA",
+            code,
+            title,
+            description,
+            context: {
+                "สาเหตุที่เกิด": initialReason || "Storage critical",
+                "พื้นที่ที่คืนได้": `${trim.freedMb} MB`,
+                "จำนวนรายการที่ลบ": `${trim.itemsPurged?.totalItems || 0} รายการ`,
+                "ขนาดก่อน ➔ หลัง": `${trim.preFootprint?.totalMb} MB ➔ ${trim.postFootprint?.totalMb} MB`,
+                "สถานะล่าสุด": isResolved ? "OK" : "SOFT WARNING",
+                "ระยะเวลาดำเนินการ": `${trim.durationMs} ms`
+            }
+        }).catch(() => {});
+    } catch (_err) {
+        // Ignored: Alert webhook sending is best-effort
+    }
+}
+
+async function _performQuickIntegrityCheck(start, dbPath) {
+    if ((start - lastQuickIntegrityCheckAt) < QUICK_INTEGRITY_INTERVAL_MS) {
+        return;
+    }
+    lastQuickIntegrityCheckAt = start;
+    try {
+        const { getDatabase } = require("../connection");
+        const db = getDatabase();
+        if (db?.open) {
+            const quickRows = db.pragma("quick_check(1)");
+            const quickOk = quickRows.length === 1 && (quickRows[0].quick_check === "ok" || quickRows[0] === "ok");
+            if (!quickOk && canSendAlert("sqlite_integrity_corrupted")) {
+                recordAlertSent("sqlite_integrity_corrupted");
+                sendWebhookEvent({
+                    target: "ALERT",
+                    severity: "CRITICAL",
+                    category: "DATA",
+                    code: "sqlite.integrity.corrupted",
+                    title: "🚨 ตรวจพบความเสียหายในไฟล์ฐานข้อมูล SQLite (Integrity Corrupted)",
+                    description: "ระบบ Background Scheduler ตรวจพบความผิดปกติของโครงสร้างไฟล์ฐานข้อมูล SQLite ระหว่างการตรวจสอบประจำรอบ",
+                    context: {
+                        "ผลการตรวจสอบ": JSON.stringify(quickRows),
+                        "ไฟล์ฐานข้อมูล": dbPath,
+                        "เวลาที่เกิด": new Date().toISOString()
+                    }
+                }).catch(() => {});
+            }
+        }
+    } catch (err) {
+        // Best-effort integrity corruption alert delivery
+        console.warn(`[DB_SCHEDULER] ⚠️ Quick integrity check or alert delivery warning: ${err.message}`);
+    }
+}
+
+function _aggregateBufferCount() {
+    try {
+        const { getVoiceEventRepository } = require("../repositories/history/VoiceEventRepository");
+        const { getCommandEventRepository } = require("../repositories/history/CommandEventRepository");
+        const { getSessionEventRepository } = require("../repositories/history/SessionEventRepository");
+        const vBuf = getVoiceEventRepository()?.getBufferStats()?.bufferedCount || 0;
+        const cBuf = getCommandEventRepository()?.getBufferStats()?.bufferedCount || 0;
+        const sBuf = getSessionEventRepository()?.getBufferStats()?.bufferedCount || 0;
+        return vBuf + cBuf + sBuf;
+    } catch (err) {
+        // Best-effort inspection: history repositories might not be initialized yet during early boot.
+        // Return 0 so metric inspection failure does not disrupt the emergency evaluation loop.
+        console.debug?.(`[DB_SCHEDULER] Buffer inspection unavailable: ${err.message}`);
+        return 0;
+    }
+}
+
+async function _handleStorageEmergency(evalResult) {
+    diagnostics.emergency.lastStatus = "storage_critical";
+    const eventKey = "sqlite_emergency_storage";
+
+    if (canSendAlert(eventKey)) {
+        recordAlertSent(eventKey);
+        try {
+            const storageReasons = evalResult.reasons.filter(r => !r.includes("Write-behind"));
+            const reasonList = storageReasons.map(r => `• ${r}`).join("\n");
+            sendWebhookEvent({
+                target: "ALERT",
+                severity: "CRITICAL",
+                category: "DATA",
+                code: "sqlite.emergency.critical",
+                title: "🚨 ตรวจพบภาวะวิกฤตพื้นที่จัดเก็บ SQLite (Storage Critical)",
+                description: `ระบบตรวจพบพื้นที่จัดเก็บบนดิสก์เกินเกณฑ์วิกฤต กำลังเริ่ม Emergency Auto-Trim อัตโนมัติ เพื่อล้างข้อมูลหมดอายุและคืนพื้นที่ดิสก์:\n${reasonList}`,
+                context: {
+                    "ขนาด Footprint": `${evalResult.quota?.footprint?.totalMb ?? "N/A"} MB`,
+                    "เพดานวิกฤต": `${evalResult.quota?.limits?.critMb ?? "N/A"} MB`,
+                    "ขนาดไฟล์ WAL": `${evalResult.walMb} MB`,
+                    "สถานะระบบ": evalResult.quota?.status?.toUpperCase() || "UNKNOWN"
+                }
+            }).catch(() => {});
+        } catch (_err) {
+            // Ignored: Alert webhook sending is best-effort
+        }
+    }
+
+    // Execute Emergency Auto-Trim strictly on physical storage emergency
+    const trimResult = await executeSqliteAction("emergency_trim", {
+        reason: evalResult.reasons.join("; ")
+    }, "system_auto_emergency");
+
+    if (trimResult?.ok) {
+        const trim = trimResult.trimResult || {};
+        if (trim.isResolved) {
+            diagnostics.emergency.lastStatus = "resolved";
+            sendEmergencyOutcomeWebhook(trim, evalResult.reasons[0], true);
+        } else if (trim.postStatus === "soft" || trim.isSoftWarning) {
+            diagnostics.emergency.lastStatus = "soft_warning";
+            sendEmergencyOutcomeWebhook(trim, evalResult.reasons[0], false);
+        } else {
+            diagnostics.emergency.lastStatus = "degraded";
+        }
+    }
+}
+
+function _handleBufferEmergency(evalResult) {
+    if (!evalResult.isStorageEmergency) {
+        diagnostics.emergency.lastStatus = "buffer_pressure";
+    }
+    const bufferKey = "sqlite_emergency_buffer";
+    if (canSendAlert(bufferKey)) {
+        recordAlertSent(bufferKey);
+        try {
+            sendWebhookEvent({
+                target: "ALERT",
+                severity: "WARNING",
+                category: "DATA",
+                code: "sqlite.buffer.critical",
+                title: "🟠 ตรวจพบภาวะแรงกดดันคิวพักข้อมูล Telemetry Buffer (Buffer Pressure)",
+                description: `คิวพักข้อมูล Write-Behind ใน RAM มีขนาดสะสมเกินเกณฑ์วิกฤต (${evalResult.writeBufferCount} รายการ) ระบบดำเนินการระบายข้อมูล (Drain Flush) และเปิดใช้งาน Priority Eviction โดยไม่แตะต้องหรือลบแคชไฟล์บนดิสก์`,
+                context: {
+                    "จำนวน Buffer ใน RAM": `${evalResult.writeBufferCount} รายการ`,
+                    "เพดานวิกฤต": `${evalResult.bufferThreshold} รายการ`,
+                    "มาตรการ": "Active Queue Drain Flush + Priority Eviction (No Disk Trim)"
+                }
+            }).catch(() => {});
+        } catch (_err) {
+            // Ignored: Alert webhook sending is best-effort
+        }
+    }
+
+    try {
+        const { getVoiceEventRepository } = require("../repositories/history/VoiceEventRepository");
+        const { getCommandEventRepository } = require("../repositories/history/CommandEventRepository");
+        const { getSessionEventRepository } = require("../repositories/history/SessionEventRepository");
+        getVoiceEventRepository()?.flush();
+        getCommandEventRepository()?.flush();
+        getSessionEventRepository()?.flush();
+    } catch (flushErr) {
+        console.warn(`[DB_SCHEDULER] ⚠️ Buffer drain flush warning: ${flushErr.message}`);
+    }
+}
+
 async function runEmergencyEvaluation() {
     if (isEmergencyRunning) return;
     isEmergencyRunning = true;
@@ -255,173 +423,18 @@ async function runEmergencyEvaluation() {
 
     try {
         const dbPath = getCurrentDbPath() || resolveDbPath();
+        await _performQuickIntegrityCheck(start, dbPath);
 
-        // Check quick integrity periodically (every 20 minutes) rather than on every 2-minute cycle
-        if ((start - lastQuickIntegrityCheckAt) >= QUICK_INTEGRITY_INTERVAL_MS) {
-            lastQuickIntegrityCheckAt = start;
-            try {
-                const { getDatabase } = require("../connection");
-                const db = getDatabase();
-                if (db && db.open) {
-                    const quickRows = db.pragma("quick_check(1)");
-                    const quickOk = quickRows.length === 1 && (quickRows[0].quick_check === "ok" || quickRows[0] === "ok");
-                    if (!quickOk && canSendAlert("sqlite_integrity_corrupted")) {
-                        recordAlertSent("sqlite_integrity_corrupted");
-                        sendWebhookEvent({
-                            target: "ALERT",
-                            severity: "CRITICAL",
-                            category: "DATA",
-                            code: "sqlite.integrity.corrupted",
-                            title: "🚨 ตรวจพบความเสียหายในไฟล์ฐานข้อมูล SQLite (Integrity Corrupted)",
-                            description: "ระบบ Background Scheduler ตรวจพบความผิดปกติของโครงสร้างไฟล์ฐานข้อมูล SQLite ระหว่างการตรวจสอบประจำรอบ",
-                            context: {
-                                "ผลการตรวจสอบ": JSON.stringify(quickRows),
-                                "ไฟล์ฐานข้อมูล": dbPath,
-                                "เวลาที่เกิด": new Date().toISOString()
-                            }
-                        }).catch(() => {});
-                    }
-                }
-            } catch (_) {}
-        }
-
-        // Aggregate write buffer counts from history repositories
-        let totalBufferCount = 0;
-        try {
-            const { getVoiceEventRepository } = require("../repositories/history/VoiceEventRepository");
-            const { getCommandEventRepository } = require("../repositories/history/CommandEventRepository");
-            const { getSessionEventRepository } = require("../repositories/history/SessionEventRepository");
-            const vBuf = getVoiceEventRepository()?.getBufferStats()?.bufferedCount || 0;
-            const cBuf = getCommandEventRepository()?.getBufferStats()?.bufferedCount || 0;
-            const sBuf = getSessionEventRepository()?.getBufferStats()?.bufferedCount || 0;
-            totalBufferCount = vBuf + cBuf + sBuf;
-        } catch (_) {}
-
+        const totalBufferCount = _aggregateBufferCount();
         const evalResult = evaluateEmergencyThresholds(dbPath, { writeBufferCount: totalBufferCount });
 
         if (evalResult.isEmergency) {
             diagnostics.emergency.incidentCount++;
-
-            // 1. Storage Emergency Alert & Auto-Trim Execution (Physical Disk Exhaustion)
             if (evalResult.isStorageEmergency) {
-                diagnostics.emergency.lastStatus = "storage_critical";
-                const eventKey = "sqlite_emergency_storage";
-                const alertAllowed = canSendAlert(eventKey);
-
-                if (alertAllowed) {
-                    recordAlertSent(eventKey);
-                    try {
-                        const storageReasons = evalResult.reasons.filter(r => !r.includes("Write-behind"));
-                        sendWebhookEvent({
-                            target: "ALERT",
-                            severity: "CRITICAL",
-                            category: "DATA",
-                            code: "sqlite.emergency.critical",
-                            title: "🚨 ตรวจพบภาวะวิกฤตพื้นที่จัดเก็บ SQLite (Storage Critical)",
-                            description: `ระบบตรวจพบพื้นที่จัดเก็บบนดิสก์เกินเกณฑ์วิกฤต กำลังเริ่ม Emergency Auto-Trim อัตโนมัติ เพื่อล้างข้อมูลหมดอายุและคืนพื้นที่ดิสก์:\n${storageReasons.map(r => `• ${r}`).join("\n")}`,
-                            context: {
-                                "ขนาด Footprint": `${evalResult.quota.footprint.totalMb} MB`,
-                                "เพดานวิกฤต": `${evalResult.quota.limits.critMb} MB`,
-                                "ขนาดไฟล์ WAL": `${evalResult.walMb} MB`,
-                                "สถานะระบบ": evalResult.quota.status.toUpperCase()
-                            }
-                        }).catch(() => {});
-                    } catch (_) {}
-                }
-
-                // Execute Emergency Auto-Trim strictly on physical storage emergency
-                const trimResult = await executeSqliteAction("emergency_trim", {
-                    reason: evalResult.reasons.join("; ")
-                }, "system_auto_emergency");
-
-                if (trimResult && trimResult.ok) {
-                    const trim = trimResult.trimResult || {};
-                    if (trim.isResolved) {
-                        diagnostics.emergency.lastStatus = "resolved";
-                        // Send RESOLVED Webhook alert (strictly when post-quota is ok)
-                        try {
-                            sendWebhookEvent({
-                                target: "ALERT",
-                                severity: "SUCCESS",
-                                category: "DATA",
-                                code: "sqlite.emergency.resolved",
-                                title: "🟢 ระบบฐานข้อมูล SQLite คืนสู่สภาวะปกติสมบูรณ์แล้ว",
-                                description: "Emergency Auto-Trim ดำเนินการสำเร็จ และระดับพื้นที่จัดเก็บกลับเข้าสู่เกณฑ์ปลอดภัยสมบูรณ์ (Safe/OK)",
-                                context: {
-                                    "สาเหตุที่เกิด": evalResult.reasons[0] || "Storage critical",
-                                    "พื้นที่ที่คืนได้": `${trim.freedMb} MB`,
-                                    "จำนวนรายการที่ลบ": `${trim.itemsPurged?.totalItems || 0} รายการ`,
-                                    "ขนาดก่อน ➔ หลัง": `${trim.preFootprint?.totalMb} MB ➔ ${trim.postFootprint?.totalMb} MB`,
-                                    "สถานะล่าสุด": "OK",
-                                    "ระยะเวลาดำเนินการ": `${trim.durationMs} ms`
-                                }
-                            }).catch(() => {});
-                        } catch (_) {}
-                    } else if (trim.postStatus === "soft" || trim.isSoftWarning) {
-                        diagnostics.emergency.lastStatus = "soft_warning";
-                        // Send WARNING alert: dropped out of critical but still in soft warning state
-                        try {
-                            sendWebhookEvent({
-                                target: "ALERT",
-                                severity: "WARNING",
-                                category: "DATA",
-                                code: "sqlite.emergency.warning_cleared",
-                                title: "🟡 ภาวะวิกฤตลดระดับสู่เกณฑ์เฝ้าระวัง (Soft Warning)",
-                                description: "Emergency Auto-Trim สามารถคืนพื้นที่บางส่วนได้ แต่ระดับพื้นที่จัดเก็บยังอยู่ในเกณฑ์เฝ้าระวัง (Soft Quota) ยังไม่กลับสู่สถานะปกติสมบูรณ์",
-                                context: {
-                                    "สาเหตุที่เกิด": evalResult.reasons[0] || "Storage critical",
-                                    "พื้นที่ที่คืนได้": `${trim.freedMb} MB`,
-                                    "จำนวนรายการที่ลบ": `${trim.itemsPurged?.totalItems || 0} รายการ`,
-                                    "ขนาดก่อน ➔ หลัง": `${trim.preFootprint?.totalMb} MB ➔ ${trim.postFootprint?.totalMb} MB`,
-                                    "สถานะล่าสุด": "SOFT WARNING",
-                                    "ระยะเวลาดำเนินการ": `${trim.durationMs} ms`
-                                }
-                            }).catch(() => {});
-                        } catch (_) {}
-                    } else {
-                        diagnostics.emergency.lastStatus = "degraded";
-                    }
-                }
+                await _handleStorageEmergency(evalResult);
             }
-
-            // 2. Policy B: Telemetry Write-Behind Buffer Pressure Alert & Drain (RAM / Writer Pressure)
-            // Attempt to drain pending events from write-behind buffers via active flush.
-            // Bounded queue priority eviction and webhook alerting are managed within the repositories.
-            // Note: Does NOT trigger Emergency Trim on physical disk assets, because buffer pressure is RAM/writer pressure.
             if (evalResult.isBufferEmergency) {
-                if (!evalResult.isStorageEmergency) {
-                    diagnostics.emergency.lastStatus = "buffer_pressure";
-                }
-                const bufferKey = "sqlite_emergency_buffer";
-                if (canSendAlert(bufferKey)) {
-                    recordAlertSent(bufferKey);
-                    try {
-                        sendWebhookEvent({
-                            target: "ALERT",
-                            severity: "WARNING",
-                            category: "DATA",
-                            code: "sqlite.buffer.critical",
-                            title: "🟠 ตรวจพบภาวะแรงกดดันคิวพักข้อมูล Telemetry Buffer (Buffer Pressure)",
-                            description: `คิวพักข้อมูล Write-Behind ใน RAM มีขนาดสะสมเกินเกณฑ์วิกฤต (${evalResult.writeBufferCount} รายการ) ระบบดำเนินการระบายข้อมูล (Drain Flush) และเปิดใช้งาน Priority Eviction โดยไม่แตะต้องหรือลบแคชไฟล์บนดิสก์`,
-                            context: {
-                                "จำนวน Buffer ใน RAM": `${evalResult.writeBufferCount} รายการ`,
-                                "เพดานวิกฤต": `${evalResult.bufferThreshold} รายการ`,
-                                "มาตรการ": "Active Queue Drain Flush + Priority Eviction (No Disk Trim)"
-                            }
-                        }).catch(() => {});
-                    } catch (_) {}
-                }
-
-                try {
-                    const { getVoiceEventRepository } = require("../repositories/history/VoiceEventRepository");
-                    const { getCommandEventRepository } = require("../repositories/history/CommandEventRepository");
-                    const { getSessionEventRepository } = require("../repositories/history/SessionEventRepository");
-                    getVoiceEventRepository()?.flush();
-                    getCommandEventRepository()?.flush();
-                    getSessionEventRepository()?.flush();
-                } catch (flushErr) {
-                    console.warn(`[DB_SCHEDULER] ⚠️ Buffer drain flush warning: ${flushErr.message}`);
-                }
+                _handleBufferEmergency(evalResult);
             }
         } else {
             diagnostics.emergency.lastStatus = "normal";
@@ -431,6 +444,53 @@ async function runEmergencyEvaluation() {
     } finally {
         isEmergencyRunning = false;
     }
+}
+
+function calculateInitialBackupDelay(backups, intervalMs, now) {
+    // Baseline safety policy: Even if SQLITE_AUTO_BACKUP_INITIAL is not explicitly "true",
+    // if no previous backup exists at all (backups.length === 0), run an initial baseline backup
+    // after 5s to guarantee we always have a restore point before runtime mutations accumulate.
+    const shouldRunInitialBackup = process.env.SQLITE_AUTO_BACKUP_INITIAL === "true" || backups.length === 0;
+    if (shouldRunInitialBackup) {
+        return 5000;
+    }
+    if (backups.length > 0) {
+        const lastBackupTime = backups[0].mtime || now;
+        const elapsed = now - lastBackupTime;
+        if (elapsed >= intervalMs) {
+            return 5000;
+        }
+        return Math.max(5000, intervalMs - elapsed);
+    }
+    return intervalMs;
+}
+
+function scheduleAutoBackup(backupHours) {
+    const intervalMs = backupHours * 60 * 60 * 1000;
+    const backups = listBackups();
+    const now = Date.now();
+    const delayUntilFirstBackup = calculateInitialBackupDelay(backups, intervalMs, now);
+
+    nextScheduledBackupAt = now + delayUntilFirstBackup;
+    console.log(`[DB_SCHEDULER] 💾 Next auto-backup scheduled in ${Math.round(delayUntilFirstBackup / 1000)}s (${(delayUntilFirstBackup / (60 * 60 * 1000)).toFixed(1)}h)`);
+
+    initialBackupTimeoutId = setTimeout(async () => {
+        initialBackupTimeoutId = null;
+        try {
+            await runAutoBackup();
+        } catch (err) {
+            console.error(`[DB_SCHEDULER] ⚠️ Initial scheduled backup failed: ${err.message}`);
+        }
+        nextScheduledBackupAt = Date.now() + intervalMs;
+        backupIntervalId = setInterval(() => {
+            nextScheduledBackupAt = Date.now() + intervalMs;
+            runAutoBackup().catch(err => {
+                console.error(`[DB_SCHEDULER] ⚠️ Auto-backup failed: ${err.message}`);
+            });
+        }, intervalMs);
+        if (backupIntervalId?.unref) backupIntervalId.unref();
+    }, delayUntilFirstBackup);
+    if (initialBackupTimeoutId?.unref) initialBackupTimeoutId.unref();
 }
 
 function startScheduler() {
@@ -463,55 +523,14 @@ function startScheduler() {
     if (vacuumIntervalId.unref) vacuumIntervalId.unref();
 
     if (autoBackupEnabled) {
-        const intervalMs = backupHours * 60 * 60 * 1000;
-        const backups = listBackups();
-        const now = Date.now();
-        // Baseline safety policy: Even if SQLITE_AUTO_BACKUP_INITIAL is not explicitly "true",
-        // if no previous backup exists at all (backups.length === 0), run an initial baseline backup
-        // after 5s to guarantee we always have a restore point before runtime mutations accumulate.
-        const shouldRunInitialBackup = process.env.SQLITE_AUTO_BACKUP_INITIAL === "true" || backups.length === 0;
-
-        let delayUntilFirstBackup = intervalMs;
-        if (shouldRunInitialBackup) {
-            delayUntilFirstBackup = 5000;
-        } else if (backups.length > 0) {
-            const lastBackupTime = backups[0].mtime || now;
-            const elapsed = now - lastBackupTime;
-            if (elapsed >= intervalMs) {
-                // Past interval, run promptly
-                delayUntilFirstBackup = 5000;
-            } else {
-                // Schedule for the remaining time
-                delayUntilFirstBackup = Math.max(5000, intervalMs - elapsed);
-            }
-        }
-
-        nextScheduledBackupAt = now + delayUntilFirstBackup;
-        console.log(`[DB_SCHEDULER] 💾 Next auto-backup scheduled in ${Math.round(delayUntilFirstBackup / 1000)}s (${(delayUntilFirstBackup / (60 * 60 * 1000)).toFixed(1)}h)`);
-
-        initialBackupTimeoutId = setTimeout(async () => {
-            initialBackupTimeoutId = null;
-            try {
-                await runAutoBackup();
-            } catch (err) {
-                console.error(`[DB_SCHEDULER] ⚠️ Initial scheduled backup failed: ${err.message}`);
-            }
-            nextScheduledBackupAt = Date.now() + intervalMs;
-            backupIntervalId = setInterval(() => {
-                nextScheduledBackupAt = Date.now() + intervalMs;
-                runAutoBackup().catch(err => {
-                    console.error(`[DB_SCHEDULER] ⚠️ Auto-backup failed: ${err.message}`);
-                });
-            }, intervalMs);
-            if (backupIntervalId.unref) backupIntervalId.unref();
-        }, delayUntilFirstBackup);
-        if (initialBackupTimeoutId.unref) initialBackupTimeoutId.unref();
+        scheduleAutoBackup(backupHours);
     }
 
     emergencyIntervalId = setInterval(runEmergencyEvaluation, 2 * 60 * 1000);
     if (emergencyIntervalId.unref) emergencyIntervalId.unref();
 
-    console.log(`[DB_SCHEDULER] 🕒 Background Maintenance Scheduler started (WAL=${walMinutes}m, Cleanup=${cleanupMinutes}m, Vacuum=${vacuumMinutes}m, EmergencyCheck=2m, AutoBackup=${autoBackupEnabled ? `${backupHours}h` : "disabled"})`);
+    const autoBackupStr = autoBackupEnabled ? `${backupHours}h` : "disabled";
+    console.log(`[DB_SCHEDULER] 🕒 Background Maintenance Scheduler started (WAL=${walMinutes}m, Cleanup=${cleanupMinutes}m, Vacuum=${vacuumMinutes}m, EmergencyCheck=2m, AutoBackup=${autoBackupStr})`);
 }
 
 function stopScheduler() {
@@ -553,21 +572,30 @@ function hasRunningTasks() {
 }
 
 async function drainSchedulerTasks(timeoutMs = null) {
-    const configuredTimeout = parseInt(process.env.SQLITE_SHUTDOWN_DRAIN_TIMEOUT_MS, 10);
+    const configuredTimeout = Number.parseInt(process.env.SQLITE_SHUTDOWN_DRAIN_TIMEOUT_MS, 10);
     const defaultTimeout = hasCriticalRunningTasks() ? 60000 : 30000;
+    let fallbackTimeout = defaultTimeout;
+    if (!Number.isNaN(configuredTimeout) && configuredTimeout > 0) {
+        fallbackTimeout = configuredTimeout;
+    }
     const effectiveTimeoutMs = (typeof timeoutMs === "number" && timeoutMs > 0)
         ? timeoutMs
-        : (!isNaN(configuredTimeout) && configuredTimeout > 0 ? configuredTimeout : defaultTimeout);
+        : fallbackTimeout;
 
     if (hasCriticalRunningTasks()) {
         console.log(`[DB_SCHEDULER] ⏳ Waiting for critical database backup to finish before shutdown (timeout: ${effectiveTimeoutMs}ms)...`);
     }
 
     const start = Date.now();
-    while (hasRunningTasks() && (Date.now() - start) < effectiveTimeoutMs) {
+    // Intentional sequential polling: wait for in-flight database maintenance tasks to drain before process exit
+    const pollDrain = async () => {
+        if (!hasRunningTasks() || (Date.now() - start) >= effectiveTimeoutMs) {
+            return !hasRunningTasks();
+        }
         await new Promise(r => setTimeout(r, 50));
-    }
-    return !hasRunningTasks();
+        return pollDrain();
+    };
+    return pollDrain();
 }
 
 function triggerEmergencyEvaluation(reason = "event_triggered") {

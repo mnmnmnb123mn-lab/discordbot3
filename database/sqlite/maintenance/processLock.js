@@ -8,8 +8,9 @@ function isPidAlive(pid) {
     try {
         process.kill(pid, 0);
         return true;
-    } catch (_) {
-        return false;
+    } catch (err) {
+        // EPERM indicates process is alive under another user; ESRCH indicates dead process
+        return err.code === "EPERM";
     }
 }
 
@@ -21,8 +22,35 @@ function getRestoreLockFilePath(dbPath) {
     return `${path.resolve(dbPath)}.restore.lock`;
 }
 
-function isProcessLockActive(dbPath) {
-    const lockPath = getLockFilePath(dbPath);
+function _tryUnlinkLock(filePath, errorDesc) {
+    try {
+        fs.unlinkSync(filePath);
+        return true;
+    } catch (unlinkErr) {
+        if (unlinkErr.code !== "ENOENT") {
+            console.warn(`[PROCESS_LOCK] ⚠️ Could not remove ${errorDesc}: ${unlinkErr.message}`);
+        }
+        return false;
+    }
+}
+
+function _handleCorruptLock(filePath, readErr, lockType) {
+    console.warn(`[PROCESS_LOCK] ⚠️ Corrupt JSON in ${lockType} lock file: ${readErr.message}`);
+    _tryUnlinkLock(filePath, `corrupt ${lockType} lock during active check`);
+    return { active: false, stale: true, corrupt: true };
+}
+
+function _handleFilesystemError(readErr, lockType) {
+    console.error(`[PROCESS_LOCK] 🚨 Failed to inspect ${lockType} lock due to filesystem error: ${readErr.message}`);
+    return {
+        active: true,
+        indeterminate: true,
+        error: readErr.message,
+        code: readErr.code
+    };
+}
+
+function _checkLockActiveState(lockPath, lockType, includeOldPid = false) {
     if (!fs.existsSync(lockPath)) return { active: false };
 
     try {
@@ -36,12 +64,23 @@ function isProcessLockActive(dbPath) {
             };
         }
         // Stale lock: PID is no longer alive
-        try { fs.unlinkSync(lockPath); } catch (_) {}
-        return { active: false, stale: true, oldPid: data.pid };
-    } catch (_) {
-        try { fs.unlinkSync(lockPath); } catch (_) {}
-        return { active: false };
+        _tryUnlinkLock(lockPath, `stale ${lockType} lock during active check`);
+        const result = { active: false, stale: true };
+        if (includeOldPid) result.oldPid = data.pid;
+        return result;
+    } catch (readErr) {
+        if (readErr.code === "ENOENT") {
+            return { active: false };
+        }
+        if (readErr instanceof SyntaxError) {
+            return _handleCorruptLock(lockPath, readErr, lockType);
+        }
+        return _handleFilesystemError(readErr, lockType);
     }
+}
+
+function isProcessLockActive(dbPath) {
+    return _checkLockActiveState(getLockFilePath(dbPath), "process", true);
 }
 
 function tryWriteLockFile(filePath, payload) {
@@ -51,6 +90,68 @@ function tryWriteLockFile(filePath, payload) {
     } catch (err) {
         return { success: false, code: err.code, error: err.message };
     }
+}
+
+const activeLocks = new Set();
+const activeRestoreLocks = new Set();
+
+process.on("exit", () => {
+    for (const lockPath of activeLocks) {
+        try {
+            const raw = fs.readFileSync(lockPath, "utf8");
+            const data = JSON.parse(raw);
+            if (data.pid === process.pid) fs.unlinkSync(lockPath);
+        } catch (_err) {
+            // Process is exiting synchronously; best-effort unlinking of lock files
+        }
+    }
+    for (const restorePath of activeRestoreLocks) {
+        try {
+            const raw = fs.readFileSync(restorePath, "utf8");
+            const data = JSON.parse(raw);
+            if (data.pid === process.pid) fs.unlinkSync(restorePath);
+        } catch (_err) {
+            // Process is exiting synchronously; best-effort unlinking of restore lock files
+        }
+    }
+});
+
+function _inspectAndReclaimLock(lockPath, activeSet, lockType, activeReason, unreadableReason) {
+    try {
+        const raw = fs.readFileSync(lockPath, "utf8");
+        const data = JSON.parse(raw);
+        if (data.pid === process.pid) {
+            activeSet.add(lockPath);
+            return { acquired: true, pid: process.pid };
+        }
+        if (data.pid && isPidAlive(data.pid)) {
+            return {
+                acquired: false,
+                pid: data.pid,
+                createdAt: data.createdAt || null,
+                reason: activeReason
+            };
+        }
+        // Stale lock: PID is dead or invalid
+        _tryUnlinkLock(lockPath, `stale ${lockType} lock file`);
+        return null;
+    } catch (readErr) {
+        if (readErr.code === "ENOENT") {
+            return null;
+        }
+        if (readErr instanceof SyntaxError) {
+            console.warn(`[PROCESS_LOCK] ⚠️ Corrupt JSON in ${lockType} lock file (${readErr.message}), attempting reclamation`);
+            _tryUnlinkLock(lockPath, `corrupt ${lockType} lock file`);
+            return null;
+        }
+        // Permission or filesystem error: Fail closed! Do not delete file or reclaim.
+        console.error(`[PROCESS_LOCK] 🚨 ${lockType} lock file unreadable due to filesystem error (${readErr.message}); refusing to reclaim`);
+        return { acquired: false, reason: unreadableReason, error: readErr.message };
+    }
+}
+
+function inspectAndReclaimProcessLock(lockPath) {
+    return _inspectAndReclaimLock(lockPath, activeLocks, "process", "active_process", "unreadable_lock");
 }
 
 function acquireProcessLock(dbPath) {
@@ -68,34 +169,18 @@ function acquireProcessLock(dbPath) {
     // Attempt 1: Atomic exclusive create
     let writeRes = tryWriteLockFile(lockPath, payload);
     if (writeRes.success) {
+        activeLocks.add(lockPath);
         return { acquired: true, pid: process.pid };
     }
 
     if (writeRes.code === "EEXIST") {
-        // File exists, check if lock is active or stale
-        try {
-            const raw = fs.readFileSync(lockPath, "utf8");
-            const data = JSON.parse(raw);
-            if (data.pid === process.pid) {
-                return { acquired: true, pid: process.pid };
-            }
-            if (data.pid && isPidAlive(data.pid)) {
-                return {
-                    acquired: false,
-                    pid: data.pid,
-                    createdAt: data.createdAt || null,
-                    reason: "active_process"
-                };
-            }
-            // Stale lock: PID is dead or invalid
-            try { fs.unlinkSync(lockPath); } catch (_) {}
-        } catch (_) {
-            try { fs.unlinkSync(lockPath); } catch (_) {}
-        }
+        const reclaimResult = inspectAndReclaimProcessLock(lockPath);
+        if (reclaimResult) return reclaimResult;
 
         // Retry atomic exclusive create once after clearing stale lock
         writeRes = tryWriteLockFile(lockPath, payload);
         if (writeRes.success) {
+            activeLocks.add(lockPath);
             return { acquired: true, pid: process.pid, reclaimedStale: true };
         }
     }
@@ -106,6 +191,7 @@ function acquireProcessLock(dbPath) {
 function releaseProcessLock(dbPath) {
     if (!dbPath) return;
     const lockPath = getLockFilePath(dbPath);
+    activeLocks.delete(lockPath);
     if (!fs.existsSync(lockPath)) return;
 
     try {
@@ -114,29 +200,20 @@ function releaseProcessLock(dbPath) {
         if (data.pid === process.pid) {
             fs.unlinkSync(lockPath);
         }
-    } catch (_) {}
+    } catch (err) {
+        // Best effort release: lock file may have been removed concurrently or unreadable
+        if (err.code !== "ENOENT") {
+            console.warn(`[PROCESS_LOCK] ⚠️ Could not verify lock ownership on release: ${err.message}`);
+        }
+    }
 }
 
 function isRestoreLockActive(dbPath) {
-    const restorePath = getRestoreLockFilePath(dbPath);
-    if (!fs.existsSync(restorePath)) return { active: false };
+    return _checkLockActiveState(getRestoreLockFilePath(dbPath), "restore", false);
+}
 
-    try {
-        const raw = fs.readFileSync(restorePath, "utf8");
-        const data = JSON.parse(raw);
-        if (data.pid && isPidAlive(data.pid)) {
-            return {
-                active: true,
-                pid: data.pid,
-                createdAt: data.createdAt || null
-            };
-        }
-        try { fs.unlinkSync(restorePath); } catch (_) {}
-        return { active: false, stale: true };
-    } catch (_) {
-        try { fs.unlinkSync(restorePath); } catch (_) {}
-        return { active: false };
-    }
+function inspectAndReclaimRestoreLock(restorePath) {
+    return _inspectAndReclaimLock(restorePath, activeRestoreLocks, "restore", "active_restore", "unreadable_restore_lock");
 }
 
 function acquireRestoreLock(dbPath) {
@@ -154,31 +231,17 @@ function acquireRestoreLock(dbPath) {
     // Attempt 1: Atomic exclusive create
     let writeRes = tryWriteLockFile(restorePath, payload);
     if (writeRes.success) {
+        activeRestoreLocks.add(restorePath);
         return { acquired: true, pid: process.pid };
     }
 
     if (writeRes.code === "EEXIST") {
-        try {
-            const raw = fs.readFileSync(restorePath, "utf8");
-            const data = JSON.parse(raw);
-            if (data.pid === process.pid) {
-                return { acquired: true, pid: process.pid };
-            }
-            if (data.pid && isPidAlive(data.pid)) {
-                return {
-                    acquired: false,
-                    pid: data.pid,
-                    createdAt: data.createdAt || null,
-                    reason: "active_restore"
-                };
-            }
-            try { fs.unlinkSync(restorePath); } catch (_) {}
-        } catch (_) {
-            try { fs.unlinkSync(restorePath); } catch (_) {}
-        }
+        const reclaimResult = inspectAndReclaimRestoreLock(restorePath);
+        if (reclaimResult) return reclaimResult;
 
         writeRes = tryWriteLockFile(restorePath, payload);
         if (writeRes.success) {
+            activeRestoreLocks.add(restorePath);
             return { acquired: true, pid: process.pid, reclaimedStale: true };
         }
     }
@@ -189,6 +252,7 @@ function acquireRestoreLock(dbPath) {
 function releaseRestoreLock(dbPath) {
     if (!dbPath) return;
     const restorePath = getRestoreLockFilePath(dbPath);
+    activeRestoreLocks.delete(restorePath);
     if (!fs.existsSync(restorePath)) return;
 
     try {
@@ -197,7 +261,12 @@ function releaseRestoreLock(dbPath) {
         if (data.pid === process.pid) {
             fs.unlinkSync(restorePath);
         }
-    } catch (_) {}
+    } catch (err) {
+        // Best effort release: lock file may have been removed concurrently or unreadable
+        if (err.code !== "ENOENT") {
+            console.warn(`[PROCESS_LOCK] ⚠️ Could not verify restore lock ownership on release: ${err.message}`);
+        }
+    }
 }
 
 module.exports = {

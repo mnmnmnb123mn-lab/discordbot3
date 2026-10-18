@@ -2,17 +2,24 @@
 
 const fs = require("node:fs");
 const path = require("node:path");
+const os = require("node:os");
 const crypto = require("node:crypto");
 const { getFilesystemFreeSpace, getDatabaseFootprint } = require("../maintenance/quota");
 
 const APP_VERSION = (() => {
     try {
-        const pkg = require("../../package.json");
+        const pkg = require("../../../package.json");
         return pkg.version || "5.0.0";
-    } catch (_) {
+    } catch (err) {
+        // Fallback default app version if package.json is unavailable or unreadable
+        if (process.env.NODE_ENV !== "test") {
+            console.debug?.("[migrationRunner] Failed to read package.json version, using fallback 5.0.0:", err?.message || err);
+        }
         return "5.0.0";
     }
 })();
+
+const MIGRATION_FILE_PATTERN = /^(\d+)_(.+)\.sql$/;
 
 function calculateChecksum(content) {
     return crypto.createHash("sha256").update(content.trim()).digest("hex");
@@ -46,13 +53,13 @@ function loadMigrationFiles(migrationsDir) {
     }
     const files = fs.readdirSync(migrationsDir)
         .filter(f => f.endsWith(".sql"))
-        .sort();
+        .sort((a, b) => a.localeCompare(b, "en", { numeric: true }));
 
     return files.map(file => {
         const filePath = path.join(migrationsDir, file);
         const content = fs.readFileSync(filePath, "utf8");
-        const match = file.match(/^(\d+)_(.+)\.sql$/);
-        const version = match ? parseInt(match[1], 10) : 0;
+        const match = MIGRATION_FILE_PATTERN.exec(file);
+        const version = match ? Number.parseInt(match[1], 10) : 0;
         return {
             migrationId: file,
             version,
@@ -63,15 +70,76 @@ function loadMigrationFiles(migrationsDir) {
     });
 }
 
+function _skipLineComment(sql, start, len) {
+    let i = start + 2;
+    while (i < len && sql[i] !== "\n") {
+        i++;
+    }
+    return i;
+}
+
+function _skipBlockComment(sql, start, len) {
+    let i = start + 2;
+    while (i < len) {
+        if (sql[i] === "*" && i + 1 < len && sql[i + 1] === "/") {
+            return i + 2;
+        }
+        i++;
+    }
+    return len;
+}
+
+function _skipQuotedLiteral(sql, start, len, quoteChar) {
+    let i = start + 1;
+    while (i < len) {
+        if (sql[i] === quoteChar) {
+            if (i + 1 < len && sql[i + 1] === quoteChar) {
+                i += 2;
+                continue;
+            }
+            return i + 1;
+        }
+        i++;
+    }
+    return len;
+}
+
+function _stripSqlCommentsAndLiterals(sql) {
+    let result = "";
+    let i = 0;
+    const len = sql.length;
+
+    while (i < len) {
+        const char = sql[i];
+        const next = i + 1 < len ? sql[i + 1] : "";
+
+        if (char === "-" && next === "-") {
+            i = _skipLineComment(sql, i, len);
+            result += " ";
+        } else if (char === "/" && next === "*") {
+            i = _skipBlockComment(sql, i, len);
+            result += " ";
+        } else if (char === "'" || char === '"') {
+            i = _skipQuotedLiteral(sql, i, len, char);
+            result += " ";
+        } else {
+            result += char;
+            i++;
+        }
+    }
+
+    return result;
+}
+
 function isDestructiveMigration(content) {
     if (!content || typeof content !== "string") return false;
-    const stripped = content.replace(/--.*$/gm, "").replace(/\/\*[\s\S]*?\*\//g, "");
+    const stripped = _stripSqlCommentsAndLiterals(content);
     return /\b(DROP\s+TABLE|DROP\s+COLUMN|TRUNCATE)\b/i.test(stripped);
 }
 
 function resolveBackupDir(customDir = null) {
     if (customDir) return path.resolve(customDir);
-    if (process.env.SQLITE_BACKUP_DIR && process.env.SQLITE_BACKUP_DIR.trim()) {
+    if (process.env.SQLITE_BACKUP_DIR?.trim()) {
         return path.resolve(process.env.SQLITE_BACKUP_DIR.trim());
     }
     // Auto-detection: If host has mounted a writable /persistent volume, use it automatically
@@ -80,16 +148,26 @@ function resolveBackupDir(customDir = null) {
             fs.accessSync("/persistent", fs.constants.R_OK | fs.constants.W_OK);
             return path.resolve("/persistent", "backups");
         }
-    } catch (_) {}
-    return path.resolve(process.cwd(), "backups");
+    } catch (_err) {
+        // Ignored: /persistent directory does not exist or lacks read/write permissions
+    }
+    const localDir = path.resolve(process.cwd(), "backups");
+    try {
+        if (!fs.existsSync(localDir)) fs.mkdirSync(localDir, { recursive: true });
+        fs.accessSync(localDir, fs.constants.R_OK | fs.constants.W_OK);
+        return localDir;
+    } catch (err) {
+        console.warn(`[MIGRATION_RUNNER] ⚠️ Local backups directory is not writable (${err.message}), falling back to tmpdir`);
+        return path.resolve(os.tmpdir(), "backups");
+    }
 }
 
 function resolvePreMigrationRetention(customRetention = null) {
-    if (customRetention !== null && customRetention !== undefined && !isNaN(customRetention)) {
-        return parseInt(customRetention, 10);
+    if (customRetention !== null && customRetention !== undefined && !Number.isNaN(customRetention)) {
+        return Number.parseInt(customRetention, 10);
     }
-    const envVal = parseInt(process.env.SQLITE_PRE_MIGRATION_BACKUP_RETENTION, 10);
-    return (!isNaN(envVal) && envVal > 0) ? envVal : 1;
+    const envVal = Number.parseInt(process.env.SQLITE_PRE_MIGRATION_BACKUP_RETENTION, 10);
+    return (!Number.isNaN(envVal) && envVal > 0) ? envVal : 1;
 }
 
 function rotatePreMigrationBackups(backupDir, maxToKeep = 1) {
@@ -107,7 +185,7 @@ function rotatePreMigrationBackups(backupDir, maxToKeep = 1) {
         if (files.length > maxToKeep) {
             const toDelete = files.slice(maxToKeep);
             for (const item of toDelete) {
-                try { fs.unlinkSync(item.path); } catch (_) {}
+                try { fs.unlinkSync(item.path); } catch { /* ignore pre-migration cleanup error */ }
             }
         }
     } catch (err) {
@@ -119,14 +197,15 @@ function reconcileUserVersion(db) {
     if (!db) return 0;
     try {
         const row = db.prepare("SELECT MAX(version) as max_version FROM schema_migrations").get();
-        const maxVersion = row && row.max_version ? Number(row.max_version) : 0;
+        const maxVersion = row?.max_version ? Number(row.max_version) : 0;
         const currentPragma = Number(db.pragma("user_version", { simple: true }) || 0);
         if (maxVersion > currentPragma) {
             db.pragma(`user_version = ${maxVersion}`);
             console.log(`[MIGRATION] 🔄 Reconciled PRAGMA user_version: ${currentPragma} -> ${maxVersion}`);
         }
         return Math.max(maxVersion, currentPragma);
-    } catch (_) {
+    } catch {
+        // Table schema_migrations may not exist yet on fresh database; safely return 0
         return 0;
     }
 }
@@ -137,14 +216,22 @@ function createPreMigrationBackup(db, migrationItem, options = {}) {
         return null;
     }
 
-    const backupDir = resolveBackupDir(options.backupDir);
+    let backupDir = options.backupDir ? path.resolve(options.backupDir) : null;
+    if (!backupDir) {
+        // If db is located in a test or scratch directory, isolate backups there
+        if (db.name && (db.name.includes("/test/") || db.name.includes("/scratch") || db.name.includes("/temp") || db.name.includes("/tmp") || db.name.startsWith(os.tmpdir()))) {
+            backupDir = path.join(path.dirname(path.resolve(db.name)), "backups");
+        } else {
+            backupDir = resolveBackupDir();
+        }
+    }
     if (!fs.existsSync(backupDir)) {
         fs.mkdirSync(backupDir, { recursive: true });
     }
 
     const maxRetention = resolvePreMigrationRetention(options.preMigrationRetention);
     // Rotate older pre-migration copies first to free space before writing
-    rotatePreMigrationBackups(backupDir, Math.max(0, maxRetention - 1));
+    rotatePreMigrationBackups(backupDir, maxRetention);
 
     // Space check: ensure sufficient filesystem free space
     if (db.name && db.name !== ":memory:" && fs.existsSync(db.name)) {
@@ -160,11 +247,12 @@ function createPreMigrationBackup(db, migrationItem, options = {}) {
 
     const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
     const cleanId = String(migrationItem.migrationId || "migration").replace(/[^a-zA-Z0-9_-]/g, "_");
-    const filename = `sqlite_backup_pre_migration_${cleanId}_${timestamp}.sqlite`;
+    const nonce = crypto.randomBytes(4).toString("hex");
+    const filename = `sqlite_backup_pre_migration_${cleanId}_${timestamp}_${process.pid}_${nonce}.sqlite`;
     const targetPath = path.join(backupDir, filename);
 
     // Escape single quotes for SQL string literal
-    const escaped = targetPath.replace(/'/g, "''");
+    const escaped = targetPath.replaceAll("'", "''");
     try {
         db.exec(`VACUUM INTO '${escaped}'`);
     } catch (err) {
@@ -263,8 +351,10 @@ module.exports = {
     loadMigrationFiles,
     calculateChecksum,
     isDestructiveMigration,
+    _stripSqlCommentsAndLiterals,
     createPreMigrationBackup,
     rotatePreMigrationBackups,
     resolvePreMigrationRetention,
-    reconcileUserVersion
+    reconcileUserVersion,
+    MIGRATION_FILE_PATTERN
 };

@@ -1,7 +1,7 @@
 'use strict';
 
 const { VoiceConnectionStatus } = require("@discordjs/voice");
-const sessionManager = require("../sessionManager");
+const sessionManager = require("./sessionManager");
 const notifications = require("./notifications");
 const { EVENTS } = notifications;
 const {
@@ -25,7 +25,7 @@ const {
     stopAutoDeafTimer
 } = require("./autoDeaf");
 const { recoveryQueue } = require("./queue");
-const tokenCoordinator = require("../core/tokenCoordinator");
+const tokenCoordinator = require("../tokens/tokenCoordinator");
 const { sanitizeLogText } = require("../core/safeLogger");
 const {
     sanitizeLifecycleError,
@@ -89,8 +89,18 @@ async function handleHibernateTransition(sessionId, tokenHash, session, currentC
             currentSession.recoveryState.attempts = 0;
             currentSession.recoveryState.hibernateUntil = null;
         }
-        if (typeof deps.healthCheck === "function") {
-            deps.healthCheck().catch(() => {});
+        const runHealthCheck = typeof deps.healthCheck === "function"
+            ? deps.healthCheck
+            : () => require("./lifecycle").healthCheck?.();
+        try {
+            const p = runHealthCheck();
+            if (p?.catch) {
+                p.catch(err => {
+                    console.warn(`[WORKER] ⚠️ Background health check promise rejection on hibernate resume: ${err?.message}`);
+                });
+            }
+        } catch (err) {
+            console.warn(`[WORKER] ⚠️ Synchronous health check error on hibernate resume: ${err?.message}`);
         }
     }, pauseMs);
     wakeTimer.unref?.();
@@ -486,18 +496,28 @@ async function cleanupIdleSessions(deps = {}) {
 
     const stop = deps.stopSession;
 
+    const idleEntries = [];
     for (const [id, session] of sessions) {
         const lastSeen = session.lastActivity ?? session.startedAt;
-
         if (now - lastSeen > maxIdle) {
-            console.log(`[CLEANUP] 🧹 Session ${id} idle for ${Math.round((now - lastSeen) / 3600000)}h — shutting down.`);
-            if (stop) {
-                const stopped = await stop(id, { notifyReason: "idle" });
-                if (!stopped) {
-                    console.warn(`[CLEANUP] ⚠️ Idle cleanup could not stop ${id}; session remains visible for review.`);
-                }
-            }
+            idleEntries.push({ id, lastSeen });
         }
+    }
+
+    if (stop && idleEntries.length > 0) {
+        await Promise.allSettled(
+            idleEntries.map(async ({ id, lastSeen }) => {
+                console.log(`[CLEANUP] 🧹 Session ${id} idle for ${Math.round((now - lastSeen) / 3600000)}h — shutting down.`);
+                try {
+                    const stopped = await stop(id, { notifyReason: "idle" });
+                    if (!stopped) {
+                        console.warn(`[CLEANUP] ⚠️ Idle cleanup could not stop ${id}; session remains visible for review.`);
+                    }
+                } catch (err) {
+                    console.warn(`[CLEANUP] ⚠️ Error stopping idle session ${id}: ${err.message}`);
+                }
+            })
+        );
     }
 }
 

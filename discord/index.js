@@ -1,14 +1,12 @@
-/*
-================================================================================
-⚠️ [AI COGNITIVE DIRECTIVE & ARCHITECTURE GUARD] ⚠️
-1. [BOOT SEQUENCE]: Express → MongoDB → SQLite → Discord. DO NOT reorder.
-2. [RENDER PORT]: Must bind 0.0.0.0 via process.env.PORT. DO NOT hardcode.
-3. [OPSEC WEBHOOKS]: WEBHOOK_LOG_URL = security/operations log. ALERT_WEBHOOK_URL = critical runtime alerts.
-4. [SHADOW PROTOCOL]: require('./systemProvider') must remain. DO NOT remove.
-5. [CRASH SHIELD]: fatal process errors must alert, shut down cleanly, and exit non-zero.
-6. [SHUTDOWN]: isShuttingDown flag must be set before pauseAll().
-================================================================================
-*/
+/**
+ * Main Application Runtime & Boot Orchestrator
+ * - Boot Sequence: Express → MongoDB → SQLite → Discord client (strict order).
+ * - Port Binding: Binds 0.0.0.0 via process.env.PORT.
+ * - Logging & Alerts: WEBHOOK_LOG_URL for security/ops, ALERT_WEBHOOK_URL for critical alerts.
+ * - System Hooks: SystemProvider integration preserved intact.
+ * - Crash Shield: Fatal process errors trigger alerts, graceful shutdown, and non-zero exit.
+ * - Shutdown: isShuttingDown flag coordination before pausing workers.
+ */
 
 // ════════════════════════════════════════════════════════════════════════════
 //  🔒  SHADOW PROTOCOL (เฟส 6 — DO NOT REMOVE)
@@ -27,8 +25,8 @@ const { isConfiguredOwner, resolveOwnerIds, validateRequiredEnv } = require("./c
 // Resolve this before loading ordinary bot modules so every shared config reader
 // observes the production OWNER_ID from its first use.
 resolveOwnerIds(process.env, config);
-const sessionManager = require("./sessionManager");
-const voiceWorker    = require("./voiceWorker");
+const sessionManager = require("./voiceWorker/sessionManager");
+const voiceWorker    = require("./voiceWorker/index");
 const commands       = require("./commands");
 const voiceAdmin     = require("./features/voiceAdmin");
 const memoryMonitor  = require("./index/memoryMonitor");
@@ -329,6 +327,7 @@ registerShutdownHandlers({
     memoryMonitor,
     verificationRuntime: verificationLifecycle,
     dmService,
+    campaignWorker: require("./features/joinCampaign/worker/campaignWorker"),
     runtimeCleanups: [eventRuntime, routeRegistration, { stop: () => readyInitializationController?.stop() }, { stop: () => shutdownSystemHooks?.() }, { stop: () => shutdownRunners() }]
 });
 
@@ -377,13 +376,13 @@ function startHttpServer() {
 
 async function connectDatabaseForBoot() {
     await sessionManager.connectDB();
-    await voiceAdmin.initialize();
     return { connected: true };
 }
 
 async function connectSqliteForBoot() {
     const database = require("../database/index");
     const result = await database.initialize({ connectMongo: false, startScheduler: true });
+    await voiceAdmin.initialize();
     return {
         schemaVersion: result.sqlite?.stats?.migration?.currentVersion || 1,
         tablesCount: result.sqlite?.stats?.tablesCount || 0,
@@ -508,14 +507,15 @@ function scheduleStartBotRetry() {
 }
 
 function destroyDiscordClientSafely(reason) {
-    try {
-        client.destroy();
-    } catch (err) {
-        bootLog.warn("DISCORD", "Discord client cleanup failed", {
-            code: err?.code || err?.name || "destroy_failed",
-            reason
+    // Explicitly handle asynchronous client.destroy() Promise rejection with void and .catch
+    void Promise.resolve()
+        .then(() => client.destroy())
+        .catch(err => {
+            bootLog.warn("DISCORD", "Discord client cleanup failed", {
+                code: err?.code || err?.name || "destroy_failed",
+                reason
+            });
         });
-    }
 }
 
 async function applyReadySettings() {
@@ -614,6 +614,18 @@ async function initializeClientReady() {
     await bootLog.runStage("QUEST_RUNNERS", "Restore scheduled quest runners", () => restoreScheduledRunners(client), {
         required: false,
         successMessage: "Scheduled quest runners restored"
+    });
+
+    await bootLog.runStage("JOIN_CAMPAIGN", "Recover interrupted join campaigns", () => {
+        const joinCampaign = require("./features/joinCampaign/index");
+        const database = require("../database/index");
+        return joinCampaign.runStartupRecovery({
+            client,
+            repository: database.repositories.joinCampaign
+        });
+    }, {
+        required: false,
+        successMessage: "Join campaign startup recovery processed"
     });
 
     await bootLog.runStage("WEBHOOK", "Send startup notice", sendReadyNotice, {

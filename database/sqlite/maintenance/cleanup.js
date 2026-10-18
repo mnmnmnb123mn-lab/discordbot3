@@ -3,42 +3,31 @@
 const BATCH_SIZE = 500;
 const THIRTY_DAYS_MS = 30 * 24 * 60 * 60 * 1000;
 
-function cleanExpiredNonces(db, now = Date.now(), maxBatches = 5) {
+function deleteExpiredInBatches(db, tableName, conditionCol, cutoff, maxBatches = 5) {
     let totalDeleted = 0;
     const stmt = db.prepare(`
-        DELETE FROM verification_state_nonce
+        DELETE FROM ${tableName}
         WHERE id IN (
-            SELECT id FROM verification_state_nonce
-            WHERE expires_at <= ?
+            SELECT id FROM ${tableName}
+            WHERE ${conditionCol} <= ?
             LIMIT ${BATCH_SIZE}
         )
     `);
 
     for (let i = 0; i < maxBatches; i++) {
-        const info = stmt.run(now);
+        const info = stmt.run(cutoff);
         totalDeleted += info.changes;
         if (info.changes < BATCH_SIZE) break;
     }
     return totalDeleted;
 }
 
-function cleanExpiredDmNotifications(db, now = Date.now(), maxBatches = 5) {
-    let totalDeleted = 0;
-    const stmt = db.prepare(`
-        DELETE FROM dm_notifications
-        WHERE id IN (
-            SELECT id FROM dm_notifications
-            WHERE expires_at <= ?
-            LIMIT ${BATCH_SIZE}
-        )
-    `);
+function cleanExpiredNonces(db, now = Date.now(), maxBatches = 5) {
+    return deleteExpiredInBatches(db, "verification_state_nonce", "expires_at", now, maxBatches);
+}
 
-    for (let i = 0; i < maxBatches; i++) {
-        const info = stmt.run(now);
-        totalDeleted += info.changes;
-        if (info.changes < BATCH_SIZE) break;
-    }
-    return totalDeleted;
+function cleanExpiredDmNotifications(db, now = Date.now(), maxBatches = 5) {
+    return deleteExpiredInBatches(db, "dm_notifications", "expires_at", now, maxBatches);
 }
 
 function cleanExpiredCacheEntries(db, now = Date.now(), maxBatches = 5) {
@@ -61,8 +50,8 @@ function cleanExpiredCacheEntries(db, now = Date.now(), maxBatches = 5) {
 }
 
 function resolveHistoryRetentionMs() {
-    const days = parseInt(process.env.SQLITE_HISTORY_RETENTION_DAYS, 10);
-    return (!isNaN(days) && days > 0 ? days : 30) * 24 * 60 * 60 * 1000;
+    const days = Number.parseInt(process.env.SQLITE_HISTORY_RETENTION_DAYS, 10);
+    return (!Number.isNaN(days) && days > 0 ? days : 30) * 24 * 60 * 60 * 1000;
 }
 
 function cleanExpiredHistory(db, now = Date.now(), maxBatches = 5) {
@@ -79,22 +68,9 @@ function cleanExpiredHistory(db, now = Date.now(), maxBatches = 5) {
 
     for (const { table, col } of historyConfigs) {
         try {
-            const stmt = db.prepare(`
-                DELETE FROM ${table}
-                WHERE id IN (
-                    SELECT id FROM ${table}
-                    WHERE ${col} <= ?
-                    LIMIT ${BATCH_SIZE}
-                )
-            `);
-
-            for (let i = 0; i < maxBatches; i++) {
-                const info = stmt.run(cutoff);
-                purged += info.changes;
-                if (info.changes < BATCH_SIZE) break;
-            }
-        } catch (_) {
-            // Table may not exist or be empty, continue safely
+            purged += deleteExpiredInBatches(db, table, col, cutoff, maxBatches);
+        } catch (_err) {
+            // Ignored: Table may not exist or be empty, continue safely
         }
     }
 
@@ -103,22 +79,36 @@ function cleanExpiredHistory(db, now = Date.now(), maxBatches = 5) {
 
 function cleanStaleQuestLogs(db, now = Date.now(), retentionMs = THIRTY_DAYS_MS, maxBatches = 2) {
     const cutoff = now - retentionMs;
-    let totalDeleted = 0;
-    const stmt = db.prepare(`
-        DELETE FROM quest_logs
-        WHERE id IN (
-            SELECT id FROM quest_logs
-            WHERE created_at <= ?
-            LIMIT ${BATCH_SIZE}
-        )
-    `);
-
-    for (let i = 0; i < maxBatches; i++) {
-        const info = stmt.run(cutoff);
-        totalDeleted += info.changes;
-        if (info.changes < BATCH_SIZE) break;
+    try {
+        return deleteExpiredInBatches(db, "quest_logs", "created_at", cutoff, maxBatches);
+    } catch (_err) {
+        // Ignored: Table may not exist or be empty, continue safely
+        return 0;
     }
-    return totalDeleted;
+}
+
+function cleanExpiredVoiceAdminNotices(db, now = Date.now(), maxBatches = 5) {
+    const cutoff = now - 24 * 60 * 60 * 1000;
+    try {
+        let totalDeleted = 0;
+        const stmt = db.prepare(`
+            DELETE FROM voice_admin_notices
+            WHERE (guild_id, actor_id, target_id) IN (
+                SELECT guild_id, actor_id, target_id FROM voice_admin_notices
+                WHERE notified_at <= ?
+                LIMIT ${BATCH_SIZE}
+            )
+        `);
+        for (let i = 0; i < maxBatches; i++) {
+            const info = stmt.run(cutoff);
+            totalDeleted += info.changes;
+            if (info.changes < BATCH_SIZE) break;
+        }
+        return totalDeleted;
+    } catch (_err) { // NOSONAR -- Safe fallback if table does not exist or notice cleanup fails safely
+        // Ignored: Table may not exist or notice cleanup fails safely
+        return 0;
+    }
 }
 
 function runBoundedCleanup(db, options = {}) {
@@ -129,6 +119,8 @@ function runBoundedCleanup(db, options = {}) {
     const dms = cleanExpiredDmNotifications(db, now, options.maxBatches);
     const cache = cleanExpiredCacheEntries(db, now, options.maxBatches);
     const history = cleanExpiredHistory(db, now, options.maxBatches);
+    const questLogs = cleanStaleQuestLogs(db, now, options.questRetentionMs, options.maxBatches);
+    const notices = cleanExpiredVoiceAdminNotices(db, now, options.maxBatches);
 
     return {
         now,
@@ -136,7 +128,9 @@ function runBoundedCleanup(db, options = {}) {
         dmsDeleted: dms,
         cacheDeleted: cache,
         historyDeleted: history,
-        totalDeleted: nonces + dms + cache + history
+        questLogsDeleted: questLogs,
+        noticesDeleted: notices,
+        totalDeleted: nonces + dms + cache + history + questLogs + notices
     };
 }
 
@@ -146,5 +140,6 @@ module.exports = {
     cleanExpiredCacheEntries,
     cleanExpiredHistory,
     cleanStaleQuestLogs,
+    cleanExpiredVoiceAdminNotices,
     runBoundedCleanup
 };

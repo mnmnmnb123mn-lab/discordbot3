@@ -9,9 +9,9 @@ const DEFAULT_HARD_LIMIT_MB = 4096;
 
 function resolveLimits() {
     return {
-        softMb: parseInt(process.env.SQLITE_QUOTA_SOFT_MB || process.env.SQLITE_SOFT_LIMIT_MB, 10) || DEFAULT_SOFT_LIMIT_MB,
-        critMb: parseInt(process.env.SQLITE_QUOTA_CRIT_MB || process.env.SQLITE_CRITICAL_LIMIT_MB, 10) || DEFAULT_CRIT_LIMIT_MB,
-        hardMb: parseInt(process.env.SQLITE_QUOTA_HARD_MB || process.env.SQLITE_HARD_LIMIT_MB, 10) || DEFAULT_HARD_LIMIT_MB
+        softMb: Number.parseInt(process.env.SQLITE_QUOTA_SOFT_MB || process.env.SQLITE_SOFT_LIMIT_MB, 10) || DEFAULT_SOFT_LIMIT_MB,
+        critMb: Number.parseInt(process.env.SQLITE_QUOTA_CRIT_MB || process.env.SQLITE_CRITICAL_LIMIT_MB, 10) || DEFAULT_CRIT_LIMIT_MB,
+        hardMb: Number.parseInt(process.env.SQLITE_QUOTA_HARD_MB || process.env.SQLITE_HARD_LIMIT_MB, 10) || DEFAULT_HARD_LIMIT_MB
     };
 }
 
@@ -41,7 +41,7 @@ function getDatabaseFootprint(dbPath) {
     }
 
     const totalBytes = mainStat.size + walBytes + shmBytes;
-    const totalMb = parseFloat((totalBytes / (1024 * 1024)).toFixed(2));
+    const totalMb = Number.parseFloat((totalBytes / (1024 * 1024)).toFixed(2));
 
     return {
         mainBytes: mainStat.size,
@@ -58,16 +58,18 @@ function getFilesystemFreeSpace(targetDir) {
             const stats = fs.statfsSync(targetDir);
             const freeBytes = stats.bavail * stats.bsize;
             const totalBytes = stats.blocks * stats.bsize;
-            const percentFree = totalBytes > 0 ? parseFloat(((freeBytes / totalBytes) * 100).toFixed(1)) : null;
+            const percentFree = totalBytes > 0 ? Number.parseFloat(((freeBytes / totalBytes) * 100).toFixed(1)) : null;
             return {
                 availableBytes: freeBytes,
-                availableMb: parseFloat((freeBytes / (1024 * 1024)).toFixed(2)),
+                availableMb: Number.parseFloat((freeBytes / (1024 * 1024)).toFixed(2)),
                 totalBytes,
-                totalMb: parseFloat((totalBytes / (1024 * 1024)).toFixed(2)),
+                totalMb: Number.parseFloat((totalBytes / (1024 * 1024)).toFixed(2)),
                 percentFree
             };
         }
-    } catch (_) {}
+    } catch {
+        // statfsSync not supported or directory not accessible; return null defaults
+    }
     return { availableBytes: null, availableMb: null, totalBytes: null, totalMb: null, percentFree: null };
 }
 
@@ -133,7 +135,7 @@ function evaluateEmergencyThresholds(dbPath, metrics = {}) {
     }
 
     // 2. WAL File Swelling (> 500MB)
-    const walMb = parseFloat((quota.footprint.walBytes / (1024 * 1024)).toFixed(2));
+    const walMb = Number.parseFloat((quota.footprint.walBytes / (1024 * 1024)).toFixed(2));
     if (walMb >= 500) {
         isEmergency = true;
         reasons.push(`SQLite WAL file abnormally swollen (${walMb} MB >= 500 MB threshold)`);
@@ -156,12 +158,18 @@ function evaluateEmergencyThresholds(dbPath, metrics = {}) {
         reasons.push(`Telemetry write-behind buffer queue overflow (${bufferCount} items >= 2000 capacity)`);
     }
 
+    const isOverallEmergency = isStorageEmergency || isBufferEmergency;
+    let severity = "OK";
+    if (isOverallEmergency) {
+        severity = quota.status === "hard" ? "CRITICAL" : "ERROR";
+    }
+
     return {
-        isEmergency: isStorageEmergency || isBufferEmergency,
+        isEmergency: isOverallEmergency,
         isStorageEmergency,
         isBufferEmergency,
         reasons,
-        severity: (isStorageEmergency || isBufferEmergency) ? (quota.status === "hard" ? "CRITICAL" : "ERROR") : "OK",
+        severity,
         quota,
         walMb,
         bufferCount,

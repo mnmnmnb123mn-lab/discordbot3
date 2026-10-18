@@ -2,7 +2,7 @@
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const tokenCoordinator = require('../core/tokenCoordinator');
+const tokenCoordinator = require('../tokens/tokenCoordinator');
 
 test.beforeEach(() => {
     tokenCoordinator.reset();
@@ -390,3 +390,34 @@ test('executeWithToken allows bypassQuarantine when probing tokens', async () =>
     });
     assert.equal(probeResult, 'probe-success');
 });
+
+test('withTokenLock does not chain-poison or crash subsequent operations when a previous operation rejects', async () => {
+    const token = 'token-lock-poison-prevention';
+
+    // First operation fails
+    await assert.rejects(
+        () => tokenCoordinator.withTokenLock(token, async () => {
+            throw new Error('Simulated lock failure');
+        }),
+        /Simulated lock failure/
+    );
+
+    // Second operation should still acquire lock and succeed cleanly
+    const result = await tokenCoordinator.withTokenLock(token, async () => {
+        return 'recovered-lock';
+    });
+    assert.equal(result, 'recovered-lock');
+});
+
+test('_acquireRateLimitSlot rejects immediately when signal is already aborted', async () => {
+    const token = 'token-abort-signal-test';
+    const hash = tokenCoordinator.hashToken(token);
+    const controller = new AbortController();
+    controller.abort(new Error('User aborted slot'));
+
+    await assert.rejects(
+        () => tokenCoordinator._acquireRateLimitSlot(hash, { signal: controller.signal }),
+        /User aborted slot/
+    );
+});
+

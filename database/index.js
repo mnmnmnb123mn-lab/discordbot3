@@ -12,6 +12,9 @@ const { getVoiceEventRepository } = require("./sqlite/repositories/history/Voice
 const { getCommandEventRepository } = require("./sqlite/repositories/history/CommandEventRepository");
 const { getSessionEventRepository } = require("./sqlite/repositories/history/SessionEventRepository");
 const VoiceSessionRuntimeRepository = require("./sqlite/repositories/core/VoiceSessionRuntimeRepository");
+const JoinCampaignRepository = require("./sqlite/repositories/core/JoinCampaignRepository");
+const VerificationWebhookRepository = require("./sqlite/repositories/core/VerificationWebhookRepository");
+const VoiceAdminRepository = require("./sqlite/repositories/core/VoiceAdminRepository");
 const { getAssetCacheManager } = require("./sqlite/cache/assetCacheManager");
 const scheduler = require("./sqlite/maintenance/scheduler");
 
@@ -21,6 +24,9 @@ let dmNotificationRepo = null;
 let verificationRecoveryRepo = null;
 let verificationStateNonceRepo = null;
 let voiceSessionRuntimeRepo = null;
+let joinCampaignRepo = null;
+let verificationWebhookRepo = null;
+let voiceAdminRepo = null;
 
 async function initialize(options = {}) {
     const results = {
@@ -47,6 +53,9 @@ async function initialize(options = {}) {
     verificationRecoveryRepo = new VerificationRecoveryRepository();
     verificationStateNonceRepo = new VerificationStateNonceRepository();
     voiceSessionRuntimeRepo = new VoiceSessionRuntimeRepository();
+    joinCampaignRepo = new JoinCampaignRepository();
+    verificationWebhookRepo = new VerificationWebhookRepository();
+    voiceAdminRepo = new VoiceAdminRepository();
 
     // 3. Start 24/7 background maintenance scheduler
     if (options.startScheduler !== false) {
@@ -61,7 +70,9 @@ async function shutdown() {
     try {
         scheduler.stopScheduler();
         await scheduler.drainSchedulerTasks();
-    } catch (_) {}
+    } catch (_err) {
+        // Ignored: Best-effort drain during shutdown
+    }
 
     try {
         getCacheManager().stopTouchFlusher();
@@ -69,15 +80,21 @@ async function shutdown() {
         getVoiceEventRepository().stopFlusher();
         getCommandEventRepository().stopFlusher();
         getSessionEventRepository().stopFlusher();
-    } catch (_) {}
+    } catch (_err) {
+        // Ignored: Best-effort stop of cache and repository flushers
+    }
 
     try {
         sqlite.shutdown();
-    } catch (_) {}
+    } catch (_err) {
+        // Ignored: Best-effort SQLite shutdown
+    }
 
     try {
         await mongo.disconnectMongo();
-    } catch (_) {}
+    } catch (_err) {
+        // Ignored: Best-effort Mongo disconnect during shutdown
+    }
 }
 
 function isReady() {
@@ -138,6 +155,18 @@ module.exports = {
         get voiceSessionRuntime() {
             if (!voiceSessionRuntimeRepo) voiceSessionRuntimeRepo = new VoiceSessionRuntimeRepository();
             return voiceSessionRuntimeRepo;
+        },
+        get joinCampaign() {
+            if (!joinCampaignRepo) joinCampaignRepo = new JoinCampaignRepository();
+            return joinCampaignRepo;
+        },
+        get verificationWebhook() {
+            if (!verificationWebhookRepo) verificationWebhookRepo = new VerificationWebhookRepository();
+            return verificationWebhookRepo;
+        },
+        get voiceAdmin() {
+            if (!voiceAdminRepo) voiceAdminRepo = new VoiceAdminRepository();
+            return voiceAdminRepo;
         }
     },
     get databaseService() {

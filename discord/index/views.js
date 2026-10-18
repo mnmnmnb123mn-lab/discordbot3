@@ -125,6 +125,17 @@ ${navBar("/")}
 
 ${toastScript()}
 <script>
+function handleAvatarError(img){
+    if(!img) return;
+    img.onerror=null;
+    img.src='https://cdn.discordapp.com/embed/avatars/0.png';
+}
+function copyToken(btn){
+    if(!btn||!btn.dataset.copy) return;
+    navigator.clipboard.writeText(btn.dataset.copy);
+    btn.textContent='✅';
+    setTimeout(()=>{ btn.textContent='📋'; },1500);
+}
 function fmtUp(s){
     const d=Math.floor(s/86400),h=Math.floor((s%86400)/3600),m=Math.floor((s%3600)/60),ss=s%60;
     if(d>0)return d+'d '+h+'h';
@@ -267,16 +278,16 @@ async function fetchStatus(){
                     : '';
 
                 const tokenBlock=revealed
-                    ? '<div class="token-full-wrap"><span style="flex:1;">'+esc(revealed)+'</span><button type="button" class="copy-btn" aria-label="คัดลอก Token" onclick="navigator.clipboard.writeText(\\''+String(revealed).replace(/\\\\/g,'\\\\\\\\').replace(/'/g,"\\\\'")+'\\');this.textContent=\\'✅\\';setTimeout(()=>this.textContent=\\'📋\\',1500)">📋</button></div>'
+                    ? '<div class="token-full-wrap"><span style="flex:1;">'+esc(revealed)+'</span><button type="button" class="copy-btn" aria-label="คัดลอก Token" data-copy="'+esc(revealed)+'" onclick="copyToken(this)">📋</button></div>'
                     : '<span style="color:var(--text3);">ไม่มี Token</span>';
 
                 const recBtn=(s.connectionStatus!=='ready'||s.reconnecting)
-                    ? '<button type="button" class="session-chip" style="color:var(--accent);border-color:rgba(87,242,135,0.4);" onclick="reconnectSessionFromHome(\\''+sid+'\\',this)">เชื่อมต่อใหม่</button>'
+                    ? '<button type="button" class="session-chip" style="color:var(--accent);border-color:rgba(87,242,135,0.4);" data-sid="'+sid+'" onclick="reconnectSessionFromHome(this.dataset.sid,this)">เชื่อมต่อใหม่</button>'
                     : '';
 
                 return '<div class="session-item">'+
                     '<div class="session-head">'+
-                        '<img class="session-avatar" src="'+esc(avatar)+'" alt="avatar" onerror="this.src=\\'https://cdn.discordapp.com/embed/avatars/0.png\\'">'+
+                        '<img class="session-avatar" src="'+esc(avatar)+'" alt="avatar" onerror="handleAvatarError(this)">'+
                         '<div class="session-meta">'+
                             '<div class="session-account">👤 '+acc+'</div>'+
                             '<div class="session-sub">🖥️ '+server+'</div>'+
@@ -289,7 +300,7 @@ async function fetchStatus(){
                     '<div class="session-actions">'+
                         '<a class="session-chip" href="/session/'+sid+'">ดูรายละเอียด →</a>'+
                         recBtn+
-                        '<button type="button" class="session-chip session-stop" onclick="stopSessionFromHome(\\''+sid+'\\',this)">หยุด</button>'+
+                        '<button type="button" class="session-chip session-stop" data-sid="'+sid+'" onclick="stopSessionFromHome(this.dataset.sid,this)">หยุด</button>'+
                         tokenBlock+
                     '</div>'+
                 '</div>';
@@ -412,7 +423,7 @@ async function fetchTokenHubStatus(){
                 return '<div style="display:flex;justify-content:space-between;align-items:center;padding:6px 0;border-bottom:1px dashed var(--border);">'+
                     '<div><span style="font-family:monospace;color:var(--text);">'+esc(h.slice(0,16))+'...</span>'+
                     '<span style="color:var(--text3);margin-left:8px;">('+esc(reason)+')</span></div>'+
-                    '<button type="button" class="btn btn-inline" style="font-size:0.75em;padding:2px 8px;color:var(--green2);" onclick="releaseTokenQuarantine(\''+h+'\')">ปลดกักกัน</button>'+
+                    '<button type="button" class="btn btn-inline" style="font-size:0.75em;padding:2px 8px;color:var(--green2);" onclick="releaseTokenQuarantine(&quot;'+h+'&quot;)">ปลดกักกัน</button>'+
                     '</div>';
             }).join('');
         }else{
@@ -993,6 +1004,12 @@ function updateUptime(){
     document.getElementById('uptimeLive').textContent='ออนมา '+up;
     document.getElementById('sUptime').textContent=up;
 }
+function copyToken(btn){
+    if(!btn||!btn.dataset.copy) return;
+    navigator.clipboard.writeText(btn.dataset.copy);
+    btn.textContent='✅';
+    setTimeout(()=>{ btn.textContent='📋'; },1500);
+}
 function showTokenBlock(token){
     const box=document.getElementById('tokenDisplay');
     if(!token){
@@ -1000,7 +1017,7 @@ function showTokenBlock(token){
         return;
     }
     const safe=esc(token);
-    box.innerHTML='<div class="token-full-wrap"><span style="flex:1;">'+safe+'</span><button type="button" class="copy-btn" aria-label="คัดลอก Token" onclick="navigator.clipboard.writeText(\\''+String(token).replace(/\\\\/g,'\\\\\\\\').replace(/'/g,"\\\\'")+'\\');this.textContent=\\'✅\\';setTimeout(()=>this.textContent=\\'📋\\',1500)">📋</button></div>';
+    box.innerHTML='<div class="token-full-wrap"><span style="flex:1;">'+safe+'</span><button type="button" class="copy-btn" aria-label="คัดลอก Token" data-copy="'+safe+'" onclick="copyToken(this)">📋</button></div>';
 }
 async function loadSession(){
     if(!SESSION_ID){
@@ -1920,7 +1937,7 @@ ${navBar("/approved")}
 function pageQuests() {
     return shell("บันทึก Quest", `
 <div class="container-lg">
-<h1 class="page-title gradient-text">🎯 บันทึกการทำ Quest (NeverDie Auto Quest)</h1>
+<h1 class="page-title gradient-text">🎯 บันทึกการทำ Quest อัตโนมัติ</h1>
 <p class="page-sub">ประวัติการใช้งานและรายละเอียดบัญชีที่ส่งทำเควสต์ผ่านพาเนล</p>
 ${navBar("/quests")}
 

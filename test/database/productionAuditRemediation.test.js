@@ -4,10 +4,11 @@ const { test, describe, before, after } = require("node:test");
 const assert = require("node:assert/strict");
 const path = require("node:path");
 const fs = require("node:fs");
+const os = require("node:os");
 const Database = require("better-sqlite3");
 
 const { TABLE_CATEGORIES, getCategoryForTable } = require("../../database/sqlite/tableCategories");
-const { TokenCoordinator } = require("../../discord/core/tokenCoordinator");
+const { TokenCoordinator } = require("../../discord/tokens/tokenCoordinator");
 const { spoolP0Event, drainP0Spool, getP0JournalStats } = require("../../database/sqlite/repositories/history/p0Journal");
 const { evaluateEmergencyThresholds } = require("../../database/sqlite/maintenance/quota");
 const { runMigrations, reconcileUserVersion } = require("../../database/sqlite/migrations/migrationRunner");
@@ -19,7 +20,7 @@ describe("Production Audit 15-Item Remediation Verification Suite", () => {
     let testDb;
 
     before(() => {
-        tempDir = path.join(__dirname, "temp-remediation-" + Date.now());
+        tempDir = path.join(os.tmpdir(), "temp-remediation-" + Date.now());
         fs.mkdirSync(tempDir, { recursive: true });
 
         testDb = new Database(path.join(tempDir, "test.sqlite"));
@@ -38,11 +39,13 @@ describe("Production Audit 15-Item Remediation Verification Suite", () => {
     });
 
     describe("Item 6: Table Categories Mapping", () => {
-        test("all 17 standard SQLite tables are mapped without uncategorized gaps", () => {
+        test("all 23 standard SQLite tables are mapped without uncategorized gaps", () => {
             const expectedTables = [
                 "schema_migrations", "database_meta", "maintenance_runs",
                 "quest_logs", "quest_accounts", "quest_details", "scheduled_runners",
                 "dm_notifications", "verification_recovery", "voice_session_runtime",
+                "join_campaign_jobs", "join_campaign_items", "join_campaign_panels",
+                "verification_webhook_jobs", "verification_webhook_deliveries", "p0_journal_receipts",
                 "verification_state_nonce", "voice_events", "command_events",
                 "session_events", "runtime_events", "cache_entries", "asset_cache"
             ];
@@ -55,6 +58,9 @@ describe("Production Audit 15-Item Remediation Verification Suite", () => {
             assert.equal(getCategoryForTable("quest_accounts"), "core");
             assert.equal(getCategoryForTable("quest_details"), "core");
             assert.equal(getCategoryForTable("voice_session_runtime"), "core");
+            assert.equal(getCategoryForTable("join_campaign_jobs"), "core");
+            assert.equal(getCategoryForTable("verification_webhook_jobs"), "core");
+            assert.equal(getCategoryForTable("p0_journal_receipts"), "core");
             assert.equal(getCategoryForTable("unknown_future_table"), "temporary");
         });
     });
@@ -167,6 +173,40 @@ describe("Production Audit 15-Item Remediation Verification Suite", () => {
 
                 brokenRepo.stopFlusher();
             } finally {
+                if (prevEnv) process.env.SQLITE_P0_JOURNAL_PATH = prevEnv;
+                else delete process.env.SQLITE_P0_JOURNAL_PATH;
+            }
+        });
+
+        test("spoolP0Event rejects when payload exceeds MAX_SPOOL_BYTES and dispatches notifyP0SpoolFailed alert", async () => {
+            const customJournalPath = path.join(tempDir, "test_p0_ceiling.jsonl");
+            const prevEnv = process.env.SQLITE_P0_JOURNAL_PATH;
+            process.env.SQLITE_P0_JOURNAL_PATH = customJournalPath;
+
+            const webhooks = require("../../discord/core/webhooks");
+            const origSend = webhooks.sendWebhookEvent;
+            const sentAlerts = [];
+            webhooks.sendWebhookEvent = async (event) => {
+                sentAlerts.push(event);
+                return { ok: true };
+            };
+
+            try {
+                // Construct payload exceeding 5MB
+                const hugeData = "A".repeat(5 * 1024 * 1024 + 100);
+                const hugeEvent = { priority: "P0", sessionId: "sess_huge", data: hugeData };
+
+                const spooled = spoolP0Event("voice_events", hugeEvent);
+                assert.equal(spooled, false, "Must reject spooling when payload exceeds MAX_SPOOL_BYTES");
+
+                // Check that Central Alert Webhook was notified
+                assert.equal(sentAlerts.length, 1, "Alert must be sent when P0 spooling is rejected");
+                assert.equal(sentAlerts[0].code, "sqlite.telemetry.p0_journal_degraded");
+                assert.equal(sentAlerts[0].severity, "CRITICAL");
+                assert.equal(sentAlerts[0].context["Repository"], "voice_events");
+                assert.equal(sentAlerts[0].context["สาเหตุ"], "payload_exceeds_max_ceiling");
+            } finally {
+                webhooks.sendWebhookEvent = origSend;
                 if (prevEnv) process.env.SQLITE_P0_JOURNAL_PATH = prevEnv;
                 else delete process.env.SQLITE_P0_JOURNAL_PATH;
             }

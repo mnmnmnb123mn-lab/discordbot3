@@ -1,6 +1,6 @@
 const { PermissionFlagsBits } = require("discord.js");
 const config = require("../config.json");
-const sessionManager = require("../sessionManager");
+const sessionManager = require("../voiceWorker/sessionManager");
 const { requireMemberPermission, checkRoleHierarchy, safeDefer, markCommandAccepted } = require("../guards/commandGuards");
 const modCaseManager = require("../logging/modCaseManager");
 const { sendWebhookEvent, getDiscordAvatarUrl, getDiscordGuildIconUrl } = require("../core/webhooks");
@@ -19,13 +19,13 @@ async function requireModerationPermission(interaction, _action) {
     return requireMemberPermission(
         interaction,
         PermissionFlagsBits.Administrator,
-        `> ⛔ คำสั่งนี้จำเป็นต้องใช้สิทธิ์ผู้ดูแลระบบ (Administrator) เท่านั้น`
+        `> ${config.emojis?.no_entry || "⛔"} คำสั่งนี้จำเป็นต้องใช้สิทธิ์ผู้ดูแลระบบ (Administrator) เท่านั้น`
     );
 }
 
 function rejectMissingTarget(interaction, target) {
     if (target) return null;
-    return interaction.reply({ content: `> ${config.emojis.error} ไม่พบสมาชิกเป้าหมายในเซิร์ฟเวอร์`, ephemeral: true });
+    return interaction.reply({ content: `> ${config.emojis?.error || "❌"} ไม่พบสมาชิกเป้าหมายในเซิร์ฟเวอร์`, ephemeral: true });
 }
 
 function rejectHierarchy(interaction, client, target) {
@@ -40,11 +40,11 @@ function rejectUnmanageableTarget(interaction, target, action) {
     // do not use `manageable` as the ban decision.
     if (action === "ban") {
         if (target.bannable === true) return null;
-        return interaction.reply({ content: `> ${config.emojis.error} บอทไม่สามารถแบนสมาชิกท่านนี้ได้`, ephemeral: true });
+        return interaction.reply({ content: `> ${config.emojis?.error || "❌"} บอทไม่สามารถแบนสมาชิกท่านนี้ได้`, ephemeral: true });
     }
 
     if (target.manageable) return null;
-    return interaction.reply({ content: `> ${config.emojis.error} บอทไม่มีสิทธิ์จัดการสมาชิกท่านนี้`, ephemeral: true });
+    return interaction.reply({ content: `> ${config.emojis?.error || "❌"} บอทไม่มีสิทธิ์จัดการสมาชิกท่านนี้`, ephemeral: true });
 }
 
 function rejectInvalidDuration(interaction, duration) {
@@ -195,8 +195,8 @@ function successReply(interaction, input, result) {
     );
     return interaction.editReply({
         content: result.caseCompleted
-            ? undefined
-            : `> ${config.emojis.warning} ดำเนินการกับสมาชิกแล้ว แต่ฐานข้อมูลยังคง Case #${result.caseDoc.caseNumber} เป็น pending เพื่อให้ตรวจสอบภายหลัง`,
+            ? null
+            : `> ${config.emojis?.warning || "⚠️"} ดำเนินการกับสมาชิกเรียบร้อย แต่บันทึกประวัติไม่สมบูรณ์`,
         embeds: [replyEmbed]
     });
 }
@@ -223,6 +223,17 @@ function failureReply(interaction, err) {
     return interaction.editReply({ content: moderationErrorReply(err) });
 }
 
+function resolveModerationLoadingText(input) {
+    if (input.action === "ban") return `${config.emojis?.loading || "⏳"} กำลังแบนสมาชิก...`;
+    if (input.action === "kick") return `${config.emojis?.loading || "⏳"} กำลังเตะสมาชิก...`;
+    if (input.action === "timeout") {
+        return input.duration?.isUntimeout || input.duration?.minutes === 0
+            ? `${config.emojis?.loading || "⏳"} กำลังปลด Timeout...`
+            : `${config.emojis?.loading || "⏳"} กำลังตั้ง Timeout...`;
+    }
+    return `${config.emojis?.loading || "⏳"} กำลังดำเนินการ...`;
+}
+
 function readFullModerationInput(interaction) {
     const baseInput = readModerationInput(interaction);
     return { ...baseInput, duration: parseTimeoutDuration(interaction, baseInput.action) };
@@ -236,6 +247,10 @@ async function handleModerationCommand(interaction, client) {
 
     markCommandAccepted(interaction);
     if (!await safeDefer(interaction)) return null;
+    const loadingText = resolveModerationLoadingText(input);
+    if (loadingText) {
+        await interaction.editReply({ content: loadingText }).catch(() => {});
+    }
     try {
         const result = await performModeration(interaction, input);
         sendWebhookEvent({

@@ -53,11 +53,168 @@ function prunePreRestoreBackups(targetPath, maxKeep = 1) {
                 try {
                     fs.unlinkSync(item.fullPath);
                     console.log(`[RESTORE-SQLITE]     Pruned old pre-restore safety backup: ${path.basename(item.fullPath)}`);
-                } catch (_) {}
+                } catch (unlinkErr) {
+                    // Best effort cleanup: file may have already been removed concurrently
+                    if (unlinkErr.code !== "ENOENT") {
+                        console.warn(`[RESTORE-SQLITE] ⚠️ Could not prune old backup ${item.fullPath}: ${unlinkErr.message}`);
+                    }
+                }
             }
         }
     } catch (err) {
         console.warn(`[RESTORE-SQLITE] ⚠️ Failed to prune old pre-restore backups: ${err.message}`);
+    }
+}
+
+function cleanDatabaseAuxiliaryFiles(basePath) {
+    for (const suffix of ["-wal", "-shm", "-journal"]) {
+        const auxPath = `${basePath}${suffix}`;
+        if (fs.existsSync(auxPath)) {
+            try {
+                fs.unlinkSync(auxPath);
+            } catch (err) {
+                // Best effort auxiliary file removal; ignore ENOENT if concurrently unlinked
+                if (err.code !== "ENOENT") {
+                    console.warn(`[RESTORE-SQLITE] ⚠️ Could not remove auxiliary file ${auxPath}: ${err.message}`);
+                }
+            }
+        }
+    }
+}
+
+function rollbackSafetyBackup(rollbackBakPath, targetPath, contextMsg) {
+    if (!rollbackBakPath || !fs.existsSync(rollbackBakPath)) return;
+    console.warn(`[RESTORE-SQLITE] ⚠️ ${contextMsg}: restoring from safety backup ${rollbackBakPath}...`);
+    try {
+        fs.copyFileSync(rollbackBakPath, targetPath);
+        cleanDatabaseAuxiliaryFiles(targetPath);
+        console.log("[RESTORE-SQLITE] 🔄 Auto-rollback completed successfully.");
+    } catch (rbErr) {
+        console.error(`[RESTORE-SQLITE] 🚨 Auto-rollback failed: ${rbErr.message}`);
+    }
+}
+
+function verifySourceBackupIntegrity(sourcePath) {
+    console.log("[RESTORE-SQLITE] 1/4 Verifying source backup integrity...");
+    let sourceDb;
+    try {
+        sourceDb = new Database(sourcePath, { readonly: true, fileMustExist: true });
+        const integrity = sourceDb.pragma("integrity_check");
+        const ok = integrity.length === 1 && (integrity[0].integrity_check === "ok" || integrity[0] === "ok");
+        if (!ok) {
+            throw new Error(`Integrity check failed: ${JSON.stringify(integrity)}`);
+        }
+        const userVersion = sourceDb.pragma("user_version", { simple: true });
+        console.log(`[RESTORE-SQLITE]     Source verified intact (PRAGMA user_version = ${userVersion}).`);
+    } finally {
+        if (sourceDb) {
+            try {
+                sourceDb.close();
+            } catch (_closeErr) {
+                // Best-effort close on verify exit
+            }
+        }
+    }
+}
+
+function prepareTargetSafetyBackup(targetPath) {
+    console.log("[RESTORE-SQLITE] 2/4 Securing current target database...");
+    closeDatabase();
+
+    const targetDir = path.dirname(targetPath);
+    if (!fs.existsSync(targetDir)) {
+        fs.mkdirSync(targetDir, { recursive: true });
+    }
+
+    if (!fs.existsSync(targetPath)) return null;
+
+    prunePreRestoreBackups(targetPath, 0);
+    const targetStat = fs.statSync(targetPath);
+    const { getFilesystemFreeSpace } = require("../../database/sqlite/maintenance/quota");
+    const freeSpace = getFilesystemFreeSpace(targetDir);
+    const requiredBytes = Math.max(targetStat.size * 1.2, 20 * 1024 * 1024);
+    if (freeSpace.availableBytes !== null && freeSpace.availableBytes < requiredBytes) {
+        const neededMb = (requiredBytes / (1024 * 1024)).toFixed(1);
+        const availMb = freeSpace.availableMb;
+        throw new Error(`[RESTORE-SQLITE] พื้นที่ดิสก์ไม่เพียงพอสำหรับ Pre-restore safety backup (ต้องการอย่างน้อย ${neededMb} MB, มีอยู่ ${availMb} MB)`);
+    }
+
+    const rollbackBakPath = `${targetPath}.pre-restore-${Date.now()}.bak`;
+    fs.copyFileSync(targetPath, rollbackBakPath);
+    console.log(`[RESTORE-SQLITE]     Pre-restore safety backup created: ${rollbackBakPath}`);
+    prunePreRestoreBackups(targetPath, 1);
+
+    cleanDatabaseAuxiliaryFiles(targetPath);
+    return rollbackBakPath;
+}
+
+function stageAndPromoteBackup(sourcePath, targetPath, rollbackBakPath) {
+    console.log("[RESTORE-SQLITE] 3/4 Copying backup to staging file & verifying integrity...");
+    const stagingPath = `${targetPath}.restore-staging-${Date.now()}.tmp`;
+    try {
+        fs.copyFileSync(sourcePath, stagingPath);
+
+        const stagingDb = new Database(stagingPath, { readonly: true, fileMustExist: true });
+        try {
+            const sInt = stagingDb.pragma("integrity_check");
+            const sOk = sInt.length === 1 && (sInt[0].integrity_check === "ok" || sInt[0] === "ok");
+            if (!sOk) {
+                throw new Error(`Staged backup integrity check failed: ${JSON.stringify(sInt)}`);
+            }
+        } finally {
+            stagingDb.close();
+        }
+
+        cleanDatabaseAuxiliaryFiles(targetPath);
+        fs.renameSync(stagingPath, targetPath);
+    } catch (copyErr) {
+        console.error(`[RESTORE-SQLITE] ❌ Staging copy or atomic replace failed: ${copyErr.message}`);
+        if (fs.existsSync(stagingPath)) {
+            try {
+                fs.unlinkSync(stagingPath);
+            } catch (unlinkErr) {
+                if (unlinkErr.code !== "ENOENT") {
+                    console.warn(`[RESTORE-SQLITE] ⚠️ Could not remove staging file: ${unlinkErr.message}`);
+                }
+            }
+        }
+        rollbackSafetyBackup(rollbackBakPath, targetPath, "Copy/Staging failure detected");
+        throw copyErr;
+    }
+}
+
+function verifyTargetIntegrity(targetPath, rollbackBakPath) {
+    console.log("[RESTORE-SQLITE] 4/4 Verifying restored database integrity...");
+    let targetCheckDb;
+    try {
+        targetCheckDb = new Database(targetPath, { readonly: true, fileMustExist: true });
+        const integrity = targetCheckDb.pragma("integrity_check");
+        const ok = integrity.length === 1 && (integrity[0].integrity_check === "ok" || integrity[0] === "ok");
+        if (!ok) {
+            throw new Error(`Target integrity check failed: ${JSON.stringify(integrity)}`);
+        }
+        console.log("[RESTORE-SQLITE]     Target verified intact.");
+    } catch (err) {
+        console.error(`[RESTORE-SQLITE] ❌ Restored target verification failed: ${err.message}`);
+        if (targetCheckDb) {
+            try {
+                targetCheckDb.close();
+            } catch (_closeErr) {
+                // Best-effort close before rollback
+            }
+            targetCheckDb = null;
+        }
+
+        rollbackSafetyBackup(rollbackBakPath, targetPath, "Auto-rollback initiated");
+        throw err;
+    } finally {
+        if (targetCheckDb) {
+            try {
+                targetCheckDb.close();
+            } catch (_closeErr) {
+                // Best-effort close on verify exit
+            }
+        }
     }
 }
 
@@ -83,27 +240,16 @@ async function restoreDatabase({ sourceBackup, targetDb, force = false }) {
         throw new Error(`Source backup file is empty (0 bytes): ${sourcePath}`);
     }
 
-    // Step 1: Pre-flight integrity verification on source backup
-    console.log("[RESTORE-SQLITE] 1/4 Verifying source backup integrity...");
-    let sourceDb;
-    try {
-        sourceDb = new Database(sourcePath, { readonly: true, fileMustExist: true });
-        const integrity = sourceDb.pragma("integrity_check");
-        const ok = integrity.length === 1 && (integrity[0].integrity_check === "ok" || integrity[0] === "ok");
-        if (!ok) {
-            throw new Error(`Integrity check failed: ${JSON.stringify(integrity)}`);
-        }
-        const userVersion = sourceDb.pragma("user_version", { simple: true });
-        console.log(`[RESTORE-SQLITE]     Source verified intact (PRAGMA user_version = ${userVersion}).`);
-    } finally {
-        if (sourceDb) {
-            try { sourceDb.close(); } catch (_) {}
-        }
-    }
+    verifySourceBackupIntegrity(sourcePath);
 
-    // Safety Gate: Refuse restore if Bot process is actively running. --force CANNOT bypass active live process!
     const activeLock = isProcessLockActive(targetPath);
     if (activeLock.active && activeLock.pid !== process.pid) {
+        if (activeLock.indeterminate) {
+            throw new Error(
+                `[FATAL] Unable to inspect SQLite lock file safely (${activeLock.code || activeLock.error}). ` +
+                `Refusing to restore while database lock status is indeterminate.`
+            );
+        }
         throw new Error(
             `[FATAL] Active bot process detected holding SQLite lock (PID: ${activeLock.pid}). ` +
             `Refusing to restore while database is actively running in another process. ` +
@@ -122,133 +268,11 @@ async function restoreDatabase({ sourceBackup, targetDb, force = false }) {
         }
         console.warn(`[RESTORE-SQLITE] ⚠️ FORCE flag active: overriding previous restore lock (PID: ${rLock.pid}).`);
     }
+
     try {
-        // Step 2: Ensure connection is closed and backup existing target
-        console.log("[RESTORE-SQLITE] 2/4 Securing current target database...");
-        closeDatabase();
-
-        const targetDir = path.dirname(targetPath);
-        if (!fs.existsSync(targetDir)) {
-            fs.mkdirSync(targetDir, { recursive: true });
-        }
-
-        let rollbackBakPath = null;
-        if (fs.existsSync(targetPath)) {
-            prunePreRestoreBackups(targetPath, 0);
-            const targetStat = fs.statSync(targetPath);
-            const { getFilesystemFreeSpace } = require("../../database/sqlite/maintenance/quota");
-            const freeSpace = getFilesystemFreeSpace(targetDir);
-            const requiredBytes = Math.max(targetStat.size * 1.2, 20 * 1024 * 1024);
-            if (freeSpace.availableBytes !== null && freeSpace.availableBytes < requiredBytes) {
-                const neededMb = (requiredBytes / (1024 * 1024)).toFixed(1);
-                const availMb = freeSpace.availableMb;
-                throw new Error(`[RESTORE-SQLITE] พื้นที่ดิสก์ไม่เพียงพอสำหรับ Pre-restore safety backup (ต้องการอย่างน้อย ${neededMb} MB, มีอยู่ ${availMb} MB)`);
-            }
-
-            rollbackBakPath = `${targetPath}.pre-restore-${Date.now()}.bak`;
-            fs.copyFileSync(targetPath, rollbackBakPath);
-            console.log(`[RESTORE-SQLITE]     Pre-restore safety backup created: ${rollbackBakPath}`);
-            prunePreRestoreBackups(targetPath, 1);
-
-            // Clean stale WAL, SHM, and journal files to prevent WAL/rollback corruption
-            const walPath = `${targetPath}-wal`;
-            const shmPath = `${targetPath}-shm`;
-            const journalPath = `${targetPath}-journal`;
-            if (fs.existsSync(walPath)) try { fs.unlinkSync(walPath); } catch (_) {}
-            if (fs.existsSync(shmPath)) try { fs.unlinkSync(shmPath); } catch (_) {}
-            if (fs.existsSync(journalPath)) try { fs.unlinkSync(journalPath); } catch (_) {}
-        }
-
-        // Step 3: Copy source backup to temporary staging file & verify before atomic replace
-        console.log("[RESTORE-SQLITE] 3/4 Copying backup to staging file & verifying integrity...");
-        const stagingPath = `${targetPath}.restore-staging-${Date.now()}.tmp`;
-        try {
-            fs.copyFileSync(sourcePath, stagingPath);
-
-            // Verify staging file integrity
-            const stagingDb = new Database(stagingPath, { readonly: true, fileMustExist: true });
-            try {
-                const sInt = stagingDb.pragma("integrity_check");
-                const sOk = sInt.length === 1 && (sInt[0].integrity_check === "ok" || sInt[0] === "ok");
-                if (!sOk) {
-                    throw new Error(`Staged backup integrity check failed: ${JSON.stringify(sInt)}`);
-                }
-            } finally {
-                stagingDb.close();
-            }
-
-            // Remove target auxiliary files before replace
-            const walPath = `${targetPath}-wal`;
-            const shmPath = `${targetPath}-shm`;
-            const journalPath = `${targetPath}-journal`;
-            if (fs.existsSync(walPath)) try { fs.unlinkSync(walPath); } catch (_) {}
-            if (fs.existsSync(shmPath)) try { fs.unlinkSync(shmPath); } catch (_) {}
-            if (fs.existsSync(journalPath)) try { fs.unlinkSync(journalPath); } catch (_) {}
-
-            // Atomic replace
-            fs.renameSync(stagingPath, targetPath);
-        } catch (copyErr) {
-            console.error(`[RESTORE-SQLITE] ❌ Staging copy or atomic replace failed: ${copyErr.message}`);
-            if (fs.existsSync(stagingPath)) {
-                try { fs.unlinkSync(stagingPath); } catch (_) {}
-            }
-            if (rollbackBakPath && fs.existsSync(rollbackBakPath)) {
-                console.warn(`[RESTORE-SQLITE] ⚠️ Copy/Staging failure detected. Initiating immediate auto-rollback from ${rollbackBakPath}...`);
-                try {
-                    fs.copyFileSync(rollbackBakPath, targetPath);
-                    const walPath = `${targetPath}-wal`;
-                    const shmPath = `${targetPath}-shm`;
-                    const journalPath = `${targetPath}-journal`;
-                    if (fs.existsSync(walPath)) try { fs.unlinkSync(walPath); } catch (_) {}
-                    if (fs.existsSync(shmPath)) try { fs.unlinkSync(shmPath); } catch (_) {}
-                    if (fs.existsSync(journalPath)) try { fs.unlinkSync(journalPath); } catch (_) {}
-                    console.log("[RESTORE-SQLITE] 🔄 Immediate auto-rollback completed successfully.");
-                } catch (rbErr) {
-                    console.error(`[RESTORE-SQLITE] 🚨 Immediate auto-rollback failed: ${rbErr.message}`);
-                }
-            }
-            throw copyErr;
-        }
-
-        // Step 4: Post-flight integrity verification on restored target
-        console.log("[RESTORE-SQLITE] 4/4 Verifying restored database integrity...");
-        let targetCheckDb;
-        try {
-            targetCheckDb = new Database(targetPath, { readonly: true, fileMustExist: true });
-            const integrity = targetCheckDb.pragma("integrity_check");
-            const ok = integrity.length === 1 && (integrity[0].integrity_check === "ok" || integrity[0] === "ok");
-            if (!ok) {
-                throw new Error(`Target integrity check failed: ${JSON.stringify(integrity)}`);
-            }
-            console.log("[RESTORE-SQLITE]     Target verified intact.");
-        } catch (err) {
-            console.error(`[RESTORE-SQLITE] ❌ Restored target verification failed: ${err.message}`);
-            if (targetCheckDb) {
-                try { targetCheckDb.close(); } catch (_) {}
-                targetCheckDb = null;
-            }
-
-            if (rollbackBakPath && fs.existsSync(rollbackBakPath)) {
-                console.warn(`[RESTORE-SQLITE] ⚠️ Auto-rollback initiated: restoring from safety backup ${rollbackBakPath}...`);
-                try {
-                    fs.copyFileSync(rollbackBakPath, targetPath);
-                    const walPath = `${targetPath}-wal`;
-                    const shmPath = `${targetPath}-shm`;
-                    const journalPath = `${targetPath}-journal`;
-                    if (fs.existsSync(walPath)) try { fs.unlinkSync(walPath); } catch (_) {}
-                    if (fs.existsSync(shmPath)) try { fs.unlinkSync(shmPath); } catch (_) {}
-                    if (fs.existsSync(journalPath)) try { fs.unlinkSync(journalPath); } catch (_) {}
-                    console.log("[RESTORE-SQLITE] 🔄 Auto-rollback completed successfully. Original database state restored.");
-                } catch (rbErr) {
-                    console.error(`[RESTORE-SQLITE] 🚨 Auto-rollback failed: ${rbErr.message}`);
-                }
-            }
-            throw err;
-        } finally {
-            if (targetCheckDb) {
-                try { targetCheckDb.close(); } catch (_) {}
-            }
-        }
+        const rollbackBakPath = prepareTargetSafetyBackup(targetPath);
+        stageAndPromoteBackup(sourcePath, targetPath, rollbackBakPath);
+        verifyTargetIntegrity(targetPath, rollbackBakPath);
 
         console.log("------------------------------------------------------------");
         console.log("[RESTORE-SQLITE] ✅ Database restored successfully!");
@@ -281,7 +305,7 @@ async function main() {
     }
 }
 
-if (require.main === module) {
+if (require.main === module) { // NOSONAR -- Node.js CommonJS entry-point guard; S3403 false positive.
     main().catch(err => {
         console.error("[RESTORE-SQLITE] Unhandled rejection:", err);
         process.exit(1);

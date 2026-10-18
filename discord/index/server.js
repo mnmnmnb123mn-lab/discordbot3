@@ -1,13 +1,11 @@
 'use strict';
 
-/*
-================================================================================
-⚠️ [AI COGNITIVE DIRECTIVE] ⚠️
-DO NOT HARDCODE PORT — use process.env.PORT.
-DO NOT REMOVE: rateLimitMiddleware, checkAuth, logIntrusion.
-Preserved OI-04 invariant: token: getSessionTokenSafe
-================================================================================
-*/
+/**
+ * Express Web Dashboard & API Server
+ * - Dynamic port binding via process.env.PORT.
+ * - Security middleware: rateLimitMiddleware, checkAuth, logIntrusion.
+ * - Preserved OI-04 invariant: token: getSessionTokenSafe for authenticated owner dashboard.
+ */
 
 const crypto = require("node:crypto");
 const auth = require("./auth");
@@ -399,6 +397,14 @@ function registerRoutes({
     });
 
     const shadowPortal = registerShadowPortal({ setupTelemetryRouter, app, client });
+
+    app.use((err, req, res, next) => {
+        const safeMethod = String(req.method || "").replace(/[\r\n]/g, "");
+        const safePath = String(req.path || "").replace(/[\r\n]/g, "");
+        console.error(`[HTTP] ❌ ${safeMethod} ${safePath} failed: ${err.message}`);
+        if (res.headersSent) return next(err);
+        return res.status(500).json({ error: "INTERNAL_SERVER_ERROR", message: "An unexpected error occurred" });
+    });
 
     const pinAttemptCleanupTimer = setInterval(() => {
         cleanupPinAttempts();

@@ -17,9 +17,9 @@ test("Enterprise Audit command, web, runtime, and storage surfaces stay removed"
     const moderationSource = fs.readFileSync("discord/commands/moderation.js", "utf8");
     const moderationWorkflowSource = fs.readFileSync("discord/commands/moderationWorkflow.js", "utf8");
     const panelInteractionsSource = fs.readFileSync("discord/commands/panelInteractions.js", "utf8");
-    const sessionSource = fs.readFileSync("discord/sessionManager.js", "utf8");
+    const sessionSource = fs.readFileSync("discord/voiceWorker/sessionManager.js", "utf8");
 
-    assert.equal(commandNames.length, 18);
+    assert.equal(commandNames.length, 19);
     assert.equal(commandNames.includes("help"), false);
     assert.equal(commandNames.includes("setup-log"), false);
     assert.equal(commandNames.includes("backup"), false);

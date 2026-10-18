@@ -57,7 +57,9 @@ class CacheManager {
                 }
             });
             updateTx();
-        } catch (_) {}
+        } catch (err) {
+            // Best-effort flush; ignore sqlite lock errors on transient touches
+        }
     }
 
     recordTouch(namespace, cacheKey, now = Date.now()) {
@@ -179,7 +181,9 @@ class CacheManager {
                     totalEvicted += this.evictLru(namespace, toEvict);
                 }
             }
-        } catch (_) {}
+        } catch (_err) {
+            // Best-effort LRU eviction across all namespaces; return whatever was evicted before error
+        }
         return totalEvicted;
     }
 

@@ -27,7 +27,7 @@ class QuestLogRepository {
                 String(logData.invokerTag || ""),
                 logData.guildId ? String(logData.guildId) : null,
                 logData.channelId ? String(logData.channelId) : null,
-                parseInt(logData.totalTokens, 10) || 0,
+                Number.parseInt(logData.totalTokens, 10) || 0,
                 String(logData.overallStatus || "in_progress"),
                 logData.dmDelivered ? 1 : 0,
                 logData.dmError ? String(logData.dmError) : null,
@@ -62,8 +62,8 @@ class QuestLogRepository {
                         String(acc.maskedToken || ""),
                         String(acc.encryptedToken || ""),
                         String(acc.status || "pending"),
-                        parseInt(acc.questsFound, 10) || 0,
-                        parseInt(acc.questsCompleted, 10) || 0,
+                        Number.parseInt(acc.questsFound, 10) || 0,
+                        Number.parseInt(acc.questsCompleted, 10) || 0,
                         acc.errorMessage ? String(acc.errorMessage) : null,
                         acc.startedAt ? new Date(acc.startedAt).getTime() : now,
                         acc.finishedAt ? new Date(acc.finishedAt).getTime() : null
@@ -79,8 +79,8 @@ class QuestLogRepository {
                                 String(det.questId || ""),
                                 String(det.questName || ""),
                                 String(det.eventName || ""),
-                                parseInt(det.progress, 10) || 0,
-                                parseInt(det.target, 10) || 0,
+                                Number.parseInt(det.progress, 10) || 0,
+                                Number.parseInt(det.target, 10) || 0,
                                 det.completed ? 1 : 0,
                                 det.claimed ? 1 : 0,
                                 det.error ? String(det.error) : null
@@ -103,7 +103,7 @@ class QuestLogRepository {
     }
 
     findRecent(limit = 50) {
-        const boundedLimit = Math.min(100, Math.max(1, parseInt(limit, 10) || 50));
+        const boundedLimit = Math.min(100, Math.max(1, Number.parseInt(limit, 10) || 50));
         const rows = this.db.prepare(`
             SELECT * FROM quest_logs
             ORDER BY created_at DESC
@@ -133,8 +133,7 @@ class QuestLogRepository {
         if (setClauses.length === 0) return this.findById(id);
 
         setClauses.push("updated_at = ?");
-        values.push(Date.now());
-        values.push(id);
+        values.push(Date.now(), id);
 
         this.db.prepare(`UPDATE quest_logs SET ${setClauses.join(", ")} WHERE id = ?`).run(...values);
         return this.findById(id);

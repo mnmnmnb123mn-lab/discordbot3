@@ -17,7 +17,8 @@ const {
     isFatalAuthError
 } = require('./questSession');
 const { encryptToken, maskToken } = require('./tokenCrypto');
-const tokenCoordinator = require('../../core/tokenCoordinator');
+const tokenCoordinator = require('../../tokens/tokenCoordinator');
+const config = require('../../config.json');
 
 try {
     tokenCoordinator.registerSubsystem({
@@ -225,6 +226,7 @@ async function startRunner({
 
     let liveMsg = null;
     let outputChannel = null;
+    let dmDisabled = false;
     let username = initialUsername ?? '...';
     let accountId = initialAccountId;
     let lastRenderAt = 0;
@@ -244,47 +246,16 @@ async function startRunner({
     }
 
     async function resolveOutputChannel() {
+        if (dmDisabled) return null;
         if (outputChannel?.isTextBased?.()) return outputChannel;
-        if (!client) return null;
+        if (!client || !ownerId) return null;
 
-        // Prefer sending to DM of the owner who started the runner (with timeout guard)
-        if (ownerId) {
-            const dm = await resolveUserDMChannel(client, ownerId);
-            if (dm) {
-                outputChannel = dm;
-                return outputChannel;
-            }
-        }
-
-        // Fallback to guild text channel
-        if (channelId) {
-            const ch = await client.channels.fetch(channelId).catch(() => null);
-            if (ch?.isTextBased?.()) {
-                outputChannel = ch;
-                return outputChannel;
-            }
+        const dm = await resolveUserDMChannel(client, ownerId);
+        if (dm?.isTextBased?.()) {
+            outputChannel = dm;
+            return outputChannel;
         }
         return null;
-    }
-
-    async function sendWithChannelFallback(ch, payload) {
-        const body = typeof payload === 'string' ? { content: payload } : payload;
-        try {
-            return await ch.send(body);
-        } catch (sendErr) {
-            // Fallback to guild channel if DM failed (e.g. user has DMs closed)
-            if (channelId && ch?.id !== channelId) {
-                if (isPermanentDmError(sendErr)) {
-                    console.warn(`[Quest Runner:${jobKey}] Permanent DM error (${sendErr.code || sendErr.message}); falling back to guild channel`);
-                }
-                const fallbackCh = await client.channels.fetch(channelId).catch(() => null);
-                if (fallbackCh?.isTextBased?.()) {
-                    outputChannel = fallbackCh;
-                    return await fallbackCh.send(body);
-                }
-            }
-            throw sendErr;
-        }
     }
 
     async function flush({ silentRollover = false } = {}) {
@@ -306,18 +277,32 @@ async function startRunner({
                 payload.flags = 4096;
             }
 
+            if (dmDisabled) return;
             const editingExisting = Boolean(liveMsg);
             try {
                 if (!liveMsg) {
                     const ch = await resolveOutputChannel();
-                    if (!ch?.isTextBased?.()) return;
-                    liveMsg = await sendWithChannelFallback(ch, payload);
+                    if (!ch?.isTextBased?.()) {
+                        dmDisabled = true;
+                        return;
+                    }
+                    liveMsg = await ch.send(payload);
                 } else {
                     await liveMsg.edit(payload);
                 }
             } catch (err) {
-                if (editingExisting) liveMsg = null;
-                console.warn(`[Quest Runner:${jobKey}] Status message update failed: ${err.message}`);
+                if (editingExisting) {
+                    liveMsg = null;
+                    if (isPermanentDmError(err)) {
+                        dmDisabled = true;
+                        outputChannel = null;
+                    }
+                } else {
+                    dmDisabled = true;
+                    outputChannel = null;
+                    liveMsg = null;
+                }
+                console.warn(`[Quest Runner:${jobKey}] DM message update failed (${err.code || err.message}); continuing runner silently without DM`);
             }
         });
 
@@ -498,17 +483,19 @@ async function startRunner({
             issues = summary.issues;
         }
 
-        await sendQuestSummaryDM({
-            ownerId,
-            accountId,
-            username,
-            mode: 'oneshot',
-            totalQuests: summary.totalSupportedQuests,
-            completedQuests: summary.completedByBotCount,
-            issues,
-            jobKey,
-            targetMessage: liveMsg
-        }).catch(() => {});
+        if (!dmDisabled) {
+            await sendQuestSummaryDM({
+                ownerId,
+                accountId,
+                username,
+                mode: 'oneshot',
+                totalQuests: summary.totalSupportedQuests,
+                completedQuests: summary.completedByBotCount,
+                issues,
+                jobKey,
+                targetMessage: liveMsg
+            }).catch(() => {});
+        }
     }
 
     async function prepareOneShotRound(allQuests) {
@@ -897,25 +884,31 @@ async function startRunner({
 
     let originalStatus = null;
 
+    async function processScheduledIteration(scheduledState, transientAttempt) {
+        const outcome = await runRoundSafely();
+        if (signal.aborted) {
+            return { aborted: true, scheduledState, transientAttempt };
+        }
+        if (originalStatus) {
+            await restoreUserStatus(userToken, originalStatus).catch(() => {});
+        }
+
+        if (outcome.transientError) {
+            const nextAttempt = await waitForTransientErrorRetry(transientAttempt);
+            return { aborted: false, scheduledState, transientAttempt: nextAttempt };
+        }
+        const nextState = await handleScheduledIdle(scheduledState, outcome);
+        return { aborted: false, scheduledState: nextState, transientAttempt: 0 };
+    }
+
     async function executeScheduledModeLoop() {
         let scheduledState = { isRecheck: false, rechecksRemaining: 0 };
         let transientAttempt = 0;
         while (!signal.aborted) {
-            const outcome = await runRoundSafely();
-            if (signal.aborted) break;
-            if (originalStatus) {
-                await restoreUserStatus(userToken, originalStatus).catch(() => {});
-            }
-
-            if (outcome.transientError) {
-                transientAttempt = await waitForTransientErrorRetry(transientAttempt);
-                continue;
-            }
-            transientAttempt = 0;
-            scheduledState = await handleScheduledIdle(scheduledState, outcome);
-            if (originalStatus) {
-                await restoreUserStatus(userToken, originalStatus).catch(() => {});
-            }
+            const iter = await processScheduledIteration(scheduledState, transientAttempt);
+            if (iter.aborted) break;
+            scheduledState = iter.scheduledState;
+            transientAttempt = iter.transientAttempt;
         }
     }
 
@@ -944,15 +937,36 @@ async function startRunner({
                 });
                 await liveMsg.edit({ embeds: [authFailEmbed] }).catch(() => {});
             }
-            await sendQuestAuthFailureDM({
-                ownerId,
-                accountId,
-                username,
-                jobKey
-            }).catch(() => {});
+            if (!dmDisabled) {
+                await sendQuestAuthFailureDM({
+                    ownerId,
+                    accountId,
+                    username,
+                    jobKey
+                }).catch(() => {});
+            }
         } else {
             addLog(`❌ ${username}: FATAL ERROR — ${err.message}`);
             persistSchedule({ lastError: err.message });
+            sendWebhookEvent({
+                target: 'ALERT',
+                severity: 'ERROR',
+                category: 'QUEST',
+                code: 'quest.runner_system_error',
+                state: 'OPEN',
+                title: 'QUEST RUNNER CRASH',
+                description: `เกิดข้อผิดพลาดร้ายแรงใน Quest Runner: ${err.message}`,
+                impact: `Quest Runner ของผู้ใช้ ${username} หยุดการทำงานกะทันหัน`,
+                action: 'ตรวจสอบข้อผิดพลาดและ stack trace ในระบบ Quest',
+                context: {
+                    'บัญชี': `${username} (${accountId})`,
+                    'ผู้สั่งการ': ownerId,
+                    'โหมด': mode,
+                    'รหัสข้อผิดพลาด': String(err?.code || err?.name || 'runner_error')
+                },
+                dedupeKey: `quest-runner-error:${accountId}:${err.message}`,
+                dedupeMs: 5 * 60 * 1000
+            }).catch(() => {});
         }
         await flush();
     }
@@ -1055,9 +1069,8 @@ async function startUserQuestSession({
         let startIndex = Date.now();
 
         // Create QuestLog in SQLite
-        let questLog = null;
         try {
-            questLog = getQuestLogRepository().create({
+            getQuestLogRepository().create({
                 invokerId,
                 invokerTag,
                 guildId,
@@ -1073,14 +1086,16 @@ async function startUserQuestSession({
                     };
                 })
             });
-        } catch (_) {}
+        } catch (_err) {
+            // Ignored: Best-effort audit logging into QuestLogRepository
+        }
 
         // Emit startup webhook event
         sendWebhookEvent({
             severity: 'INFO',
-            category: 'COMMAND',
+            category: 'QUEST',
             code: 'quest.session.started',
-            title: '🚀 มีการเริ่มระบบทำ Quest อัตโนมัติ',
+            title: `${config.emojis?.boost || '🚀'} มีการเริ่มระบบทำ Quest อัตโนมัติ`,
             description: `ผู้ใช้ <@${invokerId}> ได้ส่งคำขอทำ Discord Quest (โหมด: ${mode})`,
             context: {
                 'ผู้สั่งการ': `${invokerTag} (${invokerId})`,
@@ -1098,7 +1113,7 @@ async function startUserQuestSession({
                 try {
                     me = await fetchMe(token);
                 } catch (authErr) {
-                    results.push({ started: false, line: `❌ Token ลำดับที่ ${i + 1} ไม่ถูกต้องหรือหมดอายุ` });
+                    results.push({ started: false, line: `${config.emojis?.red_card || config.emojis?.error || '❌'} Token ลำดับที่ ${i + 1} ไม่ถูกต้องหรือหมดอายุ` });
                     continue;
                 }
 
@@ -1107,7 +1122,7 @@ async function startUserQuestSession({
 
                 await withAccountAdmissionLock(accountId, async () => {
                     if (findAnyJobByAccount(accountId)) {
-                        results.push({ started: false, line: `⚠️ **${username}** มี Runner ทำงานอยู่แล้วในระบบ` });
+                        results.push({ started: false, line: `${config.emojis?.warning || '⚠️'} **${username}** มี Runner ทำงานอยู่แล้วในระบบ` });
                         return;
                     }
 
@@ -1145,11 +1160,11 @@ async function startUserQuestSession({
                         username,
                         line: mode === 'scheduled'
                             ? `🤖 เริ่มระบบอัตโนมัติรายวัน: **${username}**\n   ตรวจทันที และตรวจประจำเวลา **00:00 / 08:00 / 16:00 น.**`
-                            : `✅ เริ่ม Quest auto : **${username}**`
+                            : `${config.emojis?.check_alt || config.emojis?.success || '✅'} เริ่ม Quest auto : **${username}**`
                     });
                 });
             } catch (err) {
-                results.push({ started: false, line: `❌ บัญชีลำดับที่ ${i + 1} ไม่สำเร็จ: ${err.message}` });
+                results.push({ started: false, line: `${config.emojis?.red_card || config.emojis?.error || '❌'} บัญชีลำดับที่ ${i + 1} ไม่สำเร็จ: ${err.message}` });
             }
         }
 

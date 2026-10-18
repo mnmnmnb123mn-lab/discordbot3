@@ -1,3 +1,5 @@
+"use strict";
+
 const {
   redactSensitiveDiscordSnapshot
 } = require("./sensitiveAccess");
@@ -137,12 +139,9 @@ function safePolicySnapshot(snapshot = {}) {
     requireEmail: snapshot.requireEmail,
     requireEmailVerified: snapshot.requireEmailVerified,
     requireConnections: snapshot.requireConnections,
-    minConnections: snapshot.minConnections,
     securityRules: snapshot.securityRules && typeof snapshot.securityRules === "object"
       ? snapshot.securityRules
-      : {},
-    allowedCountries: Array.isArray(snapshot.allowedCountries) ? snapshot.allowedCountries.slice(0, 80) : [],
-    blockedCountries: Array.isArray(snapshot.blockedCountries) ? snapshot.blockedCountries.slice(0, 80) : []
+      : {}
   };
 }
 

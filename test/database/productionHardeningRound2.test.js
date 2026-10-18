@@ -4,6 +4,7 @@ const { test, describe, before, after, beforeEach, afterEach } = require("node:t
 const assert = require("node:assert/strict");
 const path = require("node:path");
 const fs = require("node:fs");
+const os = require("node:os");
 const Database = require("better-sqlite3");
 
 const { runMigrations } = require("../../database/sqlite/migrations/migrationRunner");
@@ -32,13 +33,26 @@ const scheduler = require("../../database/sqlite/maintenance/scheduler");
 
 describe("Production Hardening Round 2 Audit Fixes Suite", () => {
     let tempDir;
+    let prevDbPath;
 
     before(() => {
-        tempDir = path.join(__dirname, "temp-round2-test-" + Date.now());
+        tempDir = path.join(os.tmpdir(), "temp-round2-test-" + Date.now());
         fs.mkdirSync(tempDir, { recursive: true });
+        prevDbPath = process.env.SQLITE_DB_PATH;
+        process.env.SQLITE_DB_PATH = path.join(tempDir, "test.sqlite");
+        const { getDatabase } = require("../../database/sqlite/connection");
+        const db = getDatabase();
+        runMigrations(db);
     });
 
     after(() => {
+        const { closeDatabase } = require("../../database/sqlite/connection");
+        closeDatabase();
+        if (prevDbPath !== undefined) {
+            process.env.SQLITE_DB_PATH = prevDbPath;
+        } else {
+            delete process.env.SQLITE_DB_PATH;
+        }
         if (fs.existsSync(tempDir)) {
             try { fs.rmSync(tempDir, { recursive: true, force: true }); } catch (_) {}
         }
@@ -69,6 +83,42 @@ describe("Production Hardening Round 2 Audit Fixes Suite", () => {
             releaseProcessLock(dbPath);
             const checkAfter = isProcessLockActive(dbPath);
             assert.equal(checkAfter.active, false);
+        });
+
+        test("isProcessLockActive handles corrupt JSON and fails closed on filesystem errors", () => {
+            const dbPath = path.join(tempDir, "lock_edge_test.sqlite");
+            const lockFile = `${dbPath}.lock`;
+
+            // 1. Missing lock file
+            assert.equal(isProcessLockActive(dbPath).active, false);
+
+            // 2. Corrupt JSON
+            fs.writeFileSync(lockFile, "NOT_JSON{{{");
+            const corruptRes = isProcessLockActive(dbPath);
+            assert.equal(corruptRes.active, false);
+            assert.equal(corruptRes.corrupt, true);
+            assert.equal(fs.existsSync(lockFile), false);
+
+            // 3. Filesystem error (EACCES/EIO) -> fail closed!
+            fs.writeFileSync(lockFile, JSON.stringify({ pid: 12345 }));
+            const origRead = fs.readFileSync;
+            try {
+                fs.readFileSync = (p, ...args) => {
+                    if (String(p).endsWith(".lock")) {
+                        const err = new Error("Permission denied");
+                        err.code = "EACCES";
+                        throw err;
+                    }
+                    return origRead.call(fs, p, ...args);
+                };
+                const fsErrRes = isProcessLockActive(dbPath);
+                assert.equal(fsErrRes.active, true);
+                assert.equal(fsErrRes.indeterminate, true);
+                assert.equal(fsErrRes.code, "EACCES");
+            } finally {
+                fs.readFileSync = origRead;
+                try { fs.unlinkSync(lockFile); } catch (_) {}
+            }
         });
 
         test("restoreDatabase rejects restore if active bot process holds lock without --force", async () => {

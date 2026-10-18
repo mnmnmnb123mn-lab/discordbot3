@@ -2,6 +2,53 @@
 
 const { getDatabase } = require("../../connection");
 
+function _buildStatusCondition(statusFilter, conditions, params) {
+    if (!statusFilter) return true;
+    if (statusFilter.$in) {
+        if (statusFilter.$in.length === 0) return false;
+        const placeholders = statusFilter.$in.map(() => "?").join(", ");
+        conditions.push(`status IN (${placeholders})`);
+        params.push(...statusFilter.$in);
+        return true;
+    }
+    conditions.push("status = ?");
+    params.push(String(statusFilter));
+    return true;
+}
+
+function _buildCategoryCondition(categoryFilter, conditions, params) {
+    if (!categoryFilter) return true;
+    if (categoryFilter.$nin) {
+        if (categoryFilter.$nin.length > 0) {
+            const placeholders = categoryFilter.$nin.map(() => "?").join(", ");
+            conditions.push(`category NOT IN (${placeholders})`);
+            params.push(...categoryFilter.$nin);
+        }
+        return true;
+    }
+    if (categoryFilter.$in) {
+        if (categoryFilter.$in.length === 0) return false;
+        const placeholders = categoryFilter.$in.map(() => "?").join(", ");
+        conditions.push(`category IN (${placeholders})`);
+        params.push(...categoryFilter.$in);
+        return true;
+    }
+    conditions.push("category = ?");
+    params.push(String(categoryFilter));
+    return true;
+}
+
+function _buildTimestampConditions(filter, conditions, params) {
+    if (filter.nextAttemptAt?.$lte !== undefined) {
+        conditions.push("next_attempt_at <= ?");
+        params.push(Number(filter.nextAttemptAt.$lte));
+    }
+    if (filter.expiresAt?.$gt !== undefined) {
+        conditions.push("expires_at > ?");
+        params.push(Number(filter.expiresAt.$gt));
+    }
+}
+
 class DmNotificationRepository {
     constructor(db = null) {
         this._db = db;
@@ -35,10 +82,10 @@ class DmNotificationRepository {
                 String(recordData.recipientId),
                 String(recordData.category),
                 String(recordData.priority || "normal"),
-                parseInt(recordData.priorityRank, 10) || 2,
+                Number.parseInt(recordData.priorityRank, 10) || 2,
                 payloadJson,
                 String(recordData.status || "pending"),
-                parseInt(recordData.attempts, 10) || 0,
+                Number.parseInt(recordData.attempts, 10) || 0,
                 Number(recordData.nextAttemptAt) || now,
                 recordData.lastError ? String(recordData.lastError) : null,
                 recordData.sentAt ? Number(recordData.sentAt) : null,
@@ -48,7 +95,7 @@ class DmNotificationRepository {
             );
             return this.findById(info.lastInsertRowid);
         } catch (err) {
-            if (err.message && err.message.includes("UNIQUE constraint failed")) {
+            if (err.message?.includes("UNIQUE constraint failed")) {
                 const dupErr = new Error(`E11000 duplicate key error collection: dm_notifications index: eventKey_1 dup key: { eventKey: "${recordData.eventKey}" }`);
                 dupErr.code = 11000;
                 dupErr.keyPattern = { eventKey: 1 };
@@ -135,7 +182,7 @@ class DmNotificationRepository {
         }
         if (updateFields.attempts !== undefined) {
             setClauses.push("attempts = ?");
-            values.push(parseInt(updateFields.attempts, 10) || 0);
+            values.push(Number.parseInt(updateFields.attempts, 10) || 0);
         }
         if (updateFields.nextAttemptAt !== undefined) {
             setClauses.push("next_attempt_at = ?");
@@ -155,7 +202,7 @@ class DmNotificationRepository {
         }
         if (updateFields.priorityRank !== undefined) {
             setClauses.push("priority_rank = ?");
-            values.push(parseInt(updateFields.priorityRank, 10));
+            values.push(Number.parseInt(updateFields.priorityRank, 10));
         }
 
         setClauses.push("updated_at = ?");
@@ -178,48 +225,12 @@ class DmNotificationRepository {
         const conditions = [];
         const params = [];
 
-        if (filter.status) {
-            if (filter.status.$in) {
-                if (filter.status.$in.length === 0) return [];
-                const placeholders = filter.status.$in.map(() => "?").join(", ");
-                conditions.push(`status IN (${placeholders})`);
-                params.push(...filter.status.$in);
-            } else {
-                conditions.push("status = ?");
-                params.push(String(filter.status));
-            }
-        }
-
-        if (filter.category) {
-            if (filter.category.$nin) {
-                if (filter.category.$nin.length > 0) {
-                    const placeholders = filter.category.$nin.map(() => "?").join(", ");
-                    conditions.push(`category NOT IN (${placeholders})`);
-                    params.push(...filter.category.$nin);
-                }
-            } else if (filter.category.$in) {
-                if (filter.category.$in.length === 0) return [];
-                const placeholders = filter.category.$in.map(() => "?").join(", ");
-                conditions.push(`category IN (${placeholders})`);
-                params.push(...filter.category.$in);
-            } else {
-                conditions.push("category = ?");
-                params.push(String(filter.category));
-            }
-        }
-
-        if (filter.nextAttemptAt && filter.nextAttemptAt.$lte !== undefined) {
-            conditions.push("next_attempt_at <= ?");
-            params.push(Number(filter.nextAttemptAt.$lte));
-        }
-
-        if (filter.expiresAt && filter.expiresAt.$gt !== undefined) {
-            conditions.push("expires_at > ?");
-            params.push(Number(filter.expiresAt.$gt));
-        }
+        if (!_buildStatusCondition(filter.status, conditions, params)) return [];
+        if (!_buildCategoryCondition(filter.category, conditions, params)) return [];
+        _buildTimestampConditions(filter, conditions, params);
 
         const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : "";
-        const limitClause = options.limit ? `LIMIT ${parseInt(options.limit, 10)}` : "";
+        const limitClause = options.limit ? `LIMIT ${Number.parseInt(options.limit, 10)}` : "";
         const orderClause = "ORDER BY priority_rank ASC, created_at ASC";
 
         const rows = this.db.prepare(`SELECT * FROM dm_notifications ${whereClause} ${orderClause} ${limitClause}`).all(...params);
@@ -230,13 +241,13 @@ class DmNotificationRepository {
         const conditions = [];
         const params = [];
 
-        if (filter.category && filter.category.$in) {
+        if (filter.category?.$in) {
             if (filter.category.$in.length === 0) return { deletedCount: 0 };
             const placeholders = filter.category.$in.map(() => "?").join(", ");
             conditions.push(`category IN (${placeholders})`);
             params.push(...filter.category.$in);
         }
-        if (filter.status && filter.status.$in) {
+        if (filter.status?.$in) {
             if (filter.status.$in.length === 0) return { deletedCount: 0 };
             const placeholders = filter.status.$in.map(() => "?").join(", ");
             conditions.push(`status IN (${placeholders})`);

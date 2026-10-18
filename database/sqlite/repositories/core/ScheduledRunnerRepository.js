@@ -89,7 +89,9 @@ class ScheduledRunnerRepository {
         }
 
         const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : "";
-        const orderBy = options.sort ? "ORDER BY created_at ASC" : "ORDER BY created_at ASC";
+        const orderBy = (options.sort === "desc" || options.sort?.created_at === -1 || options.sort?.createdAt === -1)
+            ? "ORDER BY created_at DESC"
+            : "ORDER BY created_at ASC";
         const rows = this.db.prepare(`SELECT * FROM scheduled_runners ${whereClause} ${orderBy}`).all(...params);
         return rows.map(r => this._hydrate(r));
     }
@@ -126,8 +128,7 @@ class ScheduledRunnerRepository {
         if (setClauses.length === 0) return this.findById(id);
 
         setClauses.push("updated_at = ?");
-        values.push(Date.now());
-        values.push(id);
+        values.push(Date.now(), id);
 
         this.db.prepare(`UPDATE scheduled_runners SET ${setClauses.join(", ")} WHERE id = ?`).run(...values);
         return this.findById(id);

@@ -1,20 +1,17 @@
 /* eslint-disable complexity -- Voice/session lifecycle is behavior-sensitive; refactor separately. */
-/*
-================================================================================
-⚠️ [AI COGNITIVE DIRECTIVE] ⚠️
-DO NOT MODIFY: MAX_RECONNECT_ATTEMPTS, CONNECTION_TIMEOUT, LOGIN_TIMEOUT.
-DO NOT REMOVE: isShuttingDown flag — critical for SIGTERM safety (เฟส 8+18).
-DO NOT SIMPLIFY: OperationQueue concurrency — prevents IP ban from Discord.
-================================================================================
-*/
+/**
+ * Voice Session Lifecycle Management
+ * - Self-client authentication, voice channel connections, and gateway heartbeats.
+ * - Reconnect backoff scheduling and Token Coordinator quarantine integration.
+ */
 const crypto = require("node:crypto");
 const { Client: SelfClient } = require("discord.js-selfbot-v13");
 const { joinVoiceChannel, getVoiceConnection, VoiceConnectionStatus, entersState } = require("@discordjs/voice");
-const sessionManager = require("../sessionManager");
+const sessionManager = require("./sessionManager");
 const { sendWebhookEvent, getDiscordGuildIconUrl } = require("../core/webhooks");
 const { sanitizeLogText } = require("../core/safeLogger");
 const { registerGatewayDiagnostics } = require("../core/gatewayDiagnostics");
-const tokenCoordinator = require("../core/tokenCoordinator");
+const tokenCoordinator = require("../tokens/tokenCoordinator");
 const {
     st,
     naturalRunning,
@@ -58,6 +55,7 @@ const {
     buildSelfClientOptions,
     cleanupLeanSessionClient,
     destroyAllPooledClients,
+    installVoiceGatewayInterceptor,
 } = require("./cacheUtils");
 const {
     refreshSessionMetadata,
@@ -74,6 +72,33 @@ const { startAutoDeafTimer, stopAutoDeafTimer, stopAllAutoDeafTimers } = require
 const { loginQueue, recoveryQueue } = require("./queue");
 const { cleanToken } = require("../sessions/tokenUtils");
 const channelLock = require("./channelLock");
+const {
+    clearHibernateTimer,
+    resolveHibernatePauseMs,
+    handleHibernateTransition,
+    resolveRecoveryExhaustionDeps,
+    handleRecoveryExhaustion,
+    resolveRecoveryClient,
+    restoreRecoveryVoiceConnection,
+    releaseRecoveryOwnership,
+    resolveMaxHibernateCycles,
+    isSessionEligibleForRecovery,
+    performRecoveryPreflight,
+    checkRecoveryAttemptLimits,
+    resolveRecoveryDeps,
+    isPostJitterSessionValid,
+    recoverSessionConnection,
+    scheduleHealthRecovery,
+    advanceHibernationState,
+    safeRejoinConnection,
+    handleWrongChannelState,
+    isSessionConnectionReady,
+    isOnRecoveryCooldown,
+    syncSessionClientFromPool,
+    processSessionHealthCheck,
+    forceReconnectSession,
+    cleanupIdleSessions: recoveryCleanupIdleSessions
+} = require("./lifecycleRecovery");
 
 const ensureSessionFlights = new Map();
 
@@ -209,6 +234,7 @@ async function notifyStartFailure(sessionId, error) {
 }
 
 function setupClientEventHandlers(newClient, sessionId) {
+    installVoiceGatewayInterceptor(newClient);
     registerGatewayDiagnostics(newClient, {
         clientName: "voice-self-client",
         context: `session-${getSessionShortId(sessionId)}`
@@ -525,60 +551,6 @@ async function handlePreflightFailure(sessionId, tokenHash, session, clientRef, 
     }
 }
 
-function clearHibernateTimer(sessionId) {
-    const timer = hibernateTimers.get(sessionId);
-    if (timer) {
-        clearTimeout(timer);
-        hibernateTimers.delete(sessionId);
-    }
-}
-
-function resolveHibernatePauseMs(cycle) {
-    if (cycle === 2) {
-        return 10 * 60 * 1000;
-    }
-    return 5 * 60 * 1000;
-}
-
-async function handleHibernateTransition(sessionId, tokenHash, session, currentCycle, deps = {}) {
-    const nextCycle = currentCycle + 1;
-    const pauseMs = resolveHibernatePauseMs(nextCycle);
-    const hibernateUntil = Date.now() + pauseMs;
-    const recordHibernate = deps.recordHibernateCycle || notifications.recordHibernateCycle;
-
-    console.log(`[WORKER] 💤 Max burst attempts reached for ${sanitizeLogText(sessionId)}. Entering Hibernate Cycle ${nextCycle}: pausing for ${pauseMs / 60000} minutes.`);
-
-    if (session?.connection) {
-        try { session.connection.destroy(); } catch {}
-        session.connection = null;
-    }
-    if (session) {
-        session.reconnecting = false;
-    }
-
-    if (recordHibernate) {
-        await recordHibernate(sessionId, nextCycle, hibernateUntil).catch(() => {});
-    }
-
-    clearHibernateTimer(sessionId);
-
-    const setTimer = deps.setTimeout || setTimeout;
-    const wakeTimer = setTimer(() => {
-        hibernateTimers.delete(sessionId);
-        const currentSession = sessionManager.getSession(sessionId);
-        if (!currentSession || st.isShuttingDown) return;
-        console.log(`[WORKER] ⏰ Hibernate pause ended for ${sanitizeLogText(sessionId)}. Resuming recovery queue...`);
-        if (currentSession.recoveryState) {
-            currentSession.recoveryState.phase = "degraded";
-            currentSession.recoveryState.attempts = 0;
-            currentSession.recoveryState.hibernateUntil = null;
-        }
-        healthCheck().catch(() => {});
-    }, pauseMs);
-    wakeTimer.unref?.();
-    hibernateTimers.set(sessionId, wakeTimer);
-}
-
 function cleanupStaleConnectionIfPresent(session, guildId, channelId, sessionId, deps = {}) {
     const existingConn = session.connection;
     if (!existingConn || existingConn.state?.status === VoiceConnectionStatus.Destroyed) {
@@ -778,7 +750,7 @@ function setupVoiceConnectionListeners({ connection, client, guild, guildId, tok
     });
 
     connection.on(VoiceConnectionStatus.Destroyed, () => {
-        tokenCoordinator.unregisterVoiceActivity(tokenHash);
+        tokenCoordinator.unregisterVoiceActivity(tokenHash, { sessionId, guildId });
     });
 
     let disconnectHandling = false;
@@ -859,6 +831,7 @@ async function connectToVoice(client, guildId, channelId, tokenHash, sessionId, 
     setupVoiceConnectionListeners({ connection, client, guild, guildId, tokenHash, sessionId, session });
 
     await confirmVoiceConnectionReady(connection, client, session, sessionId);
+    try { cleanupLeanSessionClient(sessionId, "post_connect_ready"); } catch {}
 
     return connection;
 }
@@ -1351,31 +1324,6 @@ async function autoResume() {
 
     console.log(`[WORKER] ✅ Auto-resume complete: active=${activeToResume} resumed=${resumed} failed=${failed} skipped=${skipped} total=${sessions.size}`);
 }
-
-const {
-    resolveRecoveryExhaustionDeps,
-    handleRecoveryExhaustion,
-    resolveRecoveryClient,
-    restoreRecoveryVoiceConnection,
-    releaseRecoveryOwnership,
-    resolveMaxHibernateCycles,
-    isSessionEligibleForRecovery,
-    performRecoveryPreflight,
-    checkRecoveryAttemptLimits,
-    resolveRecoveryDeps,
-    isPostJitterSessionValid,
-    recoverSessionConnection,
-    scheduleHealthRecovery,
-    advanceHibernationState,
-    safeRejoinConnection,
-    handleWrongChannelState,
-    isSessionConnectionReady,
-    isOnRecoveryCooldown,
-    syncSessionClientFromPool,
-    processSessionHealthCheck,
-    forceReconnectSession,
-    cleanupIdleSessions: recoveryCleanupIdleSessions
-} = require("./lifecycleRecovery");
 
 async function healthCheck() {
     if (st.isShuttingDown) return;

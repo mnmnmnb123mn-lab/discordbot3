@@ -1,11 +1,4 @@
 /* eslint-disable complexity -- Utility command flows are behavior-sensitive; refactor separately. */
-/*
-================================================================================
-⚠️ [AI COGNITIVE DIRECTIVE] ⚠️
-DO NOT REMOVE: activeEmojiCopies Set — race condition guard.
-DO NOT REMOVE: finally blocks — they MUST unlock Sets after every operation.
-================================================================================
-*/
 
 const {
     MessageEmbed,
@@ -44,13 +37,13 @@ async function handleEmbed(interaction) {
 //  📢  SAY (Administrator only)
 // ════════════════════════════════════════════════════════════════════════════
 async function handleSay(interaction) {
-    if (!await requireMemberPermission(interaction, PermissionFlagsBits.Administrator, `> ${config.emojis.no_entry} ต้องเป็น Administrator เพื่อใช้คำสั่งนี้`)) return;
-    if (!await requireBotPermission(interaction, [PermissionFlagsBits.SendMessages, PermissionFlagsBits.ViewChannel], `> ${config.emojis.error} บอทไม่มีสิทธิ์ส่งข้อความในช่องนี้ (ขาด SEND_MESSAGES หรือ VIEW_CHANNEL)`, interaction.channel)) return;
+    if (!await requireMemberPermission(interaction, PermissionFlagsBits.Administrator, `> ${config.emojis?.no_entry || "⛔"} ต้องเป็น Administrator เพื่อใช้คำสั่งนี้`)) return;
+    if (!await requireBotPermission(interaction, [PermissionFlagsBits.SendMessages, PermissionFlagsBits.ViewChannel], `> ${config.emojis?.error || "❌"} บอทไม่มีสิทธิ์ส่งข้อความในช่องนี้ (ขาด SEND_MESSAGES หรือ VIEW_CHANNEL)`, interaction.channel)) return;
 
     const rawMsg = interaction.options.getString("message");
     const msg = sanitizeUserMessage(rawMsg, { maxLength: 2000 });
     if (!msg) return interaction.reply({
-        content: `> ${config.emojis.error} ข้อความว่างหรือถูกบล็อกทั้งหมด`,
+        content: `> ${config.emojis?.error || "❌"} ข้อความว่างหรือถูกบล็อกทั้งหมด`,
         ephemeral: true
     });
 
@@ -61,7 +54,7 @@ async function handleSay(interaction) {
         content: msg,
         allowedMentions: { parse: ["users", "roles", "everyone"], repliedUser: false }
     });
-    return interaction.editReply({ content: `> ${config.emojis.success} ส่งเรียบร้อย` });
+    return interaction.editReply({ content: `> ${config.emojis?.success || "✅"} ส่งเรียบร้อยแล้ว` });
 }
 
 // ════════════════════════════════════════════════════════════════════════════
@@ -127,7 +120,7 @@ async function validateEmbedCreateTarget(interaction) {
     if (!await requireMemberPermission(
         interaction,
         PermissionFlagsBits.Administrator,
-        `> ⛔ คำสั่งนี้จำเป็นต้องใช้สิทธิ์ผู้ดูแลระบบ (Administrator) เท่านั้น`
+        `> ${config.emojis?.no_entry || "⛔"} คำสั่งนี้จำเป็นต้องใช้สิทธิ์ผู้ดูแลระบบ (Administrator) เท่านั้น`
     )) return null;
 
     const targetChannel = interaction.options.getChannel("channel") || interaction.channel;
@@ -211,7 +204,7 @@ async function handleEmbedCreate(interaction) {
 
     const payload = buildEmbedCreatePayload(interaction);
     if (!payload) {
-        return interaction.reply({ content: `> ${config.emojis.error} เนื้อหาหลักของ Embed (description) ต้องไม่ว่าง`, ephemeral: true });
+        return interaction.reply({ content: `> ${config.emojis?.error || "❌"} เนื้อหาหลักของ Embed (description) ต้องไม่ว่างเปล่า`, ephemeral: true });
     }
 
     markCommandAccepted(interaction);
@@ -222,15 +215,15 @@ async function handleEmbedCreate(interaction) {
         const sentMsg = await targetChannel.send(payload);
 
         const successText = targetChannel.id === interaction.channel.id
-            ? `> ${config.emojis.success} สร้าง Embed และส่งเรียบร้อยแล้ว`
-            : `> ${config.emojis.success} สร้าง Embed และส่งไปยังห้อง <#${targetChannel.id}> เรียบร้อยแล้ว`;
+            ? `> ${config.emojis?.success || "✅"} สร้าง Embed และส่งเรียบร้อยแล้ว`
+            : `> ${config.emojis?.success || "✅"} สร้าง Embed และส่งไปยังห้อง <#${targetChannel.id}> เรียบร้อยแล้ว`;
 
         return interaction.editReply({
             content: sentMsg?.url ? `${successText} • [เปิดดูข้อความ](${sentMsg.url})` : successText
         });
-    } catch (err) {
+    } catch {
         return interaction.editReply({
-            content: `> ${config.emojis.error} สร้าง Embed ไม่สำเร็จ: ${err?.message || "เกิดข้อผิดพลาด"}`
+            content: `> ${config.emojis?.error || "❌"} สร้าง Embed ไม่สำเร็จ กรุณาตรวจสอบสิทธิ์ของบอทและลองใหม่อีกครั้ง`
         });
     }
 }
@@ -298,9 +291,9 @@ function checkSmartEmojiQuota(quotas, parsedEmojis) {
             reason: "ALL_FULL",
             title: "โควตาอิโมจิของเซิร์ฟเวอร์เต็มทั้งหมดแล้ว",
             description:
-                `> ${config.emojis.error} **เซิร์ฟเวอร์นี้มีอิโมจิเต็มโควตาทั้งหมดแล้ว!**\n` +
-                `> 🖼️ อิโมจิทั่วไป: **${quotas.staticCount}/${quotas.maxPerType}** | ✨ อิโมจิเคลื่อนไหว: **${quotas.animatedCount}/${quotas.maxPerType}**\n\n` +
-                `💡 *กรุณาลบอิโมจิที่ไม่ใช้งาน หรือบูสต์เซิร์ฟเวอร์เพื่อเพิ่มขีดจำกัดโควตา*`
+                `> ${config.emojis.error} **เซิร์ฟเวอร์นี้มีอิโมจิเต็มโควตาทั้งหมดแล้ว**\n` +
+                `> อิโมจิทั่วไป: **${quotas.staticCount}/${quotas.maxPerType}** | อิโมจิเคลื่อนไหว: **${quotas.animatedCount}/${quotas.maxPerType}**\n\n` +
+                `💡 *กรุณาลบอิโมจิที่ไม่ใช้งาน หรือเพิ่มระดับ Boost ของเซิร์ฟเวอร์*`
         };
     }
 
@@ -308,11 +301,12 @@ function checkSmartEmojiQuota(quotas, parsedEmojis) {
         return {
             allowed: false,
             reason: "STATIC_FULL",
-            title: "ช่องเก็บอิโมจิทั่วไป (Static) เต็มแล้ว",
+            title: "ช่องเก็บอิโมจิทั่วไปเต็มแล้ว",
             description:
-                `> ${config.emojis.error} **ช่องอิโมจิทั่วไปเต็มแล้ว (${quotas.staticCount}/${quotas.maxPerType})** ไม่สามารถนำเข้าได้\n` +
-                `> คุณระบุอิโมจิทั่วไปมา **${reqStatic}** ตัว แต่ไม่มีช่องว่างเหลือเลย\n\n` +
-                `💡 *มีช่องอิโมจิเคลื่อนไหวว่างเหลืออยู่ **${quotas.animatedFree}** ช่อง คุณสามารถนำเข้าอิโมจิแบบขยับได้แทน*`
+                `> ${config.emojis.error} **โควตาอิโมจิทั่วไปเต็มแล้ว (${quotas.staticCount}/${quotas.maxPerType})** ไม่สามารถนำเข้าได้\n` +
+                (quotas.animatedFree > 0
+                    ? `> ยังมีโควตาอิโมจิเคลื่อนไหวเหลือ **${quotas.animatedFree}** ตัว`
+                    : "")
         };
     }
 
@@ -320,11 +314,12 @@ function checkSmartEmojiQuota(quotas, parsedEmojis) {
         return {
             allowed: false,
             reason: "ANIMATED_FULL",
-            title: "ช่องเก็บอิโมจิเคลื่อนไหว (Animated) เต็มแล้ว",
+            title: "ช่องเก็บอิโมจิเคลื่อนไหวเต็มแล้ว",
             description:
-                `> ${config.emojis.error} **ช่องอิโมจิเคลื่อนไหวเต็มแล้ว (${quotas.animatedCount}/${quotas.maxPerType})** ไม่สามารถนำเข้าได้\n` +
-                `> คุณระบุอิโมจิเคลื่อนไหวมา **${reqAnimated}** ตัว แต่ไม่มีช่องว่างเหลือเลย\n\n` +
-                `💡 *มีช่องอิโมจิทั่วไปว่างเหลืออยู่ **${quotas.staticFree}** ช่อง คุณสามารถนำเข้าอิโมจิแบบภาพนิ่งแทน*`
+                `> ${config.emojis.error} **โควตาอิโมจิเคลื่อนไหวเต็มแล้ว (${quotas.animatedCount}/${quotas.maxPerType})** ไม่สามารถนำเข้าได้\n` +
+                (quotas.staticFree > 0
+                    ? `> ยังมีโควตาอิโมจิทั่วไปเหลือ **${quotas.staticFree}** ตัว`
+                    : "")
         };
     }
 
@@ -337,16 +332,6 @@ function checkSmartEmojiQuota(quotas, parsedEmojis) {
     };
 }
 
-function renderEmojiProgressBar(current, total, barLength = 10) {
-    const validTotal = Math.max(1, total || 1);
-    const ratio = Math.min(1, Math.max(0, current / validTotal));
-    const filled = Math.min(barLength, Math.round(ratio * barLength));
-    const empty = barLength - filled;
-    const bar = "▰".repeat(filled) + "▱".repeat(empty);
-    const percent = Math.round(ratio * 100);
-    return `${bar} \`${percent}%\``;
-}
-
 function buildEmojiNoticeEmbed({ title, description, color = config.system.themeColors.error, guild, user }) {
     const embed = new MessageEmbed()
         .setColor(color)
@@ -357,34 +342,7 @@ function buildEmojiNoticeEmbed({ title, description, color = config.system.theme
     if (guildIcon) {
         embed.setThumbnail(guildIcon);
     }
-    if (user?.tag) {
-        embed.setFooter({
-            text: `ผู้สั่งการ: ${user.tag}`,
-            iconURL: user.displayAvatarURL?.({ dynamic: true }) || undefined
-        });
-    }
     return embed;
-}
-
-function buildEmojiProgressEmbed({ current, total, added, skipped, failed, currentEmojiName, isAnimated, guild, user }) {
-    const bar = renderEmojiProgressBar(current, total, 10);
-    return new MessageEmbed()
-        .setColor(config.system.themeColors.warning || "#FEE75C")
-        .setAuthor({
-            name: "ระบบนำเข้าอิโมจิกำลังทำงาน...",
-            iconURL: guild?.iconURL?.({ dynamic: true }) || undefined
-        })
-        .setTitle(`${config.emojis.loading || "⏳"} กำลังดึงและสร้างอิโมจิ (${current}/${total})`)
-        .setDescription(
-            `> ${bar}\n\n` +
-            `> ⏳ **กำลังนำเข้า:** \`:${currentEmojiName || "emoji"}:\` (${isAnimated ? "เคลื่อนไหว ✨" : "ทั่วไป 🖼️"})\n` +
-            `> ⚡ **สถานะปัจจุบัน:** ${config.emojis.success || "✅"} สำเร็จ \`${added}\` | ${config.emojis.warning || "⚠️"} ข้าม \`${skipped}\` | ${config.emojis.error || "❌"} พลาด \`${failed}\``
-        )
-        .setFooter({
-            text: `ผู้สั่งการ: ${user?.tag || "ผู้ดูแลระบบ"} • ระบบความปลอดภัยหน่วงเวลา 1.2 วินาที`,
-            iconURL: user?.displayAvatarURL?.({ dynamic: true }) || undefined
-        })
-        .setTimestamp();
 }
 
 function formatEmojiShowcase(emojis, isAnimated) {
@@ -427,18 +385,18 @@ function getEmojiResultTheme(added, total) {
     if (added === total) {
         return {
             color: config.system.themeColors.success || "#57F287",
-            title: `${config.emojis.success || "✅"} นำเข้าอิโมจิเสร็จสมบูรณ์ 100%`
+            title: `${config.emojis?.success || "✅"} นำเข้าอิโมจิเรียบร้อย`
         };
     }
     if (added > 0) {
         return {
             color: config.system.themeColors.warning || "#FEE75C",
-            title: `${config.emojis.warning || "⚠️"} นำเข้าอิโมจิสำเร็จบางส่วน`
+            title: `${config.emojis?.warning || "⚠️"} นำเข้าอิโมจิบางส่วน`
         };
     }
     return {
         color: config.system.themeColors.error || "#ED4245",
-        title: `${config.emojis.error || "❌"} นำเข้าอิโมจิไม่สำเร็จ`
+        title: `${config.emojis?.error || "❌"} นำเข้าอิโมจิไม่สำเร็จ`
     };
 }
 
@@ -446,28 +404,28 @@ function buildEmojiResultFields({ createdStatic, createdAnimated, skippedEmojis,
     const fields = [];
     if (createdStatic.length > 0) {
         fields.push({
-            name: `🖼️ อิโมจิทั่วไป (Static) — ${createdStatic.length} ตัว`,
+            name: `อิโมจิทั่วไป · ${createdStatic.length} ตัว`,
             value: formatEmojiShowcase(createdStatic, false) || "—",
             inline: false
         });
     }
     if (createdAnimated.length > 0) {
         fields.push({
-            name: `✨ อิโมจิเคลื่อนไหว (Animated) — ${createdAnimated.length} ตัว`,
+            name: `อิโมจิเคลื่อนไหว · ${createdAnimated.length} ตัว`,
             value: formatEmojiShowcase(createdAnimated, true) || "—",
             inline: false
         });
     }
     if (skippedEmojis.length > 0) {
         fields.push({
-            name: `⚠️ ข้ามเนื่องจากโควตาเต็ม — ${skippedEmojis.length} ตัว`,
+            name: `${config.emojis?.warning || "⚠️"} ข้ามเนื่องจากโควตาเต็ม · ${skippedEmojis.length} ตัว`,
             value: formatSkippedEmojiList(skippedEmojis) || "—",
             inline: false
         });
     }
     if (failedEmojis.length > 0) {
         fields.push({
-            name: `❌ รายการที่ล้มเหลว — ${failedEmojis.length} ตัว`,
+            name: `${config.emojis?.error || "❌"} รายการที่ไม่สำเร็จ · ${failedEmojis.length} ตัว`,
             value: formatFailedEmojiList(failedEmojis) || "—",
             inline: false
         });
@@ -478,21 +436,19 @@ function buildEmojiResultFields({ createdStatic, createdAnimated, skippedEmojis,
 function buildEmojiResultEmbed({ total, added, skipped, failed, createdStatic, createdAnimated, skippedEmojis, failedEmojis, guild, user }) {
     const theme = getEmojiResultTheme(added, total);
 
+    const descLines = [];
+    if (added === total) {
+        descLines.push(`> สำเร็จ **${added}/${total}** ตัว`);
+    } else {
+        descLines.push(`> สำเร็จ **${added}/${total}** ตัว`);
+        if (skipped > 0) descLines.push(`> ข้าม **${skipped}** ตัว`);
+        if (failed > 0) descLines.push(`> ไม่สำเร็จ **${failed}** ตัว`);
+    }
+
     const embed = new MessageEmbed()
         .setColor(theme.color)
-        .setAuthor({
-            name: "ผลการนำเข้าอิโมจิเข้าสู่เซิร์ฟเวอร์",
-            iconURL: guild?.iconURL?.({ dynamic: true }) || undefined
-        })
         .setTitle(theme.title)
-        .setDescription(
-            `> 📊 **สรุปการดำเนินการ:** นำเข้าสำเร็จ **${added}** จากทั้งหมด **${total}** ตัว\n` +
-            `> 🟢 **สำเร็จ:** \`${added}\` ตัว | 🟡 **ข้าม (โควตาเต็ม):** \`${skipped}\` ตัว | 🔴 **ล้มเหลว:** \`${failed}\` ตัว`
-        )
-        .setFooter({
-            text: `ผู้สั่งการ: ${user?.tag || "ผู้ดูแลระบบ"} • ดำเนินการเสร็จสิ้น`,
-            iconURL: user?.displayAvatarURL?.({ dynamic: true }) || undefined
-        })
+        .setDescription(descLines.join("\n"))
         .setTimestamp();
 
     const fields = buildEmojiResultFields({ createdStatic, createdAnimated, skippedEmojis, failedEmojis });
@@ -512,7 +468,7 @@ function validateStealInput(interaction, rawText) {
             noticeEmbed: buildEmojiNoticeEmbed({
                 title: "ไม่พบอิโมจิ Custom ในข้อความที่ระบุ",
                 description:
-                    `> ${config.emojis.warning} กรุณาวางอิโมจิที่เป็น Custom ของ Discord เช่น \`<:name:id>\` หรือ \`<a:name:id>\`\n` +
+                    `> ${config.emojis?.warning || "⚠️"} กรุณาวางอิโมจิที่เป็น Custom ของ Discord เช่น \`<:name:id>\` หรือ \`<a:name:id>\`\n` +
                     `> 💡 *ไม่รองรับอิโมจิมาตรฐานของระบบ (Unicode Standard Emojis เช่น 😀, 🎉)*`,
                 color: config.system.themeColors.warning || "#FEE75C",
                 guild: interaction.guild,
@@ -528,7 +484,7 @@ function validateStealInput(interaction, rawText) {
             noticeEmbed: buildEmojiNoticeEmbed({
                 title: "จำนวนอิโมจิเกินขีดจำกัด",
                 description:
-                    `> ${config.emojis.error} สามารถนำเข้าได้สูงสุด **50 ตัว** ต่อครั้ง (คุณระบุมา \`${matches.length}\` ตัว)\n` +
+                    `> ${config.emojis?.error || "❌"} สามารถนำเข้าได้สูงสุด **50 ตัว** ต่อครั้ง (คุณระบุมา \`${matches.length}\` ตัว)\n` +
                     `> 💡 *กรุณาแบ่งการนำเข้าเป็นชุดละไม่เกิน 50 ตัว*`,
                 color: config.system.themeColors.error || "#ED4245",
                 guild: interaction.guild,
@@ -544,7 +500,7 @@ function validateStealInput(interaction, rawText) {
             noticeEmbed: buildEmojiNoticeEmbed({
                 title: "เซิร์ฟเวอร์กำลังดำเนินการคัดลอกอิโมจิอยู่",
                 description:
-                    `> ${config.emojis.warning} มีกระบวนการคัดลอกอิโมจิกำลังทำงานอยู่ในเซิร์ฟเวอร์นี้\n` +
+                    `> ${config.emojis?.warning || "⚠️"} มีกระบวนการคัดลอกอิโมจิกำลังทำงานอยู่ในเซิร์ฟเวอร์นี้\n` +
                     `> 💡 *กรุณารอให้กระบวนการก่อนหน้าเสร็จสิ้นก่อนเริ่มคำสั่งใหม่*`,
                 color: config.system.themeColors.warning || "#FEE75C",
                 guild: interaction.guild,
@@ -563,10 +519,7 @@ function resolveEmojiCreateFailureReason(err) {
     if (err?.code === 50035 || err?.message?.includes("name")) {
         return "ชื่ออิโมจิไม่ถูกต้องตามกฎ";
     }
-    if (err?.message) {
-        return err.message.slice(0, 100);
-    }
-    return "Discord ปฏิเสธการสร้าง";
+    return "ไม่สามารถนำเข้าอิโมจินี้ได้";
 }
 
 async function createSingleEmoji(interaction, item) {
@@ -604,25 +557,16 @@ function applyEmojiImportResult(res, item, state) {
     }
 }
 
-async function maybeReportCopyProgress(interaction, { processed, matches, state }) {
-    if (processed >= matches.length) return;
+async function maybeReportCopyProgress(interaction, { processed, total }) {
+    if (processed >= total) return;
     const isPeriodic = processed % 2 === 0;
-    const isSmallBatch = matches.length <= 5;
+    const isSmallBatch = total <= 5;
     if (!isSmallBatch && !isPeriodic) return;
 
-    const nextItem = matches[processed];
-    const progressEmbed = buildEmojiProgressEmbed({
-        current: processed,
-        total: matches.length,
-        added: state.added,
-        skipped: state.skipped,
-        failed: state.failed,
-        currentEmojiName: nextItem.name,
-        isAnimated: nextItem.isAnimated,
-        guild: interaction.guild,
-        user: interaction.user
-    });
-    await interaction.editReply({ embeds: [progressEmbed] }).catch(() => {});
+    await interaction.editReply({
+        content: `${config.emojis?.loading_bar || config.emojis?.loading || "⏳"} กำลังนำเข้าอิโมจิ (${processed}/${total})`,
+        embeds: []
+    }).catch(() => {});
 }
 
 async function executeEmojiCopyWorkflow(interaction, { matches, quotas, delayMs }) {
@@ -638,18 +582,10 @@ async function executeEmojiCopyWorkflow(interaction, { matches, quotas, delayMs 
         failedEmojis: []
     };
 
-    const initialEmbed = buildEmojiProgressEmbed({
-        current: 0,
-        total: matches.length,
-        added: 0,
-        skipped: 0,
-        failed: 0,
-        currentEmojiName: matches[0]?.name,
-        isAnimated: matches[0]?.isAnimated,
-        guild: interaction.guild,
-        user: interaction.user
-    });
-    await interaction.editReply({ embeds: [initialEmbed] }).catch(() => {});
+    await interaction.editReply({
+        content: `${config.emojis?.loading_bar || config.emojis?.loading || "⏳"} กำลังนำเข้าอิโมจิ (0/${matches.length})`,
+        embeds: []
+    }).catch(() => {});
 
     for (let i = 0; i < matches.length; i++) {
         const item = matches[i];
@@ -666,7 +602,7 @@ async function executeEmojiCopyWorkflow(interaction, { matches, quotas, delayMs 
         }
 
         applyEmojiImportResult(res, item, state);
-        await maybeReportCopyProgress(interaction, { processed: i + 1, matches, state });
+        maybeReportCopyProgress(interaction, { processed: i + 1, total: matches.length }).catch(() => {});
     }
 
     return buildEmojiResultEmbed({
@@ -687,13 +623,13 @@ async function handleSteal(interaction, { delayMs = 1200 } = {}) {
     if (!await requireMemberPermission(
         interaction,
         PermissionFlagsBits.Administrator,
-        `> ⛔ คำสั่งนี้จำเป็นต้องใช้สิทธิ์ผู้ดูแลระบบ (Administrator) เท่านั้น`
+        `> ${config.emojis?.no_entry || "⛔"} คำสั่งนี้จำเป็นต้องใช้สิทธิ์ผู้ดูแลระบบ (Administrator) เท่านั้น`
     )) return;
 
     if (!await requireBotPermission(
         interaction,
         PermissionFlagsBits.ManageGuildExpressions,
-        `> ${config.emojis.error} บอทไม่มีสิทธิ์จัดการอิโมจิและสติกเกอร์ (ต้องการสิทธิ์ MANAGE_GUILD_EXPRESSIONS)`
+        `> ${config.emojis?.error || "❌"} บอทไม่มีสิทธิ์จัดการอิโมจิและสติกเกอร์ (ต้องการสิทธิ์ MANAGE_GUILD_EXPRESSIONS)`
     )) return;
 
     const validation = validateStealInput(interaction, interaction.options.getString("emojis"));
@@ -729,7 +665,7 @@ async function handleSteal(interaction, { delayMs = 1200 } = {}) {
             quotas,
             delayMs
         });
-        return interaction.editReply({ embeds: [resultEmbed] });
+        return interaction.editReply({ content: null, embeds: [resultEmbed] });
     } finally {
         activeEmojiCopies.delete(interaction.guild.id);
     }
@@ -757,9 +693,7 @@ module.exports = {
         parseCustomEmojis,
         calculateEmojiQuotas,
         checkSmartEmojiQuota,
-        renderEmojiProgressBar,
         buildEmojiNoticeEmbed,
-        buildEmojiProgressEmbed,
         buildEmojiResultEmbed,
         formatEmojiShowcase,
         formatFailedEmojiList,

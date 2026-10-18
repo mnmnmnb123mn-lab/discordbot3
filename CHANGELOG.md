@@ -1,5 +1,119 @@
 # Changelog
 
+## [Unreleased] - 2026-10-17
+
+- **Voice Admin SQLite Migration & Subsystem Hardening (Migration 013):**
+  - **SQLite Engine Integration:** Migrated Voice Admin persistence (`voice_admin_locks` and `voice_admin_notices`) from MongoDB/Mongoose to high-performance WAL-mode SQLite tables (`013_voice_admin_locks.sql`).
+  - **VoiceAdminRepository Implementation:** Created `database/sqlite/repositories/core/VoiceAdminRepository.js` supporting atomic lock writes, version-bound optimistic concurrency, owner-forced persistence, batched notice upserts, and cascading member/guild deletes.
+  - **Central Table Categories & Cleanup:** Registered `voice_admin_locks` in CORE and `voice_admin_notices` in TEMP categories. Integrated 24-hour notice purge into `database/sqlite/maintenance/cleanup.js`.
+  - **Feature Layer Adaptation:** Updated `discord/features/voiceAdmin.js` with full backward compatibility: secret commands (`//`, `///`), control panel interactions, permanent error classification (stopping retries immediately on HTTP 403 / 50013), and detailed failure breakdown in secret result embeds.
+  - **Boot Lifecycle Alignment:** Initialized Voice Admin directly during SQLite boot in `discord/index.js`.
+  - **Deployment & State Reconciliation:** Migration 013 initializes fresh SQLite tables. Because Voice Admin locks represent transient live voice room state, legacy MongoDB documents are discarded on upgrade, and active guild voice channels are cleanly reconciled on startup via `reconcileConnectedLocks`.
+  - **Full Test & Release Coverage:** Updated test suites with 69 Voice Admin tests, 100% passing; all coverage thresholds met (`voiceAdmin.js` at 94.83% lines, 88.99% functions, 75.03% branches).
+
+- **Verification Architecture Renovation & Webhook Log System (Phase 0–20):**
+  - **Single Entry Point OAuth Start (`/auth/start`):** Unified `/verify-setup` Discord slash command button links and Web Dashboard OAuth links to route through `/auth/start?state=...`, generating an ephemeral nonce, saving signed state cookie, and standardizing authorization redirects.
+  - **Decoupled Verification Pipeline:**
+    - `verificationOrchestrator.js`: High-level controller coordinating execution, transactional rollback, and event dispatching.
+    - `discordDataCollector.js`: Isolated collection of Discord profile, aggregate `guildSummary`, and simplified `connections`.
+    - `securityEvaluator.js`: Independent security rule evaluator for VPN, proxy, Tor, hosting, and account age flags.
+  - **Database Schema & Model Modernization:**
+    - `OAuthUser.js`: Purged `adminOAuth`, `guilds[]`, `lastMember`, and `snapshotRefs`. Simplified `connections` to `{ type: String, verified: Boolean }`. Added aggregate `guildSummary: { totalCount, ownedCount, status, fetchedAt, attemptedAt, failureReason }`.
+    - `VerifyLog.js`: Completely purged `requestId` and `memberSnapshot`. Replaced `guildSnapshot` with aggregate `guildSummary`. Added compound index `{ guildId: 1, result: 1, verifiedAt: -1 }` for high-performance backfill cursor queries.
+    - `GuildConfig.js`: Security rule defaults set to non-blocking (`enabled: false`, `minAccountAgeDays: 0`). Added `webhookLog` settings schema.
+    - `IpIdentityLink.js`, `IpIdentityUserHistory.js`, `IpIdentityRoleHistory.js`: Removed redundant member and role arrays.
+  - **SQLite Webhook Delivery Subsystem (Migration 010):**
+    - Added tables `verification_webhook_jobs` and `verification_webhook_deliveries` (`010_verification_webhook_delivery.sql`).
+    - Implemented `VerificationWebhookRepository.js` for thread-safe job management, delivery tracking, and metrics.
+    - Created `verificationWebhookManager.js` featuring 2-embed layout per message (Profile & Connections, Security & Result with decrypted tokens and raw IP per OI-04), automatic message splitting (>6,000 chars), rate limit exponential backoff, and a cursor-based backfill engine.
+  - **Guild Dashboard Renovation:**
+    - Replaced the user-facing member list and deletion controls with the **Webhook Control Panel**: Discord Webhook URL configuration, system readiness checklist, and dual operating modes: **เริ่มทำงานระบบ Webhook (Live-only)** and **เริ่มตรวจส่ง Webhook ทั้งหมดและทำงานต่อ (Backfill-then-live)** with live progress tracking.
+    - Added REST endpoints in `routes/guild.js`: `GET /api/guild/:guildId/webhook-log/status`, `POST /api/guild/:guildId/webhook-log/url`, and `POST /api/guild/:guildId/webhook-log/mode`.
+    - Preserved Owner-only OAuth Recovery Center with non-messaging role revocation controls.
+  - **Quality Gates & Test Suite Passing:**
+    - 547 verification tests passing across 64 test suites.
+    - 688 discord tests, 164 voice tests, and 146 database tests passing (1,545 automated tests total).
+    - All 10 static and runtime checks passing (`npm run check`).
+
+- **Join Campaign P0/P1/P2 Audit Closure & Production Safeguards:**
+  - **P0 `seenUsers` Ownership Decoupling:** Replaced mutation of caller's `seenUsers` in `oauthTokenManager.listAccessTokenCandidates()` with a read-only exclusion check. The worker in `campaignWorker.js` is the sole owner of candidate deduplication, completely eliminating the bug where new candidates were skipped on first encounter.
+  - **P1 Resumable Graceful Shutdown (`INTERRUPTED`):** When the bot receives a graceful shutdown signal (`SIGTERM` / `SIGINT`), the running campaign transitions to `INTERRUPTED` without setting `completedAt`. On restart, `startupRecovery` detects `INTERRUPTED` jobs via `findActiveRunningJob()` and auto-resumes them seamlessly toward remaining quota.
+  - **P1 Isolated 429 vs 5xx Retry Budgets:** Separated rate limit retries (`rateLimitRetries`) from transient network retries (`networkRetries`), ensuring 5xx errors no longer deplete the 429 rate limit retry budget.
+  - **P1 Systemic Alert Dispatch:** Wired `dispatchSystemicAlert()` via `sendWebhookEvent` with `severity: "CRITICAL"` for fatal worker errors, missing target guilds, and max recovery limits, directly dispatching to `ALERT_WEBHOOK_URL`.
+  - **P1 Fail-Closed Confirmation Freshness:** `confirmAndStartCampaign()` strictly aborts and returns an error if live Discord member fetching or candidate counting fails right before campaign start, preventing jobs from being created with stale snapshots or broken states.
+  - **P1 Interruptible 429 Sleep & Instant Wakeup:** Worker sleep during long 429 Retry-After backoffs (up to 300s) is now interruptible via `_interruptibleSleep()`. Calling `stopCurrentWorker()` triggers instant resolution within <100ms and smoothly persists `INTERRUPTED` state without process hang.
+  - **P1 Quota Met Precedence over Guild Full (30005):** When concurrent worker tasks fulfill the requested quota (`joinedCount >= requestedQuota`), the final campaign status is strictly prioritized as `COMPLETED` even if an in-flight concurrent task received a guild full error (`code: 30005`).
+  - **P2 Refresh Failure Count Query Alignment:** Aligned candidate query in `oauthTokenManager.listAccessTokenCandidates()` to exclude tokens with `refreshFailCount >= config.failMax`, matching `getAccessToken()` contract.
+  - **P2 Confirmation-Time Fresh Membership Snapshot:** `confirmAndStartCampaign()` re-queries Discord REST API for live target guild members immediately before launching the job, guaranteeing 100% fresh membership deduction at the action boundary.
+  - **P2 Critical Recovery Alerts:** Added `dispatchRecoveryAlert()` in `startupRecovery.js` across all failure scenarios (missing target guild, member fetch failure, and worker startup exception) to dispatch CRITICAL webhook alerts.
+  - **P2 Dashboard Campaign Duration:** Added `durationMs` and `duration_ms` fields in `formatForDashboard()` and `getHistory()` in `JoinCampaignRepository.js` and `joinCampaignService.js`.
+  - **P2 Snowflake Validation Placeholder & Batch Size:** Updated snowflake placeholder text to 17–22 digits in mode modals, and made candidate query batch size configurable (`Math.max(50, Number(config.batchSize || 200))`).
+  - **P2 Candidate Token Scope Broadening:** Broadened candidate query in `oauthTokenManager.listAccessTokenCandidates()` to accept valid `encryptedAccessToken` alongside `encryptedRefreshToken`.
+  - **P2 Accurate Insert Accounting & Repository Naming:** Updated `createItems()` in `JoinCampaignRepository.js` to return actual inserted row count (`info.changes > 0`) instead of raw array length, and introduced `getTrackedUserIds()` with backward-compatible alias.
+  - **P2 Config & Operational Docs:** Documented Join Campaign runtime tuning variables in `.env.example`, added `maxConcurrency` option, corrected migration references in `JOIN_CAMPAIGN_BLUEPRINT.md`, and purged the dead `dryRun` placeholder from `joinCampaignPage.js`.
+  - **Fail-Closed Target Guild Resolution:** Fixed cache miss handling in `campaignWorker.js` and `startupRecovery.js`. Target guilds are fetched directly from Discord REST API on cache miss; failure halts the worker and transitions job status to `FAILED` instead of continuing with an empty member set.
+  - **Heuristic Cache Fallback Removal:** Removed dangerous `Math.abs(memberCount - cachedMembers) <= 5` heuristic from `getLiveTargetMemberIds()`. All queries require authoritative complete fetches or fail closed.
+  - **Bounded 429 Rate-Limit Retries:** Introduced `JOIN_CAMPAIGN_MAX_RATE_LIMIT_RETRIES` (default 3) in `config.js` and `campaignWorker.js`. Rate-limited items are bounded and transition to `failed` (`rate_limited`) rather than causing infinite campaign execution loops.
+  - **Full-Fidelity Retry-After Header:** Updated `discordAPI.parseRetryAfterMs()` to preserve full seconds up to 5 minutes without artificial 10,000ms truncation.
+  - **Orphan Job Prevention & Safe Worker Startup:** Added try/catch and error cleanup around `campaignWorker.startWorker()` in `confirmAndStartCampaign()`, preventing orphan `RUNNING` jobs in SQLite.
+  - **Startup Recovery Resilience:** `startupRecovery.js` catches worker resume errors, updates SQLite job with `status: 'FAILED'`, `lastError`, and `completedAt`, and returns `{ recovered: false }`. Added dual support for `updates.lastError` and `updates.last_error` in `JoinCampaignRepository.js`.
+  - **Panel State Accuracy:** Fixed `_finishPanelUpdate()` in `campaignWorker.js` to preserve `panel?.lastReadyCount` on member fetch failures rather than faking 0 ready count.
+  - **Worker Async Promise Safety:** Wrapped item execution IIFE with try/catch and chained `.then(cleanup, cleanup)` in `campaignWorker.js` to eliminate unhandled promise rejections.
+  - **Phase 1 Fail-Closed Modal Query:** Replaced `catch(() => 0)` in `modalSubmitHandler.js` with fail-closed error messaging on candidate query errors.
+  - **Strict Amount Validation:** `runPreflight` strictly rejects non-positive or non-integer inputs ("0", "-5", "abc", decimals), and defaults empty input to all eligible candidates.
+  - **Target Guild Bot Permission Check:** Preflight validates that bot member exists in target guild and possesses `CreateInstantInvite` permission before allowing a campaign to be staged.
+  - **Mode Strategy Blueprint Aliases:** Added `getBaseSetupFields` and `resolveCandidateFilter` aliases to mode strategies.
+  - **Legacy Monolith Facade Migration:** Replaced the legacy 815-line `discord/features/joinCampaign.js` implementation with a clean backward-compatible facade delegating directly to `discord/features/joinCampaign/index.js`.
+  - **P2 Candidate Query MongoDB Filter Hardening:** Wrapped token existence and refresh failure conditions inside `$and: [ { $or: ... }, { $or: ... } ]` in `oauthTokenManager.listAccessTokenCandidates()`, eliminating JavaScript object literal duplicate key collision and ensuring MongoDB filters both conditions.
+  - **P2 Scan Cursor Real-Time Advancement:** Updated `candidateCursor` immediately upon receiving stream items in `campaignWorker.js`, guaranteeing the cursor advances past duplicate or skipped users and prevents redundant re-scans upon restart.
+  - **P2 Queue Starvation Prevention:** Refactored `JoinCampaignRepository.countPendingItems()` to count unclaimed items (`status = 'pending'`) by default, preventing concurrent worker pools from stalling candidate top-ups.
+  - **P2 Confirm-Time Zero Candidates Safeguard:** `confirmAndStartCampaign()` strictly rejects campaign start and creates no SQLite job if live preflight candidate count (`freshReadyCount`) evaluates to 0.
+  - **P2 Dead State Map Elimination:** Removed unused `_activeWebhooks` and `_activeTargetMemberSets` from `JoinCampaignService`, ensuring single-source-of-truth job parameters and eliminating potential memory leak vectors.
+  - **P2 Dashboard Duration Column & Status Color:** Added Duration (`ระยะเวลา`) column with human-readable formatting, Throughput (เฉลี่ย) clarification, and `interrupted` status badge color to `/join-campaign` history dashboard.
+  - **Audit Quality & Test Coverage:** Comprehensive join campaign subsystem tests and full regression suites pass with 100% success; passes all quality, security, and release gates cleanly.
+
+- **OAuth Token Lifecycle Consolidation & Audit Remediation (`discord/core/oauthTokenManager.js`, `discord/features/joinCampaign.js`):**
+  - **P1 Consent Authorization Guard:** `listAccessTokenCandidates()` now enforces strict fail-closed consent filtering: requires explicit `targetGuildId` and filters `lastVerify.guildId === targetGuildId` alongside `lastVerify.result === "success"`, preventing unverified or failed verification users from being targeted by join campaigns.
+  - **Single Authority Persistence:** Purged legacy `markTokenRefreshFailure()` and all direct `model.updateOne()` persistence logic from `joinCampaign.js`, delegating complete refresh failure, CAS versioning, and revocation lifecycle to `oauthTokenManager.getAccessToken()`.
+  - **Strict Candidate DTO Contract:** Eliminated fallback guessing (`adminOAuth ? "adminOAuth" : "oauth"`) across `joinCampaign.js` (`handleJoinCandidate`, `getUsableAccessToken`, `summarizeJoinCandidates`); candidates missing explicit valid `tokenField` fail closed as invalid candidates without inspecting raw database subdocuments.
+  - **Atomic CAS Version Lineage:** `commitVerificationActivation()` now fresh-reads the current document's token version from MongoDB inside `withTokenRefreshLock` instead of relying on the route's snapshot state, ensuring unbroken version sequence (e.g. version 7 -> 8) across re-verifications.
+  - **API Normalization:** Fixed `getOwnerTokenMetadata()` to iterate and select over normalized `fields` array instead of raw `tokenFields`, preventing `TypeError` when a single string field is supplied.
+  - Consolidated all fragmented OAuth2 token operations across verification, campaigns, and recovery into a Single Authority: `discord/core/oauthTokenManager.js`.
+  - Serialized OAuth Activation Under Mutation Lock: `commitVerificationActivation()` now executes under `withOAuthTokenStateLock` (`withTokenRefreshLock(`${userId}:oauth`)`), guaranteeing strict sequential ordering with concurrent refreshes and revocations.
+  - Candidate Page Object & Scan Statistics Contract: `listAccessTokenCandidates()` now returns a non-circular page object with `{ candidates, nextCursor, hasMore, scanned, statistics, get length() }` and Symbol.iterator, reporting rich scan metrics (`scannedRecords`, `uniqueUsers`, `usableUsers`, `missingScope`, `missingUserId`, `revoked`, `exhausted`, `byTokenField`). `joinCampaign.js` tracks cross-batch `seenUsers` and aggregates statistics using nullish coalescing (`??`) without double-counting.
+  - Early Refresh Exhaustion Guard: `getAccessToken()` and `performTokenRefreshUnderLock()` proactively reject expired tokens with `oauth_refresh_exhausted` when `refreshFailCount >= failMax` before invoking Discord APIs.
+  - Clean Absent Document Recovery: `getRecoveryStatuses()` handles non-existent or deleted `OAuthUser` documents by returning `{ status: "missing", reasons: ["record_missing"] }` instead of misleading parse errors.
+  - Decoupled Serializers: `discord/verification/serializers/memberDetailSerializer.js` now evaluates `tokenStatus` using high-level boolean flags (`hasAccessToken`, `hasRefreshToken`) without direct coupling to encrypted storage fields.
+  - Enhanced Lifecycle Diagnostics: `discord/verification/lifecycle.js` records `lastRunStatus`, `lastRunFailedCount`, and `lastRunPersistenceFailed` for granular observability during maintenance sweeps.
+  - Resolved Join Campaign pagination defect: `listAccessTokenCandidates()` now returns cursor metadata derived from the last MongoDB document scanned (`nextCursor`), preventing premature campaign termination when early batches have 0 candidates.
+  - Completely purged legacy token crypto, raw `OAuthUser` model imports, candidate query builder, and mock refresh routines from `joinCampaign.js`.
+  - Fixed refresh margin propagation bug: `getAccessToken()` now forwards caller-specified `marginMs` and deterministic `now` into `performTokenRefreshUnderLock()`, ensuring margins like `JOIN_CAMPAIGN_REFRESH_MARGIN_MS` (1h) take effect accurately.
+  - Closed revoke-vs-refresh concurrency race: `revokeToken()` acquires `withTokenRefreshLock` and applies unconditional fallback update if CAS misses, guaranteeing revocation precedence over in-flight refreshes.
+  - Added strict whitespace token validation in `validateTokenData()`, rejecting empty or whitespace-only access and refresh tokens.
+  - Enforced soft-delete isolation across `getOwnerTokenState()`, `getOwnerTokenMetadata()`, `getRecoveryStatuses()`, and `ownerService.js` queries (`deletedAt` check).
+  - Added `refresh_exhausted` status reason and Thai label (`"Refresh ล้มเหลวถึงจำนวนสูงสุด"`) in `getRecoveryStatuses()` when `refreshFailCount >= failMax`.
+  - Enhanced encryption migration tests in `verification-tests/encryptionMigration.test.js` to assert round-trip plaintext decryption for tokens and IPs.
+  - Production dependency audit: 0 vulnerabilities. Dev-only @sonar/scan -> node-forge advisory remains as documented exception.
+  - Refactored `discord/verification/routes/oauth.js` to execute `commitVerificationActivation` with payload validation and compensating snapshot rollback.
+  - Refactored `discord/verification/ownerService.js` to use `oauthTokenManager.getRecoveryStatuses()` for recovery and `oauthTokenManager.getOwnerTokenMetadata()` for member detail, completely eliminating direct selection of `oauth/adminOAuth` subdocuments, while preserving full raw token visibility for Owner Detail via `oauthTokenManager.getOwnerTokenState()` in strict compliance with Owner Intent Policy (OI-03).
+  - Refactored `discord/verification/services/encryptionMigration.js` to delegate `oauth_tokens` migration entirely to `oauthTokenManager.migrateStoredTokenEncryption()`, resolving plaintext re-encryption and adding CAS update filters.
+  - Integrated `oauthTokenManager` into `discord/verification/lifecycle.js` with awaited startup, background timers, and safety-net maintenance sweeps.
+  - Retired and deleted `discord/verification/utils/oauthTokenLifecycle.js`.
+  - Updated `ARCHITECTURE.md` implementation verification date to 2026-10-04, documented Single Authority with zero legacy token crypto in Join Campaign, and added Discord Developer Policy guidance for `guilds.join`.
+
+
+- **UI/UX Renovation — Cleanup & Polish Pass (all 9 guild commands):**
+  - `/token-check`: Expanded batch embed display from 15 → 20 tokens (full coverage, no hidden results). Removed raw token file attachment (`createCategoryAttachments` dead code). Added `resolveInvalidTokenErrorMessage()` mapping error codes to Thai user-facing strings; replaced `result.errorMessage` direct exposure. Removed `.setFooter()` from all embed branches. Error emoji updated to `no_entry` for consistency.
+  - `/copy-emojis`: Removed raw `err.message` leak in `resolveEmojiCreateFailureReason()` fallback — now returns `"ไม่สามารถนำเข้าอิโมจินี้ได้"` instead of Discord internal error text. Fixed `handleSteal` Administrator check to use `config.emojis?.no_entry` instead of hardcoded `⛔`.
+  - `/re-role`: Removed duplicate status banner from `buildSummaryEmbed`. Removed duplicate `ยศเป้าหมาย` field. Simplified `buildCancelEmbed` and `buildExpiredEmbed` descriptions. Removed `.setFooter()` from all 4 embed builders. All `⛔` hardcoded literals replaced with `config.emojis?.no_entry`.
+  - `/voice-admin`: Replaced hardcoded `⛔` in `handleVoiceAdminCommand` access error with `config.emojis?.no_entry`.
+  - `/setup-verify`: Replaced hardcoded `🔒` in owner-only error with `config.emojis?.no_entry`.
+  - `/utility.js`: Removed `⚠️ [AI COGNITIVE DIRECTIVE] ⚠️` block comment banner; replaced with plain code comments preserving intent. Fixed `validateEmbedCreateTarget` to use `config.emojis?.no_entry`.
+  - `/moderation.js`: Removed `⚠️ [AI COGNITIVE DIRECTIVE] ⚠️` block comment banner; replaced with plain code comments preserving intent.
+- **Security:** Removed `createCategoryAttachments` which created plaintext token files as Discord attachments. `resolveInvalidTokenErrorMessage` now maps internal error types to safe Thai strings only.
+- **Dependencies:** Updated `qs` 6.15.3 → 6.16.0 and `ip-address` 10.5.0 → 10.7.2 to resolve moderate audit advisories. `npm audit` now reports 0 vulnerabilities.
+- **Documentation:** Updated `README.md` guild command count 17 → 18. Synced `docs/EMOJIS.md` section 2.1 header to reflect 28 active keys (4 removed entries noted).
+
 ## [Unreleased] - 2026-09-22
 
 - Migrated Announcement Command `/announce` to Modernized `/embed create` Subsystem:
@@ -562,7 +676,7 @@
 - Added the protected-path guard to local validation and CI, and excluded the protected directory from broad syntax scanning.
 - Documented the five memory-trend diagnostic threshold variables already consumed by `scripts/checkMemoryTrend.js`.
 - Added Owner-only per-user member detail and audited OAuth2 token reveal, plus read-only legacy verified-member listing from `OAuthUser.lastVerify`.
-- Join Campaign is now fail-closed: `JOIN_CAMPAIGN_ENABLED` defaults to disabled and `JOIN_CAMPAIGN_ALLOWED_GUILDS` must explicitly list every target guild.
+- Join Campaign continues to enforce owner, guild, live-membership, and quota validation; the optional `JOIN_CAMPAIGN_ALLOWED_GUILDS` list restricts targets when configured.
 - Switched Render liveness to `/ping`, added `/ready`, `/guilds`, and `/guild/:guildId` compatibility aliases, and added production secret strength checks.
 - Hardened verification review findings: degraded verification startup, dry-run
   diagnostics isolation, graceful verification shutdown drain, redacted member

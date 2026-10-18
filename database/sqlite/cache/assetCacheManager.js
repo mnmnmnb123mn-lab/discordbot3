@@ -1,8 +1,8 @@
 "use strict";
 
-const fs = require("fs");
-const path = require("path");
-const crypto = require("crypto");
+const fs = require("node:fs");
+const path = require("node:path");
+const crypto = require("node:crypto");
 const { getDatabase } = require("../connection");
 const { canWrite } = require("../maintenance/writePolicy");
 
@@ -14,19 +14,19 @@ function resolveTtlForType(assetType, customTtlMs = null) {
     }
     const type = String(assetType || "general").toLowerCase();
     if (type === "avatar" || type.includes("avatar")) {
-        const days = parseInt(process.env.SQLITE_ASSET_AVATAR_TTL_DAYS, 10);
-        return (!isNaN(days) && days > 0 ? days : 3) * 24 * 60 * 60 * 1000;
+        const days = Number.parseInt(process.env.SQLITE_ASSET_AVATAR_TTL_DAYS, 10);
+        return (!Number.isNaN(days) && days > 0 ? days : 3) * 24 * 60 * 60 * 1000;
     }
     if (type === "icon" || type === "guild_icon" || type.includes("icon")) {
-        const days = parseInt(process.env.SQLITE_ASSET_GUILD_ICON_TTL_DAYS, 10);
-        return (!isNaN(days) && days > 0 ? days : 14) * 24 * 60 * 60 * 1000;
+        const days = Number.parseInt(process.env.SQLITE_ASSET_GUILD_ICON_TTL_DAYS, 10);
+        return (!Number.isNaN(days) && days > 0 ? days : 14) * 24 * 60 * 60 * 1000;
     }
-    const defaultDays = parseInt(process.env.SQLITE_ASSET_DEFAULT_TTL_DAYS, 10);
-    return (!isNaN(defaultDays) && defaultDays > 0 ? defaultDays : 7) * 24 * 60 * 60 * 1000;
+    const defaultDays = Number.parseInt(process.env.SQLITE_ASSET_DEFAULT_TTL_DAYS, 10);
+    return (!Number.isNaN(defaultDays) && defaultDays > 0 ? defaultDays : 7) * 24 * 60 * 60 * 1000;
 }
 
 function resolveAssetDir() {
-    if (process.env.SQLITE_ASSET_DIR && process.env.SQLITE_ASSET_DIR.trim()) {
+    if (process.env.SQLITE_ASSET_DIR?.trim()) {
         return path.resolve(process.env.SQLITE_ASSET_DIR.trim());
     }
     // Auto-detection: If host has mounted a writable /persistent volume, use it automatically
@@ -35,13 +35,15 @@ function resolveAssetDir() {
             fs.accessSync("/persistent", fs.constants.R_OK | fs.constants.W_OK);
             return path.resolve("/persistent", "cache-assets");
         }
-    } catch (_) {}
+    } catch (_err) {
+        // Ignored: /persistent directory does not exist or lacks permissions
+    }
     return path.join(process.cwd(), "data", "cache-assets");
 }
 
 function resolveMaxQuotaBytes() {
-    const envVal = parseInt(process.env.SQLITE_ASSET_CACHE_MAX_BYTES, 10);
-    return !isNaN(envVal) && envVal > 0 ? envVal : DEFAULT_MAX_QUOTA_BYTES;
+    const envVal = Number.parseInt(process.env.SQLITE_ASSET_CACHE_MAX_BYTES, 10);
+    return !Number.isNaN(envVal) && envVal > 0 ? envVal : DEFAULT_MAX_QUOTA_BYTES;
 }
 
 const MIME_EXT_MAP = {
@@ -58,7 +60,7 @@ const MIME_EXT_MAP = {
 class AssetCacheManager {
     constructor(db = null, options = {}) {
         this._db = db;
-        this.assetDir = options.assetDir || resolveAssetDir();
+        this.assetDir = options.assetDir || options.cacheDir || resolveAssetDir();
         this.maxQuotaBytes = options.maxQuotaBytes || resolveMaxQuotaBytes();
         this._ensureDirectory();
 
@@ -114,7 +116,9 @@ class AssetCacheManager {
                 }
             });
             updateTx();
-        } catch (_) {}
+        } catch {
+            // Best-effort cache last_used_at touch flush; ignore transient DB access failure
+        }
     }
 
     getAsset(assetKey) {
@@ -160,9 +164,70 @@ class AssetCacheManager {
         }
     }
 
+    _writeAssetFile(fullPath, buffer) {
+        this._ensureDirectory();
+        if (fs.existsSync(fullPath)) {
+            return false;
+        }
+        const tempPath = `${fullPath}.${Date.now()}.${crypto.randomBytes(6).toString("hex")}.tmp`;
+        fs.writeFileSync(tempPath, buffer);
+        fs.renameSync(tempPath, fullPath);
+        return true;
+    }
+
+    _upsertAssetMetadata({ assetKey, assetType, relativePath, mimeType, sizeBytes, sha256, sourceUrl, now, expiresAt }) {
+        const stmt = this.db.prepare(`
+            INSERT INTO asset_cache (
+                asset_key, asset_type, relative_path, mime_type,
+                size_bytes, sha256, source_url, created_at,
+                last_used_at, expires_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(asset_key) DO UPDATE SET
+                asset_type = excluded.asset_type,
+                relative_path = excluded.relative_path,
+                mime_type = excluded.mime_type,
+                size_bytes = excluded.size_bytes,
+                sha256 = excluded.sha256,
+                source_url = excluded.source_url,
+                last_used_at = excluded.last_used_at,
+                expires_at = excluded.expires_at
+        `);
+
+        stmt.run(
+            String(assetKey),
+            String(assetType),
+            relativePath,
+            mimeType,
+            sizeBytes,
+            sha256,
+            sourceUrl ? String(sourceUrl) : null,
+            now,
+            now,
+            expiresAt
+        );
+    }
+
+    _enforceQuotaForNewAsset(sizeBytes) {
+        const currentTotal = this.getTotalSizeBytes();
+        if (currentTotal + sizeBytes > this.maxQuotaBytes) {
+            this.evictIfOverQuota(this.maxQuotaBytes - sizeBytes);
+        }
+    }
+
+    _cleanupNewFileOnError(fullPath, newlyCreatedFile) {
+        if (!newlyCreatedFile || !fs.existsSync(fullPath)) return;
+        try {
+            fs.unlinkSync(fullPath);
+        } catch (unlinkErr) {
+            if (unlinkErr.code !== 'ENOENT') {
+                console.warn(`[ASSET_CACHE] Failed to clean up file ${fullPath}:`, unlinkErr.message);
+            }
+        }
+    }
+
     setAsset(assetKey, buffer, options = {}) {
         if (!canWrite("cache")) {
-            return false;
+            return null;
         }
         if (!assetKey || !Buffer.isBuffer(buffer)) {
             throw new TypeError("assetKey string and Buffer are required");
@@ -186,58 +251,23 @@ class AssetCacheManager {
         const expiresAt = now + ttlMs;
 
         try {
-            // 1. Quota check & eviction
-            const currentTotal = this.getTotalSizeBytes();
-            if (currentTotal + sizeBytes > this.maxQuotaBytes) {
-                this.evictIfOverQuota(this.maxQuotaBytes - sizeBytes);
-            }
+            this._enforceQuotaForNewAsset(sizeBytes);
+            const newlyCreatedFile = this._writeAssetFile(fullPath, buffer);
 
-            // 2. Ensure dir & write file safely
-            this._ensureDirectory();
-            const fileExistedBefore = fs.existsSync(fullPath);
-            let newlyCreatedFile = false;
-            if (!fileExistedBefore) {
-                const tempPath = `${fullPath}.${Date.now()}.${Math.random().toString(36).slice(2)}.tmp`;
-                fs.writeFileSync(tempPath, buffer);
-                fs.renameSync(tempPath, fullPath);
-                newlyCreatedFile = true;
-            }
-
-            // 3. Upsert SQLite metadata
             try {
-                const stmt = this.db.prepare(`
-                    INSERT INTO asset_cache (
-                        asset_key, asset_type, relative_path, mime_type,
-                        size_bytes, sha256, source_url, created_at,
-                        last_used_at, expires_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    ON CONFLICT(asset_key) DO UPDATE SET
-                        asset_type = excluded.asset_type,
-                        relative_path = excluded.relative_path,
-                        mime_type = excluded.mime_type,
-                        size_bytes = excluded.size_bytes,
-                        sha256 = excluded.sha256,
-                        source_url = excluded.source_url,
-                        last_used_at = excluded.last_used_at,
-                        expires_at = excluded.expires_at
-                `);
-
-                stmt.run(
-                    String(assetKey),
-                    String(assetType),
+                this._upsertAssetMetadata({
+                    assetKey,
+                    assetType,
                     relativePath,
                     mimeType,
                     sizeBytes,
                     sha256,
-                    options.sourceUrl ? String(options.sourceUrl) : null,
-                    now,
+                    sourceUrl: options.sourceUrl,
                     now,
                     expiresAt
-                );
+                });
             } catch (dbErr) {
-                if (newlyCreatedFile && fs.existsSync(fullPath)) {
-                    try { fs.unlinkSync(fullPath); } catch (_) {}
-                }
+                this._cleanupNewFileOnError(fullPath, newlyCreatedFile);
                 throw dbErr;
             }
 
@@ -270,7 +300,11 @@ class AssetCacheManager {
                 if (fs.existsSync(fullPath)) {
                     try {
                         fs.unlinkSync(fullPath);
-                    } catch (_) {}
+                    } catch (unlinkErr) {
+                        if (unlinkErr.code !== 'ENOENT') {
+                            console.warn(`[ASSET_CACHE] Failed to remove asset file ${fullPath}:`, unlinkErr.message);
+                        }
+                    }
                 }
             }
 
@@ -293,8 +327,9 @@ class AssetCacheManager {
                 )
             `).get();
             return row ? Number(row.total) : 0;
-        } catch (_) {
-            return 0;
+        } catch (err) {
+            console.error(`[ASSET_CACHE] ⚠️ Failed to query asset cache size: ${err.message}`);
+            throw err;
         }
     }
 
@@ -338,6 +373,40 @@ class AssetCacheManager {
         return stats;
     }
 
+    _cleanOrphanFilesOnDisk() {
+        let removed = 0;
+        if (!fs.existsSync(this.assetDir)) return removed;
+        const filesOnDisk = fs.readdirSync(this.assetDir);
+        const dbPaths = new Set(this.db.prepare("SELECT DISTINCT relative_path FROM asset_cache").all().map(r => r.relative_path));
+
+        for (const file of filesOnDisk) {
+            if (!dbPaths.has(file)) {
+                try {
+                    fs.unlinkSync(path.join(this.assetDir, file));
+                    removed++;
+                } catch (unlinkErr) {
+                    if (unlinkErr.code !== 'ENOENT') {
+                        console.warn(`[ASSET_CACHE] Failed to remove orphan file ${file}:`, unlinkErr.message);
+                    }
+                }
+            }
+        }
+        return removed;
+    }
+
+    _cleanOrphanDbRows() {
+        let removed = 0;
+        const allRows = this.db.prepare("SELECT asset_key, relative_path FROM asset_cache").all();
+        for (const row of allRows) {
+            const fullPath = path.join(this.assetDir, row.relative_path);
+            if (!fs.existsSync(fullPath)) {
+                this.db.prepare("DELETE FROM asset_cache WHERE asset_key = ?").run(row.asset_key);
+                removed++;
+            }
+        }
+        return removed;
+    }
+
     reconcileOrphans() {
         const stats = {
             orphanFilesRemoved: 0,
@@ -345,30 +414,8 @@ class AssetCacheManager {
         };
 
         try {
-            // 1. Check orphan files on disk not referenced in SQLite
-            if (fs.existsSync(this.assetDir)) {
-                const filesOnDisk = fs.readdirSync(this.assetDir);
-                const dbPaths = new Set(this.db.prepare("SELECT DISTINCT relative_path FROM asset_cache").all().map(r => r.relative_path));
-
-                for (const file of filesOnDisk) {
-                    if (!dbPaths.has(file)) {
-                        try {
-                            fs.unlinkSync(path.join(this.assetDir, file));
-                            stats.orphanFilesRemoved++;
-                        } catch (_) {}
-                    }
-                }
-            }
-
-            // 2. Check orphan rows in SQLite whose files do not exist on disk
-            const allRows = this.db.prepare("SELECT asset_key, relative_path FROM asset_cache").all();
-            for (const row of allRows) {
-                const fullPath = path.join(this.assetDir, row.relative_path);
-                if (!fs.existsSync(fullPath)) {
-                    this.db.prepare("DELETE FROM asset_cache WHERE asset_key = ?").run(row.asset_key);
-                    stats.orphanRowsRemoved++;
-                }
-            }
+            stats.orphanFilesRemoved = this._cleanOrphanFilesOnDisk();
+            stats.orphanRowsRemoved = this._cleanOrphanDbRows();
         } catch (err) {
             console.error(`[ASSET_CACHE] ⚠️ Error during orphan reconciliation: ${err.message}`);
         }
@@ -414,12 +461,14 @@ let defaultAssetCacheManager = null;
 
 function getAssetCacheManager(db = null, options = {}) {
     if (db) {
-        if (!assetManagerInstances.has(db)) {
-            assetManagerInstances.set(db, new AssetCacheManager(db, options));
+        if (!assetManagerInstances.has(db) || (options && Object.keys(options).length > 0)) {
+            const instance = new AssetCacheManager(db, options);
+            assetManagerInstances.set(db, instance);
+            return instance;
         }
         return assetManagerInstances.get(db);
     }
-    if (!defaultAssetCacheManager) {
+    if (!defaultAssetCacheManager || (options && Object.keys(options).length > 0)) {
         defaultAssetCacheManager = new AssetCacheManager(null, options);
     }
     return defaultAssetCacheManager;

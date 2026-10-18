@@ -4,6 +4,7 @@ const { test, describe, before, after } = require("node:test");
 const assert = require("node:assert/strict");
 const path = require("node:path");
 const fs = require("node:fs");
+const os = require("node:os");
 const Database = require("better-sqlite3");
 
 const { runMigrations } = require("../../database/sqlite/migrations/migrationRunner");
@@ -21,7 +22,7 @@ describe("Deep Audit Hardening Suite", () => {
     let tempDir;
 
     before(() => {
-        tempDir = path.join(__dirname, "temp-audit-hardening-" + Date.now());
+        tempDir = path.join(os.tmpdir(), "temp-audit-hardening-" + Date.now());
         fs.mkdirSync(tempDir, { recursive: true });
 
         testDb = new Database(path.join(tempDir, "test.sqlite"));
@@ -42,7 +43,7 @@ describe("Deep Audit Hardening Suite", () => {
 
     test("1. Migration Runner executes PRAGMA user_version after transaction commit", () => {
         const userVersion = testDb.pragma("user_version", { simple: true });
-        assert.equal(userVersion, 4, "user_version should be version 4 after migration");
+        assert.equal(userVersion, 13, "user_version should be version 13 after migration");
     });
 
     test("2. Emergency Trim invokes incremental vacuum and cleans up without errors", async () => {
