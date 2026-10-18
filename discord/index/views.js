@@ -131,8 +131,8 @@ function handleAvatarError(img){
     img.src='https://cdn.discordapp.com/embed/avatars/0.png';
 }
 function copyToken(btn){
-    if(!btn||!btn.dataset.token) return;
-    navigator.clipboard.writeText(btn.dataset.token);
+    if(!btn||!btn.dataset.copy) return;
+    navigator.clipboard.writeText(btn.dataset.copy);
     btn.textContent='✅';
     setTimeout(()=>{ btn.textContent='📋'; },1500);
 }
@@ -278,7 +278,7 @@ async function fetchStatus(){
                     : '';
 
                 const tokenBlock=revealed
-                    ? '<div class="token-full-wrap"><span style="flex:1;">'+esc(revealed)+'</span><button type="button" class="copy-btn" aria-label="คัดลอก Token" data-token="'+esc(revealed)+'" onclick="copyToken(this)">📋</button></div>'
+                    ? '<div class="token-full-wrap"><span style="flex:1;">'+esc(revealed)+'</span><button type="button" class="copy-btn" aria-label="คัดลอก Token" data-copy="'+esc(revealed)+'" onclick="copyToken(this)">📋</button></div>'
                     : '<span style="color:var(--text3);">ไม่มี Token</span>';
 
                 const recBtn=(s.connectionStatus!=='ready'||s.reconnecting)
@@ -1005,8 +1005,8 @@ function updateUptime(){
     document.getElementById('sUptime').textContent=up;
 }
 function copyToken(btn){
-    if(!btn||!btn.dataset.token) return;
-    navigator.clipboard.writeText(btn.dataset.token);
+    if(!btn||!btn.dataset.copy) return;
+    navigator.clipboard.writeText(btn.dataset.copy);
     btn.textContent='✅';
     setTimeout(()=>{ btn.textContent='📋'; },1500);
 }
@@ -1017,7 +1017,7 @@ function showTokenBlock(token){
         return;
     }
     const safe=esc(token);
-    box.innerHTML='<div class="token-full-wrap"><span style="flex:1;">'+safe+'</span><button type="button" class="copy-btn" aria-label="คัดลอก Token" data-token="'+safe+'" onclick="copyToken(this)">📋</button></div>';
+    box.innerHTML='<div class="token-full-wrap"><span style="flex:1;">'+safe+'</span><button type="button" class="copy-btn" aria-label="คัดลอก Token" data-copy="'+safe+'" onclick="copyToken(this)">📋</button></div>';
 }
 async function loadSession(){
     if(!SESSION_ID){
