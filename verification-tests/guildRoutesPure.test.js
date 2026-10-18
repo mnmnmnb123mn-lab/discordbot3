@@ -449,5 +449,37 @@ test("serializeConfig exposes blockVPN and blockHosting consistently with securi
   expect(serialized2.verification.blockHosting).toBe(true);
 });
 
+test("mergeVerificationConfig synchronizes legacy blockVPN and blockHosting on unrelated saves", () => {
+  const { mergeVerificationConfig } = guildRoute._test;
 
+  // Legacy config with no stored securityRules
+  const legacyDoc = {
+    blockVPN: true,
+    blockHosting: true,
+    panel: { title: "Old Title" }
+  };
 
+  // Unrelated change: updating panel only
+  const merged = mergeVerificationConfig(legacyDoc, {
+    panel: { title: "New Title" }
+  });
+
+  expect(merged.securityRules.vpnProxyTor.enabled).toBe(true);
+  expect(merged.blockVPN).toBe(true);
+  expect(merged.securityRules.hosting.enabled).toBe(true);
+  expect(merged.blockHosting).toBe(true);
+  expect(merged.panel.title).toBe("New Title");
+
+  // When stored securityRules explicitly disagrees with legacy flag, stored rule wins
+  const conflictingDoc = {
+    blockVPN: true,
+    securityRules: {
+      vpnProxyTor: { enabled: false, action: "allow" }
+    }
+  };
+  const mergedConflict = mergeVerificationConfig(conflictingDoc, {
+    panel: { title: "New Title" }
+  });
+  expect(mergedConflict.securityRules.vpnProxyTor.enabled).toBe(false);
+  expect(mergedConflict.blockVPN).toBe(false);
+});
