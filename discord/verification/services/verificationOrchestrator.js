@@ -674,6 +674,12 @@ async function _handleBlockedVerification({
     };
 }
 
+function resolveLiveConnections(discordData, fetchMetadata) {
+    return fetchMetadata?.isConnectionsFallback
+        ? []
+        : (discordData?.connections || []);
+}
+
 async function _evaluateVerificationSecurity({
     req,
     guildId,
@@ -726,9 +732,7 @@ async function _evaluateVerificationSecurity({
     };
 
     // Stale fallback connections cannot satisfy live requireConnections policy
-    const liveConnections = fetchMetadata?.isConnectionsFallback
-        ? []
-        : (discordData?.connections || []);
+    const liveConnections = resolveLiveConnections(discordData, fetchMetadata);
 
     const securityEval = evaluateSecurity({
         profile,
@@ -1285,6 +1289,8 @@ module.exports = {
         getConfiguredRoleName,
         getLatestPanelRevision,
         getStatePanelRevision,
-        buildVerificationSnapshots
+        buildVerificationSnapshots,
+        resolveLiveConnections,
+        _resolveJoinMemberRole
     }
 };

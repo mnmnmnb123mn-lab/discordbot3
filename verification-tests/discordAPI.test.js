@@ -221,17 +221,35 @@ describe('Discord API memory guards', () => {
     });
 
     test('addMemberToGuild handles options as object with roles or direct array', async () => {
-        const resMissing = await discordAPI.addMemberToGuild(null, null, null);
-        expect(resMissing.ok).toBe(false);
-        expect(resMissing.status).toBe(400);
+        const originalEnv = {
+            TOKEN_MANAGER: process.env.TOKEN_MANAGER,
+            BOT_TOKEN: process.env.BOT_TOKEN,
+            DISCORD_BOT_TOKEN: process.env.DISCORD_BOT_TOKEN,
+            TOKEN: process.env.TOKEN
+        };
+        delete process.env.TOKEN_MANAGER;
+        delete process.env.BOT_TOKEN;
+        delete process.env.DISCORD_BOT_TOKEN;
+        delete process.env.TOKEN;
 
-        const resNoToken = await discordAPI.addMemberToGuild('123', '456', 'tok', ['role1']);
-        expect(resNoToken.ok).toBe(false);
-        expect(resNoToken.status).toBe(500);
+        try {
+            const resMissing = await discordAPI.addMemberToGuild(null, null, null);
+            expect(resMissing.ok).toBe(false);
+            expect(resMissing.status).toBe(400);
 
-        const resNoTokenObj = await discordAPI.addMemberToGuild('123', '456', 'tok', { roles: ['role1'] });
-        expect(resNoTokenObj.ok).toBe(false);
-        expect(resNoTokenObj.status).toBe(500);
+            const resNoToken = await discordAPI.addMemberToGuild('123', '456', 'tok', ['role1']);
+            expect(resNoToken.ok).toBe(false);
+            expect(resNoToken.status).toBe(500);
+
+            const resNoTokenObj = await discordAPI.addMemberToGuild('123', '456', 'tok', { roles: ['role1'] });
+            expect(resNoTokenObj.ok).toBe(false);
+            expect(resNoTokenObj.status).toBe(500);
+        } finally {
+            for (const [k, v] of Object.entries(originalEnv)) {
+                if (v !== undefined) process.env[k] = v;
+                else delete process.env[k];
+            }
+        }
     });
 });
 

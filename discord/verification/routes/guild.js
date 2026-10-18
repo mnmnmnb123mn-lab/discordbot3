@@ -390,11 +390,24 @@ function makeRequestId(prefix = "req") {
   return `${prefix}_${Date.now().toString(36)}_${crypto.randomBytes(4).toString("hex")}`;
 }
 
+function sanitizeBooleanFlag(value) {
+  if (typeof value === "string") {
+    const trimmed = value.trim().toLowerCase();
+    if (trimmed === "false" || trimmed === "0" || trimmed === "off" || trimmed === "no" || trimmed === "") {
+      return false;
+    }
+    if (trimmed === "true" || trimmed === "1" || trimmed === "on" || trimmed === "yes") {
+      return true;
+    }
+  }
+  return Boolean(value);
+}
+
 function sanitizeVerificationBasicFlags(input = {}) {
   const out = {};
   const BOOLEAN_FLAGS = ["enabled", "blockVPN", "blockHosting", "requireEmail", "requireEmailVerified", "requireConnections"];
   for (const flag of BOOLEAN_FLAGS) {
-    if (flag in input) out[flag] = Boolean(input[flag]);
+    if (flag in input) out[flag] = sanitizeBooleanFlag(input[flag]);
   }
 
   if ("minAccountAgeDays" in input) {
@@ -416,7 +429,7 @@ function sanitizeVerificationBasicFlags(input = {}) {
 function sanitizeSingleSecurityRule(rawRule, key) {
   if (!rawRule || typeof rawRule !== "object" || Array.isArray(rawRule)) return null;
   const rule = {};
-  if ("enabled" in rawRule) rule.enabled = rawRule.enabled === true || rawRule.enabled === "true" || rawRule.enabled === "on";
+  if ("enabled" in rawRule) rule.enabled = sanitizeBooleanFlag(rawRule.enabled);
   if ("action" in rawRule) rule.action = normalizeRuleAction(rawRule.action, "allow");
   if ("timeoutMinutes" in rawRule) rule.timeoutMinutes = clampNumber(rawRule.timeoutMinutes, 1, 40320, 60);
   if ((key === "ipDuplicate" || key === "deviceDuplicate") && "threshold" in rawRule) {
@@ -534,20 +547,28 @@ function mergeVerificationConfig(existing = {}, incoming = {}) {
   merged.oauthMode = normalizeVerifyMode(merged.verifyType || merged.panel?.verifyType);
   merged.verifyType = merged.oauthMode;
   merged.panel.verifyType = merged.oauthMode;
-  if (hasIncomingSecurityRules) {
-    if (clean.securityRules && Object.hasOwn(clean.securityRules, "vpnProxyTor")) {
-      merged.blockVPN = merged.securityRules?.vpnProxyTor?.enabled === true;
+  if (clean.securityRules && Object.hasOwn(clean.securityRules, "vpnProxyTor")) {
+    merged.blockVPN = merged.securityRules?.vpnProxyTor?.enabled === true;
+  } else if (Object.hasOwn(clean, "blockVPN") && merged.securityRules?.vpnProxyTor) {
+    merged.securityRules.vpnProxyTor.enabled = clean.blockVPN === true;
+    merged.blockVPN = clean.blockVPN === true;
+  } else if (current.blockVPN !== undefined && merged.securityRules?.vpnProxyTor) {
+    if (!current.securityRules || !Object.hasOwn(current.securityRules, "vpnProxyTor")) {
+      merged.securityRules.vpnProxyTor.enabled = current.blockVPN === true;
     }
-    if (clean.securityRules && Object.hasOwn(clean.securityRules, "hosting")) {
-      merged.blockHosting = merged.securityRules?.hosting?.enabled === true;
+    merged.blockVPN = current.blockVPN === true;
+  }
+
+  if (clean.securityRules && Object.hasOwn(clean.securityRules, "hosting")) {
+    merged.blockHosting = merged.securityRules?.hosting?.enabled === true;
+  } else if (Object.hasOwn(clean, "blockHosting") && merged.securityRules?.hosting) {
+    merged.securityRules.hosting.enabled = clean.blockHosting === true;
+    merged.blockHosting = clean.blockHosting === true;
+  } else if (current.blockHosting !== undefined && merged.securityRules?.hosting) {
+    if (!current.securityRules || !Object.hasOwn(current.securityRules, "hosting")) {
+      merged.securityRules.hosting.enabled = current.blockHosting === true;
     }
-  } else {
-    if (Object.hasOwn(clean, "blockVPN") && merged.securityRules?.vpnProxyTor) {
-      merged.securityRules.vpnProxyTor.enabled = clean.blockVPN === true;
-    }
-    if (Object.hasOwn(clean, "blockHosting") && merged.securityRules?.hosting) {
-      merged.securityRules.hosting.enabled = clean.blockHosting === true;
-    }
+    merged.blockHosting = current.blockHosting === true;
   }
   return normalizeVerificationConfig(merged);
 }
@@ -1958,7 +1979,9 @@ router._test = {
   ipHistoryErrorStatus,
   pagination,
   sanitizeVerificationBasicFlags,
-  sanitizeSingleSecurityRule
+  sanitizeSingleSecurityRule,
+  sanitizeBooleanFlag,
+  serializeConfig
 };
 
 module.exports = router;
