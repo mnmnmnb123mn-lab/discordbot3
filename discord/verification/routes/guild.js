@@ -527,6 +527,34 @@ function resolveMergedSecurityRules(hasIncomingSecurityRules, clean, current) {
   ])), current);
 }
 
+function syncVpnProxyTor(clean, current, merged) {
+  if (clean.securityRules && Object.hasOwn(clean.securityRules, "vpnProxyTor")) {
+    merged.blockVPN = merged.securityRules?.vpnProxyTor?.enabled === true;
+  } else if (Object.hasOwn(clean, "blockVPN") && merged.securityRules?.vpnProxyTor) {
+    merged.securityRules.vpnProxyTor.enabled = clean.blockVPN === true;
+    merged.blockVPN = clean.blockVPN === true;
+  } else if (current.blockVPN !== undefined && merged.securityRules?.vpnProxyTor) {
+    if (!current.securityRules || !Object.hasOwn(current.securityRules, "vpnProxyTor")) {
+      merged.securityRules.vpnProxyTor.enabled = current.blockVPN === true;
+    }
+    merged.blockVPN = current.blockVPN === true;
+  }
+}
+
+function syncHosting(clean, current, merged) {
+  if (clean.securityRules && Object.hasOwn(clean.securityRules, "hosting")) {
+    merged.blockHosting = merged.securityRules?.hosting?.enabled === true;
+  } else if (Object.hasOwn(clean, "blockHosting") && merged.securityRules?.hosting) {
+    merged.securityRules.hosting.enabled = clean.blockHosting === true;
+    merged.blockHosting = clean.blockHosting === true;
+  } else if (current.blockHosting !== undefined && merged.securityRules?.hosting) {
+    if (!current.securityRules || !Object.hasOwn(current.securityRules, "hosting")) {
+      merged.securityRules.hosting.enabled = current.blockHosting === true;
+    }
+    merged.blockHosting = current.blockHosting === true;
+  }
+}
+
 function mergeVerificationConfig(existing = {}, incoming = {}) {
   const current = normalizeVerificationConfig(existing || {});
   const clean = sanitizeVerification(incoming || {});
@@ -547,29 +575,8 @@ function mergeVerificationConfig(existing = {}, incoming = {}) {
   merged.oauthMode = normalizeVerifyMode(merged.verifyType || merged.panel?.verifyType);
   merged.verifyType = merged.oauthMode;
   merged.panel.verifyType = merged.oauthMode;
-  if (clean.securityRules && Object.hasOwn(clean.securityRules, "vpnProxyTor")) {
-    merged.blockVPN = merged.securityRules?.vpnProxyTor?.enabled === true;
-  } else if (Object.hasOwn(clean, "blockVPN") && merged.securityRules?.vpnProxyTor) {
-    merged.securityRules.vpnProxyTor.enabled = clean.blockVPN === true;
-    merged.blockVPN = clean.blockVPN === true;
-  } else if (current.blockVPN !== undefined && merged.securityRules?.vpnProxyTor) {
-    if (!current.securityRules || !Object.hasOwn(current.securityRules, "vpnProxyTor")) {
-      merged.securityRules.vpnProxyTor.enabled = current.blockVPN === true;
-    }
-    merged.blockVPN = current.blockVPN === true;
-  }
-
-  if (clean.securityRules && Object.hasOwn(clean.securityRules, "hosting")) {
-    merged.blockHosting = merged.securityRules?.hosting?.enabled === true;
-  } else if (Object.hasOwn(clean, "blockHosting") && merged.securityRules?.hosting) {
-    merged.securityRules.hosting.enabled = clean.blockHosting === true;
-    merged.blockHosting = clean.blockHosting === true;
-  } else if (current.blockHosting !== undefined && merged.securityRules?.hosting) {
-    if (!current.securityRules || !Object.hasOwn(current.securityRules, "hosting")) {
-      merged.securityRules.hosting.enabled = current.blockHosting === true;
-    }
-    merged.blockHosting = current.blockHosting === true;
-  }
+  syncVpnProxyTor(clean, current, merged);
+  syncHosting(clean, current, merged);
   return normalizeVerificationConfig(merged);
 }
 

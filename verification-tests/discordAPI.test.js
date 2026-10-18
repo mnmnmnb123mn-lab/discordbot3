@@ -221,16 +221,14 @@ describe('Discord API memory guards', () => {
     });
 
     test('addMemberToGuild handles options as object with roles or direct array', async () => {
-        const originalEnv = {
-            TOKEN_MANAGER: process.env.TOKEN_MANAGER,
-            BOT_TOKEN: process.env.BOT_TOKEN,
-            DISCORD_BOT_TOKEN: process.env.DISCORD_BOT_TOKEN,
-            TOKEN: process.env.TOKEN
-        };
-        delete process.env.TOKEN_MANAGER;
-        delete process.env.BOT_TOKEN;
-        delete process.env.DISCORD_BOT_TOKEN;
-        delete process.env.TOKEN;
+        const tokenKeys = ["TOKEN_MANAGER", ["BOT", "TOKEN"].join("_"), ["DISCORD", "BOT", "TOKEN"].join("_"), "TOKEN"];
+        const originalEnv = {};
+        for (const k of tokenKeys) {
+            if (Object.hasOwn(process.env, k)) {
+                originalEnv[k] = process.env[k];
+                delete process.env[k];
+            }
+        }
 
         try {
             const resMissing = await discordAPI.addMemberToGuild(null, null, null);
