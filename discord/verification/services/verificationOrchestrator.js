@@ -96,11 +96,9 @@ function getConfiguredRoleName(guildConfig, fallback = "Member") {
 }
 
 function normalizePanelRevision(raw) {
-    if (raw === null || raw === undefined || raw === "") return 1;
-    if (typeof raw === "number" && Number.isFinite(raw)) return raw;
+    if (raw === null || raw === undefined || raw === "") return "1";
     const str = String(raw).trim();
-    if (/^\d+$/.test(str)) return Number(str);
-    return str;
+    return str.length > 0 ? str : "1";
 }
 
 function getLatestPanelRevision(guildConfig) {
@@ -115,7 +113,7 @@ function isPanelRevisionValid(guildConfig, stateObj = {}) {
     if (!guildConfig?.verification) return { ok: true };
     const latest = getLatestPanelRevision(guildConfig);
     const stateRev = getStatePanelRevision(stateObj);
-    if (String(stateRev) !== String(latest)) {
+    if (stateRev !== latest) {
         return { ok: false, stateRev, latest };
     }
     return { ok: true, stateRev, latest };
@@ -711,15 +709,19 @@ async function _evaluateVerificationSecurity({
         currentUserId: profile?.id
     });
     const securityRules = normalizeSecurityRules(verificationConfig.securityRules || {});
+    let minConnections = verificationConfig.requireConnections ? 1 : 0;
+    const configuredMinConnections = Number(verificationConfig.minConnections);
+    if (Number.isFinite(configuredMinConnections)) {
+        minConnections = configuredMinConnections;
+    }
+
     const policySnapshot = {
         enabled: verificationConfig.enabled !== false,
         minAccountAgeDays: verificationConfig.minAccountAgeDays || 0,
         requireEmail: Boolean(verificationConfig.requireEmail),
         requireEmailVerified: Boolean(verificationConfig.requireEmailVerified),
         requireConnections: Boolean(verificationConfig.requireConnections),
-        minConnections: Number.isFinite(Number(verificationConfig.minConnections))
-            ? Number(verificationConfig.minConnections)
-            : (verificationConfig.requireConnections ? 1 : 0),
+        minConnections,
         securityRules
     };
 
@@ -775,77 +777,100 @@ async function _evaluateVerificationSecurity({
     };
 }
 
+async function _resolveJoinMemberRole({ guildId, profileId, accessToken, configuredRoleId }) {
+    const joinResult = await safeSideEffect("addMemberToGuild", () =>
+        discord.addMemberToGuild(guildId, profileId, accessToken, {
+            roles: [configuredRoleId]
+        }),
+        { ok: false, error: "join_failed" }
+    );
+
+    if (!joinResult?.ok) {
+        return {
+            joinResult,
+            roleAssignResult: { ok: false, error: "join_failed" },
+            finalReason: "guild_join_failed"
+        };
+    }
+
+    if (joinResult.status === 204) {
+        // Member was already in guild; Discord 204 does not update roles, assign explicitly
+        const roleAssignResult = await safeSideEffect("addRoleToMember", () =>
+            discord.addRoleToMember(guildId, profileId, configuredRoleId),
+            { ok: false, error: "role_assign_failed" }
+        );
+        return {
+            joinResult,
+            roleAssignResult,
+            finalReason: roleAssignResult?.ok ? "verified" : "role_assign_failed"
+        };
+    }
+
+    return {
+        joinResult,
+        roleAssignResult: { ok: true, joinedWithRole: true },
+        finalReason: "verified"
+    };
+}
+
+async function _resolveExistingMemberRole({ guildId, profileId, configuredRoleId }) {
+    const roleAssignResult = await safeSideEffect("addRoleToMember", () =>
+        discord.addRoleToMember(guildId, profileId, configuredRoleId),
+        { ok: false, error: "role_assign_failed" }
+    );
+    return {
+        joinResult: null,
+        roleAssignResult,
+        finalReason: roleAssignResult?.ok ? "verified" : "role_assign_failed"
+    };
+}
+
 async function _resolveMemberRoleAssignment({ guildId, profileId, accessToken, configuredRoleId }) {
-    let memberLookup = await safeSideEffect("getGuildMemberResult", () =>
+    const memberLookup = await safeSideEffect("getGuildMemberResult", () =>
         typeof discord.getGuildMemberResult === "function"
             ? discord.getGuildMemberResult(accessToken, guildId)
             : discord.getGuildMember(accessToken, guildId).then(m => ({ member: m, status: m ? 200 : null }))
     );
-    let memberInfo = memberLookup?.member || null;
-    let memberLookupStatus = memberLookup?.status || null;
-    let memberLookupFailure = memberLookup?.failureReason || null;
-
-    let joinResult = null;
-    let roleAssignResult = null;
-    let finalReason = "verified";
-    let isLookupError = false;
+    const memberInfo = memberLookup?.member || null;
+    const memberLookupStatus = memberLookup?.status || null;
+    const memberLookupFailure = memberLookup?.failureReason || null;
 
     const isNotFound = memberLookupStatus === 404;
-    const isLookupFailure = Boolean(memberLookupFailure) || (memberLookupStatus && memberLookupStatus !== 200 && memberLookupStatus !== 404);
+    const isLookupFailure = Boolean(memberLookupFailure) || (Boolean(memberLookupStatus) && memberLookupStatus !== 200 && memberLookupStatus !== 404);
 
     if (!memberInfo && !isNotFound && isLookupFailure) {
-        isLookupError = true;
-        finalReason = "member_lookup_failed";
-        roleAssignResult = { ok: false, error: "lookup_failed" };
-    } else {
-        const memberRoles = memberInfo?.roles || [];
-        const alreadyHasRole = memberRoles.map(String).includes(String(configuredRoleId));
-
-        if (alreadyHasRole) {
-            finalReason = "already_verified_has_role";
-            roleAssignResult = { ok: true, alreadyHadRole: true };
-        } else if (!memberInfo) {
-            joinResult = await safeSideEffect("addMemberToGuild", () =>
-                discord.addMemberToGuild(guildId, profileId, accessToken, {
-                    roles: [configuredRoleId]
-                }),
-                { ok: false, error: "join_failed" }
-            );
-
-            if (!joinResult?.ok) {
-                finalReason = "guild_join_failed";
-                roleAssignResult = { ok: false, error: "join_failed" };
-            } else if (joinResult.status === 204) {
-                // Member was already in guild; Discord 204 does not update roles, assign explicitly
-                roleAssignResult = await safeSideEffect("addRoleToMember", () =>
-                    discord.addRoleToMember(guildId, profileId, configuredRoleId),
-                    { ok: false, error: "role_assign_failed" }
-                );
-                if (!roleAssignResult?.ok) {
-                    finalReason = "role_assign_failed";
-                }
-            } else {
-                roleAssignResult = { ok: true, joinedWithRole: true };
-            }
-        } else {
-            roleAssignResult = await safeSideEffect("addRoleToMember", () =>
-                discord.addRoleToMember(guildId, profileId, configuredRoleId),
-                { ok: false, error: "role_assign_failed" }
-            );
-
-            if (!roleAssignResult?.ok) {
-                finalReason = "role_assign_failed";
-            }
-        }
+        return {
+            isSuccess: false,
+            finalReason: "member_lookup_failed",
+            isLookupError: true,
+            joinResult: null,
+            roleAssignResult: { ok: false, error: "lookup_failed" }
+        };
     }
 
-    const isSuccess = roleAssignResult?.ok === true;
+    const memberRoles = memberInfo?.roles || [];
+    const alreadyHasRole = memberRoles.map(String).includes(String(configuredRoleId));
+
+    if (alreadyHasRole) {
+        return {
+            isSuccess: true,
+            finalReason: "already_verified_has_role",
+            isLookupError: false,
+            joinResult: null,
+            roleAssignResult: { ok: true, alreadyHadRole: true }
+        };
+    }
+
+    const outcome = !memberInfo
+        ? await _resolveJoinMemberRole({ guildId, profileId, accessToken, configuredRoleId })
+        : await _resolveExistingMemberRole({ guildId, profileId, configuredRoleId });
+
     return {
-        isSuccess,
-        finalReason,
-        isLookupError,
-        joinResult,
-        roleAssignResult
+        isSuccess: outcome.roleAssignResult?.ok === true,
+        finalReason: outcome.finalReason,
+        isLookupError: false,
+        joinResult: outcome.joinResult,
+        roleAssignResult: outcome.roleAssignResult
     };
 }
 

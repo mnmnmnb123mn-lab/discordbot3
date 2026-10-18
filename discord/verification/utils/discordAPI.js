@@ -1042,9 +1042,12 @@ async function addMemberToGuild(guildId, userId, accessToken, options = {}) {
     const bodyObj = {
         access_token: accessToken
     };
-    const roleList = Array.isArray(options)
-        ? options
-        : (Array.isArray(options?.roles) ? options.roles : []);
+    let roleList = [];
+    if (Array.isArray(options)) {
+        roleList = options;
+    } else if (Array.isArray(options?.roles)) {
+        roleList = options.roles;
+    }
     if (roleList.length > 0) {
         bodyObj.roles = roleList;
     }

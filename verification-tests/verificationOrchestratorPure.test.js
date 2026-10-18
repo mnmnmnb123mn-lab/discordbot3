@@ -26,8 +26,8 @@ describe("Verification Orchestrator Pure Units & Edge Cases", () => { // NOSONAR
             const stateObj = { panelRevision: 2 };
             expect(orchestrator.isPanelRevisionValid(guildConfig, stateObj)).toEqual({
                 ok: true,
-                stateRev: 2,
-                latest: 2
+                stateRev: "2",
+                latest: "2"
             });
         });
 
@@ -36,8 +36,8 @@ describe("Verification Orchestrator Pure Units & Edge Cases", () => { // NOSONAR
             const stateObj = { panelRevision: 1 };
             expect(orchestrator.isPanelRevisionValid(guildConfig, stateObj)).toEqual({
                 ok: false,
-                stateRev: 1,
-                latest: 3
+                stateRev: "1",
+                latest: "3"
             });
         });
 
@@ -46,8 +46,8 @@ describe("Verification Orchestrator Pure Units & Edge Cases", () => { // NOSONAR
             const stateObj = {};
             expect(orchestrator.isPanelRevisionValid(guildConfig, stateObj)).toEqual({
                 ok: true,
-                stateRev: 1,
-                latest: 1
+                stateRev: "1",
+                latest: "1"
             });
         });
 
@@ -77,8 +77,8 @@ describe("Verification Orchestrator Pure Units & Edge Cases", () => { // NOSONAR
             const stateObj = { panelRevision: "2" };
             expect(orchestrator.isPanelRevisionValid(guildConfig, stateObj)).toEqual({
                 ok: true,
-                stateRev: 2,
-                latest: 2
+                stateRev: "2",
+                latest: "2"
             });
         });
     });
@@ -562,11 +562,11 @@ describe("Verification Orchestrator Pure Units & Edge Cases", () => { // NOSONAR
             expect(getConfiguredRoleName(null)).toBe("Member");
             expect(getConfiguredRoleName({ verification: { roleName: "Verified" } })).toBe("Verified");
 
-            expect(getLatestPanelRevision(null)).toBe(1);
-            expect(getLatestPanelRevision({ verification: { panelRevision: 4 } })).toBe(4);
+            expect(getLatestPanelRevision(null)).toBe("1");
+            expect(getLatestPanelRevision({ verification: { panelRevision: 4 } })).toBe("4");
 
-            expect(getStatePanelRevision(null)).toBe(1);
-            expect(getStatePanelRevision({ panelRevision: 7 })).toBe(7);
+            expect(getStatePanelRevision(null)).toBe("1");
+            expect(getStatePanelRevision({ panelRevision: 7 })).toBe("7");
         });
 
         test("buildVerificationSnapshots formats profile and connections accurately", () => {
