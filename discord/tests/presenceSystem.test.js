@@ -225,6 +225,14 @@ test("Presence & Platform Renovation System Suite", async (t) => {
         assert.equal(scheduler.isRunning, false);
         assert.equal(scheduler.timer, null);
 
+        // Platform items duration minimum 5 minutes guard
+        const lowPlatItems = [
+            { id: "low_p", name: "Low Platform", type: "platform", platform: "mobile_ios", durationMinutes: 1 }
+        ];
+        const sanitizedLow = scheduler.setItems(lowPlatItems);
+        assert.equal(sanitizedLow[0].durationMinutes, 5);
+        scheduler.setItems(testItems);
+
         // Repeated start/stop idempotency
         assert.equal((await scheduler.start()).success, true);
         assert.equal((await scheduler.start()).alreadyRunning, true);

@@ -29,6 +29,10 @@ const {
     toastScript
 } = createViewHelpers(BASE_CSS);
 
+function serializeForScript(data) {
+    return JSON.stringify(data ?? []).replaceAll("<", String.raw`\u003c`);
+}
+
 // ════════════════════════════════════════════════════════════════════════════
 //  🏠  หน้าหลัก
 // ════════════════════════════════════════════════════════════════════════════
@@ -1601,9 +1605,9 @@ ${navBar("/settings")}
 
 <script>
 const SECRET='';
-let rotItems = ${JSON.stringify(presenceState.rotation?.items || []).replace(/</g, '\\u003c')};
+let rotItems = ${serializeForScript(presenceState.rotation?.items)};
 let rotIsRunning = ${presenceState.rotation?.isRunning === true};
-const PLATFORMS = ${JSON.stringify(presenceState.supportedPlatforms || []).replace(/</g, '\\u003c')};
+const PLATFORMS = ${serializeForScript(presenceState.supportedPlatforms)};
 
 function showMsg(msg, ok){
     const el=document.getElementById('__msg');
@@ -1715,11 +1719,16 @@ async function savePresenceStatus(){
         const d=await r.json();
 
         if(activity){
-            await fetch('/api/presence',{
+            const presRes = await fetch('/api/presence',{
                 method:'POST',
                 headers:{'Content-Type':'application/json','Authorization':SECRET},
                 body:JSON.stringify({botStatus:status,botActivityType,botActivity:activity,botNote:note})
-            }).catch(()=>{});
+            });
+            if(!presRes.ok){
+                const presData = await presRes.json().catch(()=>({}));
+                showMsg('❌ '+(presData.error||'บันทึกกิจกรรมไม่สำเร็จ'), false);
+                return;
+            }
         }
 
         showMsg(d.success?'✅ บันทึกสถานะบอทสำเร็จ':'❌ '+(d.error||'บันทึกไม่สำเร็จ'),d.success);

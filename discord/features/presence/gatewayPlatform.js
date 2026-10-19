@@ -6,6 +6,20 @@ const { PLATFORM_CONFIGS } = require("./constants");
 let currentPlatform = "desktop";
 let lastReconnectTime = 0;
 const RECONNECT_COOLDOWN_MS = 15_000;
+const DAILY_IDENTIFY_LIMIT = 200;
+const identifyTimestamps = [];
+
+function checkDailyIdentifyCap(now) {
+    const oneDayAgo = now - (24 * 60 * 60 * 1000);
+    while (identifyTimestamps.length > 0 && identifyTimestamps[0] < oneDayAgo) {
+        identifyTimestamps.shift();
+    }
+    return identifyTimestamps.length < DAILY_IDENTIFY_LIMIT;
+}
+
+function recordIdentify(now) {
+    identifyTimestamps.push(now);
+}
 
 function resolvePlatformKey(key, fallback = "desktop") {
     if (typeof key === "string" && PLATFORM_CONFIGS[key]) {
@@ -70,6 +84,18 @@ function checkCooldown(key, force, skipCooldown, now) {
         };
     }
 
+    if (!force && !checkDailyIdentifyCap(now)) {
+        return {
+            allowed: false,
+            result: {
+                success: false,
+                changed: false,
+                platform: currentPlatform,
+                error: "ถึงขีดจำกัดการสลับแพลตฟอร์มสูงสุดต่อวัน (Daily Gateway Identify Cap) เพื่อความปลอดภัยสูงสุดของบอท Discord"
+            }
+        };
+    }
+
     return { allowed: true };
 }
 
@@ -92,6 +118,7 @@ async function reconnectShards(client, ws, key) {
             );
         }
         await Promise.all(shardPromises);
+        recordIdentify(Date.now());
         return { reconnected: true };
     } catch (err) {
         return {

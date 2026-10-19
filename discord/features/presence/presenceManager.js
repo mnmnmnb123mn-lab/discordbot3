@@ -5,17 +5,18 @@ const gatewayPlatform = require("./gatewayPlatform");
 const { PresenceScheduler } = require("./presenceScheduler");
 
 class PresenceManager {
+    client = null;
+    sessionManager = null;
+    runtimeLog = null;
+    config = null;
+    currentStatus = "online";
+    currentPlatform = "desktop";
+    isInitialized = false;
+
     constructor() {
-        this.client = null;
-        this.sessionManager = null;
-        this.runtimeLog = null;
-        this.config = null;
-        this.currentStatus = "online";
-        this.currentPlatform = "desktop";
         this.scheduler = new PresenceScheduler({
             onStep: (item) => this.executeRotationStep(item)
         });
-        this.isInitialized = false;
     }
 
     async initialize({ client, sessionManager, runtimeLog, config } = {}) {

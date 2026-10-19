@@ -46,7 +46,7 @@ function resolveItemDuration(rawItem, type) {
         minutes = rawSec / 60;
     }
 
-    const minAllowed = (type === "platform" || type === "combined") ? 1 : 0.1;
+    const minAllowed = (type === "platform" || type === "combined") ? 5 : 1;
     return Math.min(1440, Math.max(minAllowed, minutes));
 }
 
@@ -92,14 +92,15 @@ function sanitizeItem(rawItem, index = 0) {
 }
 
 class PresenceScheduler {
+    items = [];
+    currentIndex = -1;
+    timer = null;
+    isRunning = false;
+    stepExpiresAt = null;
+    lastAction = null;
+    generation = 0;
+
     constructor(options = {}) {
-        this.items = [];
-        this.currentIndex = -1;
-        this.timer = null;
-        this.isRunning = false;
-        this.stepExpiresAt = null;
-        this.lastAction = null;
-        this.generation = 0;
         this.onStep = options.onStep || (async () => {});
         this.now = options.now || (() => Date.now());
         this.setTimer = options.setTimer || setTimeout;
