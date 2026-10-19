@@ -99,6 +99,7 @@ class PresenceScheduler {
         this.isRunning = false;
         this.stepExpiresAt = null;
         this.lastAction = null;
+        this.generation = 0;
         this.onStep = options.onStep || (async () => {});
         this.now = options.now || (() => Date.now());
         this.setTimer = options.setTimer || setTimeout;
@@ -115,6 +116,7 @@ class PresenceScheduler {
         if (!Array.isArray(rawItems)) {
             throw new TypeError("Items must be an array");
         }
+        this.generation = (this.generation || 0) + 1;
         const cleaned = rawItems
             .map((item, idx) => sanitizeItem(item, idx))
             .filter(Boolean);
@@ -147,6 +149,10 @@ class PresenceScheduler {
             this.onStep = onStepCallback;
         }
 
+        if (this.isRunning) {
+            return { success: true, alreadyRunning: true };
+        }
+
         const enabled = this.getEnabledItems();
         if (!enabled.length) {
             this.stop();
@@ -166,6 +172,7 @@ class PresenceScheduler {
     }
 
     stop() {
+        this.generation = (this.generation || 0) + 1;
         this.stopTimer();
         this.isRunning = false;
         this.stepExpiresAt = null;
@@ -182,6 +189,7 @@ class PresenceScheduler {
     async executeStep(index) {
         if (!this.isRunning || !this.items[index]) return;
 
+        const stepGen = this.generation;
         this.currentIndex = index;
         const item = this.items[index];
         const startedAt = this.now();
@@ -210,11 +218,22 @@ class PresenceScheduler {
             };
         }
 
+        // Check if scheduler was stopped or items replaced during the step execution
+        if (!this.isRunning || this.generation !== stepGen) {
+            return {
+                success: false,
+                stale: true,
+                activeItem: item,
+                lastAction: this.lastAction
+            };
+        }
+
         // Schedule the next step after item.durationMs
         this.stopTimer();
         if (this.isRunning) {
             this.timer = this.setTimer(() => {
                 this.timer = null;
+                if (!this.isRunning || this.generation !== stepGen) return;
                 const nextIndex = this.findNextEnabledIndex(this.currentIndex);
                 if (nextIndex !== -1 && this.isRunning) {
                     void this.executeStep(nextIndex).catch(err => {

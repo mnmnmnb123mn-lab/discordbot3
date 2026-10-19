@@ -22,11 +22,19 @@ function getPlatformProperties(platformKey) {
 function applyDefaultPlatform(platformKey) {
     const key = resolvePlatformKey(platformKey);
     const props = getPlatformProperties(key);
-    DefaultWebSocketManagerOptions.identifyProperties = {
-        browser: props.browser,
-        device: props.device,
-        os: props.os
-    };
+    if (DefaultWebSocketManagerOptions.identifyProperties) {
+        Object.assign(DefaultWebSocketManagerOptions.identifyProperties, {
+            browser: props.browser,
+            device: props.device,
+            os: props.os
+        });
+    } else {
+        DefaultWebSocketManagerOptions.identifyProperties = {
+            browser: props.browser,
+            device: props.device,
+            os: props.os
+        };
+    }
     currentPlatform = key;
     return { success: true, platform: key, properties: props };
 }
@@ -58,21 +66,43 @@ async function applyRuntimePlatform(client, platformKey, options = {}) {
 
     const props = getPlatformProperties(key);
 
-    // 1. Update default template for any future shard creation
-    DefaultWebSocketManagerOptions.identifyProperties = {
-        browser: props.browser,
-        device: props.device,
-        os: props.os
-    };
+    // 1. Update default template for any future shard creation (mutate in place)
+    if (DefaultWebSocketManagerOptions.identifyProperties) {
+        Object.assign(DefaultWebSocketManagerOptions.identifyProperties, {
+            browser: props.browser,
+            device: props.device,
+            os: props.os
+        });
+    } else {
+        DefaultWebSocketManagerOptions.identifyProperties = {
+            browser: props.browser,
+            device: props.device,
+            os: props.os
+        };
+    }
 
-    // 2. Update active WebSocketManager options if instantiated
+    // 2. Update active WebSocketManager options if instantiated (mutate in place)
     const ws = client?.ws?._ws;
-    if (ws?.options) {
+    if (ws?.options?.identifyProperties) {
+        Object.assign(ws.options.identifyProperties, {
+            browser: props.browser,
+            device: props.device,
+            os: props.os
+        });
+    } else if (ws?.options) {
         ws.options.identifyProperties = {
             browser: props.browser,
             device: props.device,
             os: props.os
         };
+    }
+
+    if (ws?.strategy?.options?.identifyProperties) {
+        Object.assign(ws.strategy.options.identifyProperties, {
+            browser: props.browser,
+            device: props.device,
+            os: props.os
+        });
     }
 
     currentPlatform = key;

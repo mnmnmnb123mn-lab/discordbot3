@@ -1601,8 +1601,9 @@ ${navBar("/settings")}
 
 <script>
 const SECRET='';
-let rotItems = ${JSON.stringify(presenceState.rotation?.items || [])};
+let rotItems = ${JSON.stringify(presenceState.rotation?.items || []).replace(/</g, '\\u003c')};
 let rotIsRunning = ${presenceState.rotation?.isRunning === true};
+const PLATFORMS = ${JSON.stringify(presenceState.supportedPlatforms || []).replace(/</g, '\\u003c')};
 
 function showMsg(msg, ok){
     const el=document.getElementById('__msg');
@@ -1691,8 +1692,8 @@ function updatePresencePreview(){
 
 function updatePlatformSelectionPreview(){
     const plat=document.getElementById('botPlatformSelect')?.value||'desktop';
-    const icons={desktop:'💻',mobile_android:'📱',mobile_ios:'🍏',web:'🌐',console_ps5:'🎮',console_xbox:'🎮',vr:'🥽'};
-    const icon=icons[plat]||'💻';
+    const found=PLATFORMS.find(p=>p.id===plat);
+    const icon=found?.icon||'💻';
     const previewIconEl=document.getElementById('previewPlatformIcon');
     if(previewIconEl) previewIconEl.textContent=icon;
     const badgeEl=document.getElementById('previewPlatformBadge');
@@ -1792,13 +1793,7 @@ function renderRotationTable(){
             + (isStatusOnly
                 ? '<span style="color:var(--text3);font-size:0.8em;">(ไม่เปลี่ยน)</span>'
                 : '<select id="rot-plat-'+idx+'" style="font-size:0.8em;padding:4px;" onchange="rotItems['+idx+'].platform=this.value">'
-                + '<option value="desktop" '+(item.platform==='desktop'?'selected':'')+'>💻 Desktop</option>'
-                + '<option value="mobile_android" '+(item.platform==='mobile_android'||item.platform==='mobile'?'selected':'')+'>📱 Android</option>'
-                + '<option value="mobile_ios" '+(item.platform==='mobile_ios'?'selected':'')+'>🍏 iOS</option>'
-                + '<option value="web" '+(item.platform==='web'?'selected':'')+'>🌐 Web</option>'
-                + '<option value="console_ps5" '+(item.platform==='console_ps5'||item.platform==='console_ps'?'selected':'')+'>🎮 PS5</option>'
-                + '<option value="console_xbox" '+(item.platform==='console_xbox'?'selected':'')+'>🎮 Xbox</option>'
-                + '<option value="vr" '+(item.platform==='vr'?'selected':'')+'>🥽 VR</option>'
+                + PLATFORMS.map(p => '<option value="'+p.id+'" '+(item.platform===p.id?'selected':'')+'>'+p.icon+' '+p.name+'</option>').join('')
                 + '</select>')
             + '</td>'
             + '<td style="padding:6px;">'

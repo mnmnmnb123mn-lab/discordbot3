@@ -126,6 +126,40 @@ test("Presence & Platform Renovation System Suite", async (t) => {
         assert.equal(resForced.success, true);
         assert.equal(resForced.changed, true);
         assert.equal(resForced.platform, "desktop");
+
+        // Array shards and client not ready
+        const mockClientArray = {
+            isReady: () => false,
+            ws: {
+                shards: [{ id: 0, destroy: () => {} }],
+                _ws: { options: {} }
+            }
+        };
+        const resNotReady = await applyRuntimePlatform(mockClientArray, "vr", { skipCooldown: true, force: true });
+        assert.equal(resNotReady.success, true);
+        assert.equal(resNotReady.reconnected, false);
+
+        // Missing ws gracefully handled
+        const resNoWs = await applyRuntimePlatform({}, "mobile_ios", { skipCooldown: true, force: true });
+        assert.equal(resNoWs.success, true);
+
+        // Shard destroy error handled gracefully
+        const mockClientFail = {
+            isReady: () => true,
+            ws: {
+                shards: [
+                    {
+                        id: 0,
+                        destroy: () => {
+                            throw new Error("Socket error");
+                        }
+                    }
+                ],
+                _ws: { options: {} }
+            }
+        };
+        const resFail = await applyRuntimePlatform(mockClientFail, "web", { skipCooldown: true, force: true });
+        assert.equal(resFail.success, true);
     });
 
     await t.test("3. PresenceScheduler with Independent Per-Item Timers", async () => {
@@ -190,6 +224,27 @@ test("Presence & Platform Renovation System Suite", async (t) => {
         scheduler.stop();
         assert.equal(scheduler.isRunning, false);
         assert.equal(scheduler.timer, null);
+
+        // Repeated start/stop idempotency
+        assert.equal((await scheduler.start()).success, true);
+        assert.equal((await scheduler.start()).alreadyRunning, true);
+        assert.equal(scheduler.stop().success, true);
+        assert.equal(scheduler.stop().success, true);
+
+        // Generation check prevents stale step from scheduling next step
+        const asyncScheduler = new PresenceScheduler({
+            items: testItems
+        });
+        asyncScheduler.isRunning = true;
+        let finishStep;
+        asyncScheduler.onStep = () => new Promise(resolve => { finishStep = resolve; });
+        const stepPromise = asyncScheduler.executeStep(0);
+        // Replace items while step is running to increment generation
+        asyncScheduler.setItems(testItems);
+        finishStep({ ok: true });
+        const stepRes = await stepPromise;
+        assert.equal(stepRes.stale, true);
+        assert.equal(asyncScheduler.timer, null);
     });
 
     await t.test("4. PresenceManager Coordination & Database Persistence", async () => {

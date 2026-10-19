@@ -43,7 +43,10 @@ class PresenceManager {
             }
         }
 
-        this.currentStatus = STATUS_OPTIONS.includes(savedStatus) ? savedStatus : "online";
+        const configuredStatus = STATUS_OPTIONS.includes(config?.bot_presence?.status)
+            ? config.bot_presence.status
+            : "online";
+        this.currentStatus = STATUS_OPTIONS.includes(savedStatus) ? savedStatus : configuredStatus;
         this.currentPlatform = PLATFORM_CONFIGS[savedPlatform] ? savedPlatform : "desktop";
 
         // 1. Apply platform properties to default gateway template before connect
