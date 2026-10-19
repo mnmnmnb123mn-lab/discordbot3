@@ -1349,9 +1349,6 @@ function pageSettings(settings, config, client, API_SECRET) {
         botNote,
         previewNote,
         actType,
-        rotateEn,
-        rotateInt,
-        rotateMsgs,
         botName,
         statusColor,
         presenceState
@@ -1604,7 +1601,6 @@ ${navBar("/settings")}
 
 <script>
 const SECRET='';
-let rotateCount=${rotateMsgs.length};
 let rotItems = ${JSON.stringify(presenceState.rotation?.items || [])};
 let rotIsRunning = ${presenceState.rotation?.isRunning === true};
 
@@ -1764,6 +1760,10 @@ function renderRotationTable(){
         const item=rotItems[idx];
         const isFirst = idx===0;
         const isLast = idx===(rotItems.length-1);
+        const isStatusOnly = item.type === 'status';
+        const isPlatformOnly = item.type === 'platform';
+        const isCombined = item.type === 'combined' || item.type === 'both';
+
         html += '<tr id="rot-row-'+idx+'" style="border-bottom:1px solid rgba(255,255,255,0.05);">'
             + '<td style="padding:6px;text-align:center;">'
             + '<input type="checkbox" id="rot-en-'+idx+'" '+(item.enabled ? 'checked' : '')+' onchange="rotItems['+idx+'].enabled=this.checked">'
@@ -1772,30 +1772,34 @@ function renderRotationTable(){
             + '<input type="text" id="rot-name-'+idx+'" value="'+(item.name||'').replace(/"/g,'&quot;')+'" style="width:100%;font-size:0.85em;padding:4px 8px;" onchange="rotItems['+idx+'].name=this.value">'
             + '</td>'
             + '<td style="padding:6px;">'
-            + '<select id="rot-type-'+idx+'" style="font-size:0.8em;padding:4px;" onchange="rotItems['+idx+'].type=this.value">'
-            + '<option value="both" '+(item.type==='both'?'selected':'')+'>สถานะ & แพลตฟอร์ม</option>'
-            + '<option value="status" '+(item.type==='status'?'selected':'')+'>สถานะอย่างเดียว</option>'
-            + '<option value="platform" '+(item.type==='platform'?'selected':'')+'>แพลตฟอร์มอย่างเดียว</option>'
+            + '<select id="rot-type-'+idx+'" style="font-size:0.8em;padding:4px;" onchange="rotItems['+idx+'].type=this.value; renderRotationTable();">'
+            + '<option value="combined" '+(isCombined?'selected':'')+'>สถานะ & แพลตฟอร์ม</option>'
+            + '<option value="status" '+(isStatusOnly?'selected':'')+'>สถานะอย่างเดียว</option>'
+            + '<option value="platform" '+(isPlatformOnly?'selected':'')+'>แพลตฟอร์มอย่างเดียว</option>'
             + '</select>'
             + '</td>'
             + '<td style="padding:6px;">'
-            + '<select id="rot-status-'+idx+'" style="font-size:0.8em;padding:4px;" onchange="rotItems['+idx+'].status=this.value">'
-            + '<option value="online" '+(item.status==='online'?'selected':'')+'>🟢 Online</option>'
-            + '<option value="idle" '+(item.status==='idle'?'selected':'')+'>🌙 Idle</option>'
-            + '<option value="dnd" '+(item.status==='dnd'?'selected':'')+'>⛔ DND</option>'
-            + '<option value="invisible" '+(item.status==='invisible'?'selected':'')+'>⚫ Invisible</option>'
-            + '</select>'
+            + (isPlatformOnly
+                ? '<span style="color:var(--text3);font-size:0.8em;">(ไม่เปลี่ยน)</span>'
+                : '<select id="rot-status-'+idx+'" style="font-size:0.8em;padding:4px;" onchange="rotItems['+idx+'].status=this.value">'
+                + '<option value="online" '+(item.status==='online'?'selected':'')+'>🟢 Online</option>'
+                + '<option value="idle" '+(item.status==='idle'?'selected':'')+'>🌙 Idle</option>'
+                + '<option value="dnd" '+(item.status==='dnd'?'selected':'')+'>⛔ DND</option>'
+                + '<option value="invisible" '+(item.status==='invisible'?'selected':'')+'>⚫ Invisible</option>'
+                + '</select>')
             + '</td>'
             + '<td style="padding:6px;">'
-            + '<select id="rot-plat-'+idx+'" style="font-size:0.8em;padding:4px;" onchange="rotItems['+idx+'].platform=this.value">'
-            + '<option value="desktop" '+(item.platform==='desktop'?'selected':'')+'>💻 Desktop</option>'
-            + '<option value="mobile_android" '+(item.platform==='mobile_android'?'selected':'')+'>📱 Android</option>'
-            + '<option value="mobile_ios" '+(item.platform==='mobile_ios'?'selected':'')+'>🍏 iOS</option>'
-            + '<option value="web" '+(item.platform==='web'?'selected':'')+'>🌐 Web</option>'
-            + '<option value="console_ps5" '+(item.platform==='console_ps5'?'selected':'')+'>🎮 PS5</option>'
-            + '<option value="console_xbox" '+(item.platform==='console_xbox'?'selected':'')+'>🎮 Xbox</option>'
-            + '<option value="vr" '+(item.platform==='vr'?'selected':'')+'>🥽 VR</option>'
-            + '</select>'
+            + (isStatusOnly
+                ? '<span style="color:var(--text3);font-size:0.8em;">(ไม่เปลี่ยน)</span>'
+                : '<select id="rot-plat-'+idx+'" style="font-size:0.8em;padding:4px;" onchange="rotItems['+idx+'].platform=this.value">'
+                + '<option value="desktop" '+(item.platform==='desktop'?'selected':'')+'>💻 Desktop</option>'
+                + '<option value="mobile_android" '+(item.platform==='mobile_android'||item.platform==='mobile'?'selected':'')+'>📱 Android</option>'
+                + '<option value="mobile_ios" '+(item.platform==='mobile_ios'?'selected':'')+'>🍏 iOS</option>'
+                + '<option value="web" '+(item.platform==='web'?'selected':'')+'>🌐 Web</option>'
+                + '<option value="console_ps5" '+(item.platform==='console_ps5'||item.platform==='console_ps'?'selected':'')+'>🎮 PS5</option>'
+                + '<option value="console_xbox" '+(item.platform==='console_xbox'?'selected':'')+'>🎮 Xbox</option>'
+                + '<option value="vr" '+(item.platform==='vr'?'selected':'')+'>🥽 VR</option>'
+                + '</select>')
             + '</td>'
             + '<td style="padding:6px;">'
             + '<input type="number" id="rot-dur-'+idx+'" value="'+(item.durationMinutes||5)+'" min="1" max="1440" style="width:70px;font-size:0.85em;padding:4px;" onchange="rotItems['+idx+'].durationMinutes=Number(this.value)||5">'
@@ -1814,7 +1818,7 @@ function addPresenceRotationItem(){
     rotItems.push({
         id:'item_'+Date.now()+'_'+Math.random().toString(36).slice(2,6),
         name:'รายการใหม่ '+(rotItems.length+1),
-        type:'both',
+        type:'combined',
         status:'online',
         platform:'desktop',
         durationMinutes:5,
@@ -1847,9 +1851,20 @@ async function savePresenceRotation(){
         const durEl=document.getElementById('rot-dur-'+idx);
         if(enEl) item.enabled=enEl.checked;
         if(nameEl) item.name=nameEl.value.trim()||item.name;
-        if(typeEl) item.type=typeEl.value;
-        if(statusEl) item.status=statusEl.value;
-        if(platEl) item.platform=platEl.value;
+        if(typeEl) {
+            const rawType = typeEl.value;
+            item.type = (rawType === 'both' || rawType === 'combined') ? 'combined' : rawType;
+        }
+        if(item.type === 'status') {
+            item.platform = null;
+        } else if(platEl && platEl.value) {
+            item.platform = platEl.value;
+        }
+        if(item.type === 'platform') {
+            item.status = null;
+        } else if(statusEl && statusEl.value) {
+            item.status = statusEl.value;
+        }
         if(durEl) item.durationMinutes=Math.max(1,Number(durEl.value)||5);
     });
 

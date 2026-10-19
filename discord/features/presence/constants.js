@@ -33,6 +33,12 @@ const STATUS_METADATA = Object.freeze({
     }
 });
 
+function resolveDefaultOs() {
+    if (process.platform === "win32") return "Windows";
+    if (process.platform === "darwin") return "Mac OS X";
+    return "Linux";
+}
+
 const PLATFORM_CONFIGS = Object.freeze({
     desktop: {
         id: "desktop",
@@ -41,7 +47,7 @@ const PLATFORM_CONFIGS = Object.freeze({
         badge: "🟢 Discord Official",
         status: "supported",
         properties: {
-            os: process.platform === "win32" ? "Windows" : process.platform === "darwin" ? "Mac OS X" : "Linux",
+            os: resolveDefaultOs(),
             browser: "Discord Client",
             device: "discord.js"
         },

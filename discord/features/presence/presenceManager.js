@@ -126,20 +126,23 @@ class PresenceManager {
     }
 
     async executeRotationStep(item) {
-        if (!item || !item.enabled) return;
+        if (!item?.enabled) return;
 
         let statusChanged = false;
         let platformChanged = false;
 
-        // Apply Status if specified
-        if (item.status && STATUS_OPTIONS.includes(item.status)) {
+        const shouldApplyStatus = item.type !== "platform";
+        const shouldApplyPlatform = item.type !== "status";
+
+        // Apply Status if allowed by item type and specified
+        if (shouldApplyStatus && item.status && STATUS_OPTIONS.includes(item.status)) {
             this.currentStatus = item.status;
             await this.applyCurrentPresenceToDiscord();
             statusChanged = true;
         }
 
-        // Apply Platform if specified (with cooldown bypass since rotation intervals are user-scheduled)
-        if (item.platform && PLATFORM_CONFIGS[item.platform] && item.platform !== this.currentPlatform) {
+        // Apply Platform if allowed by item type and specified
+        if (shouldApplyPlatform && item.platform && PLATFORM_CONFIGS[item.platform] && item.platform !== this.currentPlatform) {
             const platformResult = await gatewayPlatform.applyRuntimePlatform(this.client, item.platform, {
                 skipCooldown: false
             });

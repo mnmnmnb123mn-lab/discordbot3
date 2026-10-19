@@ -2,48 +2,81 @@
 
 const { STATUS_OPTIONS, PLATFORM_CONFIGS, DEFAULT_ROTATION_ITEMS } = require("./constants");
 
+function resolveItemId(rawId, index) {
+    if (typeof rawId === "string" && rawId.trim()) {
+        return rawId.trim().slice(0, 32);
+    }
+    return `rot_${index + 1}_${Date.now().toString(36)}`;
+}
+
+function resolveItemType(rawType) {
+    if (rawType === "both" || rawType === "combined") {
+        return "combined";
+    }
+    if (rawType === "platform") {
+        return "platform";
+    }
+    return "status";
+}
+
+function resolveItemStatus(rawStatus, type) {
+    if (type === "platform") return null;
+    if (typeof rawStatus === "string" && STATUS_OPTIONS.includes(rawStatus.toLowerCase())) {
+        return rawStatus.toLowerCase();
+    }
+    return "online";
+}
+
+function resolveItemPlatform(rawPlatform, type) {
+    if (type === "status") return null;
+    if (typeof rawPlatform === "string" && PLATFORM_CONFIGS[rawPlatform.toLowerCase()]) {
+        return rawPlatform.toLowerCase();
+    }
+    return "mobile";
+}
+
+function resolveItemDuration(rawItem, type) {
+    let minutes = 5;
+    const rawMin = Number(rawItem?.durationMinutes);
+    const rawSec = Number(rawItem?.durationSeconds);
+
+    if (Number.isFinite(rawMin) && rawMin > 0) {
+        minutes = rawMin;
+    } else if (Number.isFinite(rawSec) && rawSec > 0) {
+        minutes = rawSec / 60;
+    }
+
+    const minAllowed = (type === "platform" || type === "combined") ? 1 : 0.1;
+    return Math.min(1440, Math.max(minAllowed, minutes));
+}
+
+function resolveItemName(rawName, type, status, platform, durationMinutes) {
+    if (typeof rawName === "string" && rawName.trim()) {
+        return rawName.trim().slice(0, 64);
+    }
+    if (type === "status") {
+        const statusUpper = (status || "ONLINE").toUpperCase();
+        return `สถานะ ${statusUpper} (${durationMinutes} นาที)`;
+    }
+    if (type === "platform") {
+        const platName = PLATFORM_CONFIGS[platform]?.name || platform || "Desktop";
+        return `แพลตฟอร์ม ${platName} (${durationMinutes} นาที)`;
+    }
+    const statusUpper = (status || "ONLINE").toUpperCase();
+    const platName = PLATFORM_CONFIGS[platform]?.name || platform || "Desktop";
+    return `สถานะ ${statusUpper} + ${platName}`;
+}
+
 function sanitizeItem(rawItem, index = 0) {
     if (!rawItem || typeof rawItem !== "object") return null;
 
-    const id = typeof rawItem.id === "string" && rawItem.id.trim()
-        ? rawItem.id.trim().slice(0, 32)
-        : `rot_${index + 1}_${Date.now().toString(36)}`;
-
-    const type = ["status", "platform", "combined"].includes(rawItem.type)
-        ? rawItem.type
-        : "status";
-
-    let status = typeof rawItem.status === "string" && STATUS_OPTIONS.includes(rawItem.status.toLowerCase())
-        ? rawItem.status.toLowerCase()
-        : null;
-
-    let platform = typeof rawItem.platform === "string" && PLATFORM_CONFIGS[rawItem.platform.toLowerCase()]
-        ? rawItem.platform.toLowerCase()
-        : null;
-
-    if (type === "status" && !status) status = "online";
-    if (type === "platform" && !platform) platform = "mobile";
-    if (type === "combined") {
-        if (!status) status = "online";
-        if (!platform) platform = "mobile";
-    }
-
-    const durationMinutes = Number.isFinite(Number(rawItem.durationMinutes)) && Number(rawItem.durationMinutes) > 0
-        ? Math.min(1440, Math.max(0.1, Number(rawItem.durationMinutes)))
-        : Number.isFinite(Number(rawItem.durationSeconds)) && Number(rawItem.durationSeconds) > 0
-            ? Math.max(0.1, Number(rawItem.durationSeconds) / 60)
-            : 5;
-
+    const id = resolveItemId(rawItem.id, index);
+    const type = resolveItemType(rawItem.type);
+    const status = resolveItemStatus(rawItem.status, type);
+    const platform = resolveItemPlatform(rawItem.platform, type);
+    const durationMinutes = resolveItemDuration(rawItem, type);
     const durationMs = Math.round(durationMinutes * 60 * 1000);
-
-    const name = typeof rawItem.name === "string" && rawItem.name.trim()
-        ? rawItem.name.trim().slice(0, 64)
-        : type === "status"
-            ? `สถานะ ${status.toUpperCase()} (${durationMinutes} นาที)`
-            : type === "platform"
-                ? `แพลตฟอร์ม ${PLATFORM_CONFIGS[platform]?.name || platform} (${durationMinutes} นาที)`
-                : `สถานะ ${status.toUpperCase()} + ${PLATFORM_CONFIGS[platform]?.name || platform}`;
-
+    const name = resolveItemName(rawItem.name, type, status, platform, durationMinutes);
     const enabled = rawItem.enabled !== false;
 
     return {
@@ -184,7 +217,13 @@ class PresenceScheduler {
                 this.timer = null;
                 const nextIndex = this.findNextEnabledIndex(this.currentIndex);
                 if (nextIndex !== -1 && this.isRunning) {
-                    this.executeStep(nextIndex);
+                    void this.executeStep(nextIndex).catch(err => {
+                        this.lastAction = {
+                            timestamp: this.now(),
+                            ok: false,
+                            error: err?.message || String(err)
+                        };
+                    });
                 } else {
                     this.stop();
                 }
