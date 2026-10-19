@@ -41,6 +41,7 @@ const { createReadyInitializationController } = require("./core/readyInitializat
 const { registerVerificationRuntime } = require("./verification/runtime");
 const verificationLifecycle = require("./verification/lifecycle");
 const dmService = require("./dm");
+const { presenceManager, gatewayPlatform } = require("./features/presence");
 const bootLog = createStartupLogger();
 const runtimeLog = createStartupLogger({ prefix: "BOT" });
 const {
@@ -328,7 +329,7 @@ registerShutdownHandlers({
     verificationRuntime: verificationLifecycle,
     dmService,
     campaignWorker: require("./features/joinCampaign/worker/campaignWorker"),
-    runtimeCleanups: [eventRuntime, routeRegistration, { stop: () => readyInitializationController?.stop() }, { stop: () => shutdownSystemHooks?.() }, { stop: () => shutdownRunners() }]
+    runtimeCleanups: [eventRuntime, routeRegistration, { stop: () => readyInitializationController?.stop() }, { stop: () => shutdownSystemHooks?.() }, { stop: () => shutdownRunners() }, { stop: () => presenceManager.stop() }]
 });
 
 if (isFeatureEnabled("memoryMonitor")) {
@@ -462,6 +463,12 @@ async function startBot() {
     }
     try {
         _startBotAttempts++;
+        try {
+            const savedPlatform = await sessionManager.getSetting("botPlatform", "desktop");
+            gatewayPlatform.applyDefaultPlatform(savedPlatform);
+        } catch {
+            // Fallback to desktop default if database query is not ready
+        }
         await client.login(process.env.TOKEN_MANAGER);
         if (client.isReady()) return true;
         return await new Promise(resolve => {
@@ -521,8 +528,9 @@ function destroyDiscordClientSafely(reason) {
 }
 
 async function applyReadySettings() {
+    await presenceManager.initialize({ client, sessionManager, runtimeLog, config });
     const settings = await sessionManager.getAllSettings();
-    const status = settings.botStatus || config.bot_presence?.status || "idle";
+    const status = presenceManager.currentStatus || settings.botStatus || config.bot_presence?.status || "idle";
     const activity = settings.botActivity || config.bot_presence?.activityText || "ระบบออนช่องเสียง";
     const note = settings.botNote || "";
     const validTypes = ["WATCHING", "LISTENING", "PLAYING", "COMPETING"];
