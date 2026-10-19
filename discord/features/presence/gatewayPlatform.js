@@ -19,22 +19,92 @@ function getPlatformProperties(platformKey) {
     return { ...PLATFORM_CONFIGS[key].properties };
 }
 
+function updateIdentifyProperties(props, ws) {
+    const targetProps = {
+        browser: props.browser,
+        device: props.device,
+        os: props.os
+    };
+
+    if (DefaultWebSocketManagerOptions.identifyProperties) {
+        Object.assign(DefaultWebSocketManagerOptions.identifyProperties, targetProps);
+    } else {
+        DefaultWebSocketManagerOptions.identifyProperties = { ...targetProps };
+    }
+
+    if (ws?.options?.identifyProperties) {
+        Object.assign(ws.options.identifyProperties, targetProps);
+    } else if (ws?.options) {
+        ws.options.identifyProperties = { ...targetProps };
+    }
+
+    if (ws?.strategy?.options?.identifyProperties) {
+        Object.assign(ws.strategy.options.identifyProperties, targetProps);
+    }
+}
+
+function checkCooldown(key, force, skipCooldown, now) {
+    if (!force && key === currentPlatform) {
+        return {
+            allowed: false,
+            result: {
+                success: true,
+                changed: false,
+                platform: key,
+                reason: "already_active"
+            }
+        };
+    }
+
+    const elapsed = now - lastReconnectTime;
+    if (elapsed < RECONNECT_COOLDOWN_MS && !skipCooldown && !force) {
+        const waitSec = Math.ceil((RECONNECT_COOLDOWN_MS - elapsed) / 1000);
+        return {
+            allowed: false,
+            result: {
+                success: false,
+                changed: false,
+                platform: currentPlatform,
+                error: `กรุณารออีก ${waitSec} วินาที ก่อนเปลี่ยนแพลตฟอร์มเพื่อความปลอดภัยต่อระบบเชื่อมต่อ Discord Gateway`
+            }
+        };
+    }
+
+    return { allowed: true };
+}
+
+async function reconnectShards(client, ws, key) {
+    const shardCollection = ws?.strategy?.shards || ws?.shards || client?.ws?.shards;
+    const isClientReady = typeof client?.isReady === "function" ? client.isReady() : (client?.isReady !== false);
+    if (!isClientReady || !shardCollection || (!shardCollection.size && !shardCollection.length)) {
+        return { reconnected: false };
+    }
+
+    try {
+        const shardsList = typeof shardCollection.values === "function" ? shardCollection.values() : shardCollection;
+        const shardPromises = [];
+        for (const shard of shardsList) {
+            shardPromises.push(
+                shard.destroy({
+                    recover: 0,
+                    reason: `Gateway Platform changed to ${key}`
+                })
+            );
+        }
+        await Promise.all(shardPromises);
+        return { reconnected: true };
+    } catch (err) {
+        return {
+            reconnected: false,
+            warning: `บันทึกการตั้งค่าแล้ว แต่ไม่สามารถ reconnect ได้ทันที: ${err.message}`
+        };
+    }
+}
+
 function applyDefaultPlatform(platformKey) {
     const key = resolvePlatformKey(platformKey);
     const props = getPlatformProperties(key);
-    if (DefaultWebSocketManagerOptions.identifyProperties) {
-        Object.assign(DefaultWebSocketManagerOptions.identifyProperties, {
-            browser: props.browser,
-            device: props.device,
-            os: props.os
-        });
-    } else {
-        DefaultWebSocketManagerOptions.identifyProperties = {
-            browser: props.browser,
-            device: props.device,
-            os: props.os
-        };
-    }
+    updateIdentifyProperties(props, null);
     currentPlatform = key;
     return { success: true, platform: key, properties: props };
 }
@@ -44,106 +114,27 @@ async function applyRuntimePlatform(client, platformKey, options = {}) {
     const force = options.force === true;
     const now = Date.now();
 
-    if (!force && key === currentPlatform) {
-        return {
-            success: true,
-            changed: false,
-            platform: key,
-            reason: "already_active"
-        };
-    }
-
-    const elapsed = now - lastReconnectTime;
-    if (elapsed < RECONNECT_COOLDOWN_MS && !options.skipCooldown && !force) {
-        const waitSec = Math.ceil((RECONNECT_COOLDOWN_MS - elapsed) / 1000);
-        return {
-            success: false,
-            changed: false,
-            platform: currentPlatform,
-            error: `กรุณารออีก ${waitSec} วินาที ก่อนเปลี่ยนแพลตฟอร์มเพื่อความปลอดภัยต่อระบบเชื่อมต่อ Discord Gateway`
-        };
+    const cooldown = checkCooldown(key, force, options.skipCooldown, now);
+    if (!cooldown.allowed) {
+        return cooldown.result;
     }
 
     const props = getPlatformProperties(key);
-
-    // 1. Update default template for any future shard creation (mutate in place)
-    if (DefaultWebSocketManagerOptions.identifyProperties) {
-        Object.assign(DefaultWebSocketManagerOptions.identifyProperties, {
-            browser: props.browser,
-            device: props.device,
-            os: props.os
-        });
-    } else {
-        DefaultWebSocketManagerOptions.identifyProperties = {
-            browser: props.browser,
-            device: props.device,
-            os: props.os
-        };
-    }
-
-    // 2. Update active WebSocketManager options if instantiated (mutate in place)
     const ws = client?.ws?._ws;
-    if (ws?.options?.identifyProperties) {
-        Object.assign(ws.options.identifyProperties, {
-            browser: props.browser,
-            device: props.device,
-            os: props.os
-        });
-    } else if (ws?.options) {
-        ws.options.identifyProperties = {
-            browser: props.browser,
-            device: props.device,
-            os: props.os
-        };
-    }
 
-    if (ws?.strategy?.options?.identifyProperties) {
-        Object.assign(ws.strategy.options.identifyProperties, {
-            browser: props.browser,
-            device: props.device,
-            os: props.os
-        });
-    }
-
+    updateIdentifyProperties(props, ws);
     currentPlatform = key;
     lastReconnectTime = now;
 
-    // 3. If client is online and active, trigger shard re-identification with recovery=0 (fresh IDENTIFY)
-    let reconnected = false;
-    const shardCollection = ws?.strategy?.shards || ws?.shards || client?.ws?.shards;
-    const isClientReady = typeof client?.isReady === "function" ? client.isReady() : (client?.isReady !== false);
-    if (isClientReady && shardCollection && (shardCollection.size > 0 || shardCollection.length > 0)) {
-        try {
-            const shardPromises = [];
-            const shardsList = typeof shardCollection.values === "function" ? shardCollection.values() : shardCollection;
-            for (const shard of shardsList) {
-                // recover: 0 (Reconnect) clears session cache and triggers fresh IDENTIFY
-                shardPromises.push(
-                    shard.destroy({
-                        recover: 0,
-                        reason: `Gateway Platform changed to ${key}`
-                    })
-                );
-            }
-            await Promise.all(shardPromises);
-            reconnected = true;
-        } catch (err) {
-            return {
-                success: true,
-                changed: true,
-                reconnected: false,
-                platform: key,
-                warning: `บันทึกการตั้งค่าแล้ว แต่ไม่สามารถ reconnect ได้ทันที: ${err.message}`
-            };
-        }
-    }
+    const reconnectResult = await reconnectShards(client, ws, key);
 
     return {
         success: true,
         changed: true,
-        reconnected,
+        reconnected: reconnectResult.reconnected,
         platform: key,
-        properties: props
+        properties: props,
+        ...(reconnectResult.warning ? { warning: reconnectResult.warning } : {})
     };
 }
 
