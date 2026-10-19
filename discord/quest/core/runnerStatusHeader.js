@@ -378,9 +378,19 @@ function resolveRunnerUsername(state) {
     return 'ไม่ทราบชื่อ';
 }
 
-const TASK_PREPARE_REGEX = /กำลังเตรียมทำ\s+([^\r\n]+)/;
-const TASK_WORKING_REGEX = /กำลังทำ\s+([^\r\n]+)/;
-const TASK_PERCENT_REGEX = /([^\r\n%]+)\s+(\d+)%/;
+function parsePercentTask(line) {
+    const pctIndex = line.lastIndexOf('%');
+    if (pctIndex === -1) return null;
+    const beforePct = line.slice(0, pctIndex).trimEnd();
+    const lastSpace = beforePct.lastIndexOf(' ');
+    if (lastSpace === -1) return null;
+    const pctStr = beforePct.slice(lastSpace + 1);
+    if (!/^\d+$/.test(pctStr)) return null;
+    const rawGameName = beforePct.slice(0, lastSpace);
+    const gameName = rawGameName.replace(/^[^\w\sก-๙]+/, '').trim();
+    if (!gameName) return null;
+    return `${QUEST_EMOJIS.gearBlue} ${gameName} ${pctStr}%`;
+}
 
 function parseActivityTaskLine(line) {
     if (typeof line !== 'string') return null;
@@ -393,10 +403,7 @@ function parseActivityTaskLine(line) {
         return match ? `${QUEST_EMOJIS.grep} กำลังทำ ${match[1].trim()}` : line;
     }
     if (line.includes('%')) {
-        const match = TASK_PERCENT_REGEX.exec(line);
-        if (match) {
-            return `${QUEST_EMOJIS.gearBlue} ${match[1].replace(/^[^\w\sก-๙]+/, '').trim()} ${match[2]}%`;
-        }
+        return parsePercentTask(line);
     }
     return null;
 }
