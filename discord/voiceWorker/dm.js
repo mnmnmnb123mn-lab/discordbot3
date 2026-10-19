@@ -525,11 +525,15 @@ function syncVoiceLogDM(ownerId, options = {}) {
         tracker.timer = null;
     }
 
-    const delayMs = options.immediate ? 0 : 500;
+    const MAX_WAIT_MS = 2000;
+    if (!tracker.waiters.length) tracker.firstQueuedAt = Date.now();
+    const waited = Date.now() - Number(tracker.firstQueuedAt || Date.now());
+    const delayMs = options.immediate ? 0 : Math.max(0, Math.min(500, MAX_WAIT_MS - waited));
     return new Promise((resolve) => {
         tracker.waiters.push(resolve);
         tracker.timer = setTimeout(() => {
             tracker.timer = null;
+            tracker.firstQueuedAt = null;
             const waiters = tracker.waiters.splice(0);
             const done = (r) => {
                 for (const w of waiters) {
@@ -556,14 +560,26 @@ async function cleanUpEmptyOwnerTracker(tracker, strOwnerId) {
         } catch {}
         tracker.message = null;
     }
-    ownerLogTrackers.delete(strOwnerId);
+    if (!tracker?.timer && !(tracker?.waiters?.length)) {
+        ownerLogTrackers.delete(strOwnerId);
+    }
     return { status: "deleted" };
 }
 
 async function flushVoiceLogDM(ownerId, options = {}) {
     const strOwnerId = String(ownerId);
     const activeSessions = getOwnerActiveSessions(strOwnerId, options.allSessions);
-    const tracker = ownerLogTrackers.get(strOwnerId);
+    let tracker = ownerLogTrackers.get(strOwnerId);
+    if (!tracker && activeSessions.length > 0) {
+        tracker = {
+            ownerId: strOwnerId,
+            message: null,
+            timer: null,
+            inFlight: null,
+            waiters: []
+        };
+        ownerLogTrackers.set(strOwnerId, tracker);
+    }
 
     if (activeSessions.length === 0) {
         return cleanUpEmptyOwnerTracker(tracker, strOwnerId);

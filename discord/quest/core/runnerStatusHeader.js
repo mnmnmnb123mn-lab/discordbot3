@@ -392,6 +392,9 @@ function parsePercentTask(line) {
     return `${QUEST_EMOJIS.gearBlue} ${gameName} ${pctStr}%`;
 }
 
+const TASK_PREPARE_REGEX = /กำลังเตรียมทำ\s+([^\r\n]+)/;
+const TASK_WORKING_REGEX = /กำลังทำ\s+([^\r\n]+)/;
+
 function parseActivityTaskLine(line) {
     if (typeof line !== 'string') return null;
     if (line.includes('กำลังเตรียมทำ')) {

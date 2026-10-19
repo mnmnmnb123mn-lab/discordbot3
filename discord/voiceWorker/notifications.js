@@ -244,6 +244,13 @@ function createVoiceNotificationSystem(options = {}) {
         return ["all", "important_only", "off"].includes(mode) ? mode : "important_only";
     }
 
+    async function syncOwnerLog(sessionId) {
+        const session = getSession(sessionId);
+        if (!session?.ownerId || typeof dmSender.syncVoiceLogDM !== "function") return;
+        if (await readMode() === "off") return;
+        dmSender.syncVoiceLogDM(session.ownerId).catch(() => {});
+    }
+
     function reserveOwnerBudget(ownerId) {
         const timestamp = now();
         const recent = (ownerBudgets.get(ownerId) || [])
@@ -446,9 +453,7 @@ function createVoiceNotificationSystem(options = {}) {
                 }
             }
 
-            if (session.ownerId && typeof dmSender.syncVoiceLogDM === "function") {
-                dmSender.syncVoiceLogDM(session.ownerId).catch(() => {});
-            }
+            syncOwnerLog(sessionId).catch(() => {});
 
             return { ...session.recoveryState };
         });
@@ -483,10 +488,7 @@ function createVoiceNotificationSystem(options = {}) {
                 }).catch(() => {});
             }
         }
-        const session = getSession(sessionId);
-        if (session?.ownerId && typeof dmSender.syncVoiceLogDM === "function") {
-            dmSender.syncVoiceLogDM(session.ownerId).catch(() => {});
-        }
+        syncOwnerLog(sessionId).catch(() => {});
         return recovery;
     }
 
@@ -523,10 +525,7 @@ function createVoiceNotificationSystem(options = {}) {
                 }).catch(() => {});
             }
         }
-        const session = getSession(sessionId);
-        if (session?.ownerId && typeof dmSender.syncVoiceLogDM === "function") {
-            dmSender.syncVoiceLogDM(session.ownerId).catch(() => {});
-        }
+        syncOwnerLog(sessionId).catch(() => {});
         return recovery;
     }
 
@@ -575,10 +574,7 @@ function createVoiceNotificationSystem(options = {}) {
             }
         }
 
-        const readySession = getSession(sessionId);
-        if (readySession?.ownerId && typeof dmSender.syncVoiceLogDM === "function") {
-            dmSender.syncVoiceLogDM(readySession.ownerId).catch(() => {});
-        }
+        syncOwnerLog(sessionId).catch(() => {});
 
         if (transition.previous.incidentId) {
             const outageDurationMs = transition.readyAt - Number(transition.previous.openedAt || transition.readyAt);
@@ -644,10 +640,7 @@ function createVoiceNotificationSystem(options = {}) {
             }
         }
 
-        const terminalSession = getSession(sessionId);
-        if (terminalSession?.ownerId && typeof dmSender.syncVoiceLogDM === "function") {
-            dmSender.syncVoiceLogDM(terminalSession.ownerId).catch(() => {});
-        }
+        syncOwnerLog(sessionId).catch(() => {});
 
         return emit(sessionId, type, { ...context, incidentId: transition });
     }

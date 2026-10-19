@@ -554,8 +554,16 @@ async function startRunner({
     async function reportOneShotSummary() {
         if (mode !== 'oneshot' || oneShotSummaryReported) return;
         oneShotSummaryReported = true;
-        runnerStatus = 'completed';
         const summary = oneShotSummary();
+        const allDone = summary.totalSupportedQuests > 0
+            && summary.issues.length === 0
+            && completedQuestsCount === summary.totalSupportedQuests;
+        if (allDone || completedQuestsCount > 0) {
+            runnerStatus = 'completed';
+        } else if (summary.issues.length > 0) {
+            runnerStatus = 'error';
+            errorType = 'EXECUTION_FAILED';
+        }
         addLog(`🔎 ${username}: พบ ${summary.totalSupportedQuests} QUESTS`);
         addLog(`🎉 ${username}: ทำสำเร็จ ${completedQuestsCount} QUESTS`);
         addLog('🧹 QUEST ACTIVITY CLEARED');

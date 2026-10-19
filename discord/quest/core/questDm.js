@@ -309,6 +309,7 @@ async function sendQuestAuthFailureDM({
         const embed = buildQuestAuthFailureEmbed({
             username,
             accountId,
+            ownerId,
             jobKey,
             profile,
             avatarUrl,
