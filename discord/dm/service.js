@@ -47,9 +47,13 @@ function normalizePayload(payload = {}) {
     const embeds = Array.isArray(payload.embeds)
         ? payload.embeds.slice(0, 10).map(embed => typeof embed?.toJSON === "function" ? embed.toJSON() : embed)
         : undefined;
+    const components = Array.isArray(payload.components)
+        ? payload.components.slice(0, 5).map(comp => typeof comp?.toJSON === "function" ? comp.toJSON() : comp)
+        : undefined;
     return {
         content: payload.content ? safeText(payload.content, "", 2000) : undefined,
         embeds,
+        components,
         allowedMentions: { parse: [], repliedUser: false }
     };
 }

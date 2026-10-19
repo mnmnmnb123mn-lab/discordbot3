@@ -124,6 +124,14 @@ test("OAuth start rejects invalid, disabled, stale, and unregistered panel state
       text: /ถูกแทนที่/
     },
     {
+      handler: createHandler({
+        decodeState: jest.fn(() => ({ guildId: GUILD_ID, roleId: ROLE_ID, expectedUserId: USER_ID, panelRevision: null })),
+        normalizeConfig: jest.fn(() => ({ enabled: true, roleId: ROLE_ID, panelRevision: "revision-1" }))
+      }),
+      status: 409,
+      text: /ถูกแทนที่/
+    },
+    {
       handler: createHandler({ registerState: jest.fn(() => Promise.resolve(false)) }),
       status: 503,
       text: /ไม่สามารถเริ่ม/
