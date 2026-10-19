@@ -93,14 +93,8 @@ function validateParentDirectory(dbPath, options = {}) {
     } catch (err) {
         const allowTemp = Boolean(options.allowTempFallback || process.env.SQLITE_ALLOW_TEMP_FALLBACK === "true");
         if (allowTemp) {
-            // nosemgrep: javascript.lang.security.audit.path-traversal.path-join-resolve-traversal -- os.tmpdir and path.basename sanitize against path traversal
             const fallbackPath = path.resolve(os.tmpdir(), path.basename(dbPath));
             console.warn(`[SQLITE] ⚠️ Parent directory unwritable (${parentDir}). Explicit fallback allowed, using ${fallbackPath}. Existing data is NOT copied.`);
-            const fallbackParentDir = path.dirname(fallbackPath);
-            if (!fs.existsSync(fallbackParentDir)) {
-                fs.mkdirSync(fallbackParentDir, { recursive: true });
-            }
-            fs.accessSync(fallbackParentDir, fs.constants.R_OK | fs.constants.W_OK);
             return fallbackPath;
         }
         const error = new Error(`[SQLITE] ❌ Database parent directory is not readable/writable: ${parentDir} (${err.message})`);
