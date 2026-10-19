@@ -558,9 +558,11 @@ async function startRunner({
         const allDone = summary.totalSupportedQuests > 0
             && summary.issues.length === 0
             && completedQuestsCount === summary.totalSupportedQuests;
-        if (allDone || completedQuestsCount > 0) {
+        if (signal.aborted) {
+            runnerStatus = 'stopped';
+        } else if (allDone || completedQuestsCount > 0 || summary.totalSupportedQuests === 0) {
             runnerStatus = 'completed';
-        } else if (summary.issues.length > 0) {
+        } else {
             runnerStatus = 'error';
             errorType = 'EXECUTION_FAILED';
         }

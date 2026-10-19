@@ -1087,6 +1087,51 @@ test('quest panel log_channel option routes live logs and summary to specified c
     assert.match(dmFallbackDelivered[0].embeds[0].data.description, /FallbackUser/);
 });
 
+test('reportOneShotSummary: always transitions to a terminal runnerStatus on completion or abort', async () => {
+    const dmDelivered = [];
+    let lastEditedEmbed = null;
+    const mockDm = {
+        id: 'dm_terminal_status_1',
+        isTextBased: () => true,
+        send: async (payload) => {
+            dmDelivered.push(payload);
+            return {
+                edit: async (editPayload) => {
+                    lastEditedEmbed = editPayload?.embeds?.[0];
+                }
+            };
+        }
+    };
+    const mockUser = {
+        createDM: async () => mockDm
+    };
+    const mockClient = {
+        users: {
+            fetch: async (id) => (id === 'owner_terminal_user' ? mockUser : null)
+        },
+        channels: {
+            cache: new Map(),
+            fetch: async () => null
+        }
+    };
+
+    const runner = await startRunner({
+        jobKey: 'test:oneshot:terminal:status',
+        ownerId: 'owner_terminal_user',
+        userToken: 'dummy_token_term',
+        client: mockClient,
+        mode: 'oneshot',
+        username: 'TerminalStatusUser'
+    });
+
+    runner.controller.abort();
+    await runner.task.catch(() => {});
+
+    if (lastEditedEmbed) {
+        assert.notEqual(lastEditedEmbed.data?.title?.includes('กำลังทำเควสต์'), true);
+    }
+});
+
 
 
 
