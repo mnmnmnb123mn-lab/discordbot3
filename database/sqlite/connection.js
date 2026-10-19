@@ -49,7 +49,7 @@ function openMemoryDatabase(options) {
 }
 
 function validateDatabaseFile(requestedDbPath, options = {}) {
-    let dbPath = path.resolve(String(requestedDbPath));
+    let dbPath = requestedDbPath;
     if (!fs.existsSync(dbPath)) return dbPath;
 
     let stats;

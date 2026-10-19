@@ -393,7 +393,7 @@ function resolveTroubleStatus(session, loadingEmoji) {
     return `กำลังกู้คืน ${loadingEmoji} (${Math.max(1, attempts)}/${maxAttempts})`;
 }
 
-function buildVoiceLogEmbed(onlineSessions = [], troubledSessions = []) {
+function formatSessionLines(onlineSessions = [], troubledSessions = []) {
     const bell = resolveEmoji("bell_pmt", resolveEmoji("bell", "<a:bell_pmt:1559247893343248438>"));
     const g03 = resolveEmoji("g03_pmt", resolveEmoji("status_online", "<a:g03_pmt:1553832998468714516>"));
     const r04fpt = resolveEmoji("r04fpt_pmt", resolveEmoji("status_offline", "<a:r04fpt_pmt:1553833007532474519>"));
@@ -431,23 +431,32 @@ function buildVoiceLogEmbed(onlineSessions = [], troubledSessions = []) {
         }
     }
 
-    const MAX_DESC = 4096;
+    return lines;
+}
+
+function clampDescription(lines, maxDesc = 4096) {
     const summaryReserve = `\n… และอีก ${lines.length} บรรทัด`.length;
     let description = "";
     let omitted = 0;
     for (const line of lines) {
         const candidate = description ? `${description}\n${line}` : line;
-        if (candidate.length + summaryReserve > MAX_DESC) {
+        if (candidate.length + summaryReserve > maxDesc) {
             omitted++;
             continue;
         }
         description = candidate;
     }
     if (omitted > 0) description += `\n… และอีก ${omitted} บรรทัด`;
+    return description || "ไม่มีข้อมูล";
+}
+
+function buildVoiceLogEmbed(onlineSessions = [], troubledSessions = []) {
+    const lines = formatSessionLines(onlineSessions, troubledSessions);
+    const description = clampDescription(lines, 4096);
 
     return new MessageEmbed()
         .setColor(config.system?.themeColors?.primary || "#57F287")
-        .setDescription(description || "ไม่มีข้อมูล");
+        .setDescription(description);
 }
 
 function buildVoiceLogButtonRow() {
