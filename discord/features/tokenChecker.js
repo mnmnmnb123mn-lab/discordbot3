@@ -7,10 +7,10 @@ const config = require('../config.json');
 
 const THEME_COLORS = Object.freeze({
     BOOST: '#EB459E',
-    NITRO: '#5865F2',
-    NORMAL: '#57F287',
-    BOT: '#57F287',
-    INVALID: '#ED4245'
+    NITRO: config.system?.themeColors?.info || '#FFCCFF',
+    NORMAL: config.system?.themeColors?.primary || '#FF99FF',
+    BOT: config.system?.themeColors?.info || '#FFCCFF',
+    INVALID: config.system?.themeColors?.error || '#FF9999'
 });
 
 function maskToken(token) {

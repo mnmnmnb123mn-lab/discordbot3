@@ -25,37 +25,37 @@ const QUEST_ERRORS = Object.freeze({
     RUNNER_ABORTED: {
         icon: QUEST_EMOJIS.cross,
         status: 'ผู้ใช้สั่งหยุดการทำงานของ Quest แล้ว',
-        color: '#ED4245'
+        color: config.system?.themeColors?.error || '#FF9999'
     },
     COMPLETED_EXTERNAL: {
         icon: QUEST_EMOJIS.cross,
         status: 'ระหว่างบอทรัน มีการเปิดเล่นเองจากแอป Discord จนเควสต์จบก่อน',
-        color: '#ED4245'
+        color: config.system?.themeColors?.error || '#FF9999'
     },
     EXECUTION_FAILED: {
         icon: QUEST_EMOJIS.cross,
         status: 'เกิดข้อผิดพลาดของระบบdiscord บอทไม่สามารถทำงานได้ในTokenนี้ โปรดลองอีกครั้ง',
-        color: '#ED4245'
+        color: config.system?.themeColors?.error || '#FF9999'
     },
     ENROLLMENT_FAILED: {
         icon: QUEST_EMOJIS.cross,
         status: 'บัญชีไม่ผ่านเงื่อนไขรับเควสต์ หรือ เควสต์หมดเวลาไปก่อน',
-        color: '#ED4245'
+        color: config.system?.themeColors?.error || '#FF9999'
     },
     NO_RUNNABLE_QUESTS: {
         icon: QUEST_EMOJIS.sn,
         status: 'บัญชีนี้ไม่มีเควสต์ที่รองรับ หรือ ทำไปหมดแล้ว',
-        color: '#57F287'
+        color: config.system?.themeColors?.success || '#FF99FF'
     },
     FATAL_AUTH_FAILURE: {
         icon: QUEST_EMOJIS.cross,
         status: 'Token บัญชี Quest ใช้งานไม่ได้ กรุณาลองตรวจสอบ Token นี้ เเละ ลองอีกครั้ง',
-        color: '#ED4245'
+        color: config.system?.themeColors?.error || '#FF9999'
     },
     RATE_LIMIT_429: {
         icon: QUEST_EMOJIS.cross,
         status: 'ติด Rate Limit ชั่วคราว (HTTP 429) / เครือข่ายหน่วง กรุณา ลองอีกครั้ง',
-        color: '#ED4245'
+        color: config.system?.themeColors?.error || '#FF9999'
     }
 });
 
@@ -196,7 +196,7 @@ function buildQuestErrorEmbed({
     const errorDef = QUEST_ERRORS[errorType] || {
         icon: QUEST_EMOJIS.cross,
         status: errorMessage || 'เกิดข้อผิดพลาดของระบบdiscord บอทไม่สามารถทำงานได้ในTokenนี้ โปรดลองอีกครั้ง',
-        color: 0xED4245
+        color: config.system?.themeColors?.error || '#FF9999'
     };
     const statusText = errorMessage || errorDef.status;
     const ownerLine = ownerId ? `${QUEST_EMOJIS.kroles} : <@${ownerId}>\n` : '';
@@ -228,7 +228,7 @@ function buildOneShotCheckingEmbed({
     ].join('\n');
 
     const embed = new MessageEmbed()
-        .setColor('#5865F2')
+        .setColor(config.system?.themeColors?.info || '#FFCCFF')
         .setTitle(`${QUEST_EMOJIS.bell} Log ระบบทำเควส`)
         .setDescription(description)
         .setTimestamp(Number(timestamp));
@@ -260,7 +260,7 @@ function buildOneShotProgressEmbed({
     ].join('\n');
 
     const embed = new MessageEmbed()
-        .setColor('#F59E0B')
+        .setColor(config.system?.themeColors?.warning || '#D2691E')
         .setTitle(`${QUEST_EMOJIS.bell} Log ระบบทำเควส`)
         .setDescription(description)
         .setTimestamp(Number(timestamp));
@@ -302,7 +302,7 @@ function buildOneShotCompletedEmbed({
     }
 
     const embed = new MessageEmbed()
-        .setColor('#57F287')
+        .setColor(config.system?.themeColors?.success || '#FF99FF')
         .setTitle(`${QUEST_EMOJIS.bell} Log ระบบทำเควส`)
         .setDescription(lines.join('\n'))
         .setTimestamp(Number(timestamp));
@@ -329,7 +329,7 @@ function buildAutoDailyEmbed({
     let todaySupportedText = 'กำลังตรวจสอบ..';
     let todayCompletedText = '-';
     let todayTaskText = '-';
-    let color = '#5865F2';
+    let color = config.system?.themeColors?.info || '#FFCCFF';
 
     if (status === 'running') {
         statusIcon = QUEST_EMOJIS.loading;
@@ -337,14 +337,14 @@ function buildAutoDailyEmbed({
         todaySupportedText = todaySupported != null ? `${todaySupported} รายการ` : 'กำลังตรวจสอบ..';
         todayCompletedText = todayCompleted != null ? `${todayCompleted} รายการ` : '0 รายการ';
         todayTaskText = currentTaskText || '-';
-        color = '#F59E0B';
+        color = config.system?.themeColors?.warning || '#D2691E';
     } else if (status === 'standby') {
         statusIcon = QUEST_EMOJIS.sn;
         statusText = 'ทำ Quest เสร็จเเล้ว กำลังรอวันต่อไป';
         todaySupportedText = todaySupported != null && todaySupported > 0 ? `${todaySupported} รายการ` : '-';
         todayCompletedText = todayCompleted != null && todayCompleted > 0 ? `${todayCompleted} รายการ` : '-';
         todayTaskText = 'เสร็จสิ้นเเล้ววันนี้';
-        color = '#57F287';
+        color = config.system?.themeColors?.success || '#FF99FF';
     }
 
     const description = [

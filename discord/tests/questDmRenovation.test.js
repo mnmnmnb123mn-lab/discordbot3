@@ -2,6 +2,7 @@
 
 const assert = require('node:assert/strict');
 const test = require('node:test');
+const config = require('../config.json');
 
 const {
     QUEST_EMOJIS,
@@ -35,7 +36,7 @@ test('One-shot Stage 1: Checking embed matches exact user blueprint', () => {
 
     assert.ok(embed);
     assert.equal(embed.data.title, `${QUEST_EMOJIS.bell} Log ระบบทำเควส`);
-    assert.equal(embed.data.color, 0x5865f2);
+    assert.equal(embed.data.color, parseInt((config.system?.themeColors?.info || '#FFCCFF').replace('#', ''), 16));
 
     const desc = embed.data.description;
     assert.ok(desc.includes(`${QUEST_EMOJIS.discord} Username Token : PlayerOne`));
@@ -57,7 +58,7 @@ test('One-shot Stage 2: In-Progress embed shows single status progression', () =
         currentTaskText: prepTask
     });
     assert.equal(prepEmbed.data.title, `${QUEST_EMOJIS.bell} Log ระบบทำเควส`);
-    assert.equal(prepEmbed.data.color, Number.parseInt('f59e0b', 16));
+    assert.equal(prepEmbed.data.color, parseInt((config.system?.themeColors?.warning || '#D2691E').replace('#', ''), 16));
     assert.ok(prepEmbed.data.description.includes(`${QUEST_EMOJIS.loading} สถานะ : กำลังดำเนินการ ...`));
     assert.ok(prepEmbed.data.description.includes(`${QUEST_EMOJIS.grej} จำนวน Quest ที่รองรับ : 5 รายการ`));
     assert.ok(prepEmbed.data.description.includes(`${QUEST_EMOJIS.grej} จำนวน Quest ที่ทำเสร็จเเล้ว : 2`));
@@ -89,7 +90,7 @@ test('One-shot Stage 3: Completed embed matches user blueprint with tags and ite
 
     assert.ok(embed);
     assert.equal(embed.data.title, `${QUEST_EMOJIS.bell} Log ระบบทำเควส`);
-    assert.equal(embed.data.color, 0x57f287);
+    assert.equal(embed.data.color, parseInt((config.system?.themeColors?.success || '#FF99FF').replace('#', ''), 16));
 
     const desc = embed.data.description;
     assert.ok(desc.includes(`${QUEST_EMOJIS.kroles} : <@15225714593369>`));
@@ -113,7 +114,7 @@ test('Auto Daily Mode: Renders the 3 cyclic statuses with all-time and daily cou
         allTimeCompleted: 42
     });
     assert.equal(checking.data.title, `${QUEST_EMOJIS.bell} Log ระบบทำเควส (ต่อเนื่องทุกวัน)`);
-    assert.equal(checking.data.color, 0x5865f2);
+    assert.equal(checking.data.color, parseInt((config.system?.themeColors?.info || '#FFCCFF').replace('#', ''), 16));
     assert.ok(checking.data.description.includes(`${QUEST_EMOJIS.loadingBar} สถานะ : กำลังตรวจสอบ Quest...`));
     assert.ok(checking.data.description.includes(`${QUEST_EMOJIS.grej} จำนวน Quest ที่รองรับ ทั้งหมด : 47 รายการ`));
     assert.ok(checking.data.description.includes(`${QUEST_EMOJIS.grej} จำนวน Quest ที่ทำเสร็จเเล้ว ทั้งหมด : 42 รายการ`));
@@ -131,7 +132,7 @@ test('Auto Daily Mode: Renders the 3 cyclic statuses with all-time and daily cou
         todayCompleted: 1,
         currentTaskText: `${QUEST_EMOJIS.gearBlue} Minecraft 50%`
     });
-    assert.equal(running.data.color, Number.parseInt('f59e0b', 16));
+    assert.equal(running.data.color, parseInt((config.system?.themeColors?.warning || '#D2691E').replace('#', ''), 16));
     assert.ok(running.data.description.includes(`${QUEST_EMOJIS.loading} สถานะ : กำลังดำเนินการ ...`));
     assert.ok(running.data.description.includes(`${QUEST_EMOJIS.orjj} จำนวน Quest ที่รองรับ วันนี้ : 5 รายการ`));
     assert.ok(running.data.description.includes(`${QUEST_EMOJIS.orjj} จำนวน Quest ที่ทำเสร็จเเล้ว วันนี้ : 1 รายการ`));
@@ -146,54 +147,56 @@ test('Auto Daily Mode: Renders the 3 cyclic statuses with all-time and daily cou
         todaySupported: 5,
         todayCompleted: 5
     });
-    assert.equal(standby.data.color, 0x57f287);
+    assert.equal(standby.data.color, parseInt((config.system?.themeColors?.success || '#FF99FF').replace('#', ''), 16));
     assert.ok(standby.data.description.includes(`${QUEST_EMOJIS.sn} สถานะ : ทำ Quest เสร็จเเล้ว กำลังรอวันต่อไป`));
     assert.ok(standby.data.description.includes(`${QUEST_EMOJIS.yelj} กำลังทำ Quest : เสร็จสิ้นเเล้ววันนี้`));
 });
 
 test('Standardized Errors: All 7 templates format correctly with tag and status', () => {
+    const errColor = parseInt((config.system?.themeColors?.error || '#FF9999').replace('#', ''), 16);
+    const successColor = parseInt((config.system?.themeColors?.success || '#FF99FF').replace('#', ''), 16);
     const errorCases = [
         {
             type: 'RUNNER_ABORTED',
             icon: QUEST_EMOJIS.cross,
             text: 'ผู้ใช้สั่งหยุดการทำงานของ Quest แล้ว',
-            color: 0xed4245
+            color: errColor
         },
         {
             type: 'COMPLETED_EXTERNAL',
             icon: QUEST_EMOJIS.cross,
             text: 'ระหว่างบอทรัน มีการเปิดเล่นเองจากแอป Discord จนเควสต์จบก่อน',
-            color: 0xed4245
+            color: errColor
         },
         {
             type: 'EXECUTION_FAILED',
             icon: QUEST_EMOJIS.cross,
             text: 'เกิดข้อผิดพลาดของระบบdiscord บอทไม่สามารถทำงานได้ในTokenนี้ โปรดลองอีกครั้ง',
-            color: 0xed4245
+            color: errColor
         },
         {
             type: 'ENROLLMENT_FAILED',
             icon: QUEST_EMOJIS.cross,
             text: 'บัญชีไม่ผ่านเงื่อนไขรับเควสต์ หรือ เควสต์หมดเวลาไปก่อน',
-            color: 0xed4245
+            color: errColor
         },
         {
             type: 'NO_RUNNABLE_QUESTS',
             icon: QUEST_EMOJIS.sn,
             text: 'บัญชีนี้ไม่มีเควสต์ที่รองรับ หรือ ทำไปหมดแล้ว',
-            color: 0x57f287
+            color: successColor
         },
         {
             type: 'FATAL_AUTH_FAILURE',
             icon: QUEST_EMOJIS.cross,
             text: 'Token บัญชี Quest ใช้งานไม่ได้ กรุณาลองตรวจสอบ Token นี้ เเละ ลองอีกครั้ง',
-            color: 0xed4245
+            color: errColor
         },
         {
             type: 'RATE_LIMIT_429',
             icon: QUEST_EMOJIS.cross,
             text: 'ติด Rate Limit ชั่วคราว (HTTP 429) / เครือข่ายหน่วง กรุณา ลองอีกครั้ง',
-            color: 0xed4245
+            color: errColor
         }
     ];
 

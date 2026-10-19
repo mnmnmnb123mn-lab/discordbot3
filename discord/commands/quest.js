@@ -157,7 +157,7 @@ async function buildStopPanelPayload(ownerId) {
 
     const embed = new MessageEmbed()
         .setTitle(`${bellEmoji} : หยุดการทำเควส`)
-        .setColor(0xED4245)
+        .setColor(config.system?.themeColors?.error || '#FF9999')
         .setDescription(
             `${crossEmoji} กำลังทำงาน : **${totalActive}** บัญชี\n` +
             'เลือกบัญชีที่ต้องการให้หยุดจากเมนูด้านล่าง หรือกดปุ่มเพื่อหยุดทั้งหมด'

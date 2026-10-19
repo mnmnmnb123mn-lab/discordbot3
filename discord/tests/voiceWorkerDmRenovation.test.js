@@ -134,9 +134,9 @@ test("Voice Worker DM Renovation: buildTerminalAlertEmbed covers all 10 terminal
         assert.ok(embed.title.includes(expectedTitle), `Event ${type} did not include expected title: ${expectedTitle}`);
         assert.ok(embed.title.includes("<a:CROSS_pmt:1553833049135906816>"));
         if (type === "SESSION_STOPPED_MANUAL") {
-            assert.equal(embed.color, 0x5865f2);
+            assert.equal(embed.color, parseInt((config.system?.themeColors?.info || "#FFCCFF").replace('#', ''), 16));
         } else {
-            assert.equal(embed.color, 0xed4245);
+            assert.equal(embed.color, parseInt((config.system?.themeColors?.error || "#FF9999").replace('#', ''), 16));
         }
     }
 });

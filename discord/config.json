@@ -32,11 +32,11 @@
     },
     "system": {
         "themeColors": {
-            "primary": "#57F287",
-            "success": "#57F287",
-            "warning": "#FEE75C",
-            "error": "#ED4245",
-            "info": "#5865F2"
+            "primary": "#FF99FF",
+            "success": "#FF99FF",
+            "warning": "#D2691E",
+            "error": "#FF9999",
+            "info": "#FFCCFF"
         },
         "bypassApprovalGuildId": "1463891557940854900"
     },

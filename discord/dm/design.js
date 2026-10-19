@@ -1,13 +1,14 @@
 "use strict";
 
 const { MessageEmbed } = require("../core/discordCompat");
+const config = require("../config.json");
 
 const COLORS = Object.freeze({
-    success: "#57F287",
-    info: "#5865F2",
-    warning: "#FEE75C",
-    action: "#F59E0B",
-    danger: "#ED4245",
+    success: config.system?.themeColors?.success || "#FF99FF",
+    info: config.system?.themeColors?.info || "#FFCCFF",
+    warning: config.system?.themeColors?.warning || "#D2691E",
+    action: config.system?.themeColors?.warning || "#D2691E",
+    danger: config.system?.themeColors?.error || "#FF9999",
     neutral: "#747F8D"
 });
 

@@ -2,6 +2,7 @@
 
 const assert = require('node:assert/strict');
 const test = require('node:test');
+const config = require('../config.json');
 
 const {
     encryptToken,
@@ -509,7 +510,7 @@ test('questDm builds correct tones and embeds for success, partial, danger, and 
     assert.ok(successEmbed);
     assert.match(successEmbed.data.title, /Log ระบบทำเควส/);
     assert.match(successEmbed.data.description, /ทำ Quest อัตโนมัติเสร็จสิ้นแล้ว/);
-    assert.equal(successEmbed.data.color, parseInt('57F287', 16));
+    assert.equal(successEmbed.data.color, parseInt((config.system?.themeColors?.success || '#FF99FF').replace('#', ''), 16));
 
     const authFailEmbed = buildQuestAuthFailureEmbed({
         username: 'TestHero',
@@ -519,7 +520,7 @@ test('questDm builds correct tones and embeds for success, partial, danger, and 
     assert.ok(authFailEmbed);
     assert.match(authFailEmbed.data.title, /Log ระบบทำเควส/);
     assert.match(authFailEmbed.data.description, /Token บัญชี Quest ใช้งานไม่ได้/);
-    assert.equal(authFailEmbed.data.color, parseInt('ED4245', 16));
+    assert.equal(authFailEmbed.data.color, parseInt((config.system?.themeColors?.error || '#FF9999').replace('#', ''), 16));
 });
 
 test('questDm sendQuestSummaryDM and sendQuestAuthFailureDM integrate with central dmService outbox', async () => {
@@ -562,7 +563,7 @@ test('runnerStatusHeader builds valid Live Embeds for running, standby, complete
 
     assert.ok(runningEmbed);
     assert.match(runningEmbed.data.title, /Log ระบบทำเควส/);
-    assert.equal(runningEmbed.data.color, parseInt('F59E0B', 16));
+    assert.equal(runningEmbed.data.color, parseInt((config.system?.themeColors?.warning || '#D2691E').replace('#', ''), 16));
     assert.match(runningEmbed.data.description, /GamerX/);
     assert.match(runningEmbed.data.description, /กำลังดำเนินการ/);
 
@@ -579,7 +580,7 @@ test('runnerStatusHeader builds valid Live Embeds for running, standby, complete
 
     assert.ok(standbyEmbed);
     assert.match(standbyEmbed.data.title, /Log ระบบทำเควส \(ต่อเนื่องทุกวัน\)/);
-    assert.equal(standbyEmbed.data.color, parseInt('57F287', 16));
+    assert.equal(standbyEmbed.data.color, parseInt((config.system?.themeColors?.success || '#FF99FF').replace('#', ''), 16));
     assert.match(standbyEmbed.data.description, /DailyHero/);
     assert.match(standbyEmbed.data.description, /ทำ Quest เสร็จเเล้ว กำลังรอวันต่อไป/);
 
@@ -592,7 +593,7 @@ test('runnerStatusHeader builds valid Live Embeds for running, standby, complete
 
     assert.ok(stoppedEmbed);
     assert.match(stoppedEmbed.data.title, /Log ระบบทำเควส/);
-    assert.equal(stoppedEmbed.data.color, parseInt('ED4245', 16));
+    assert.equal(stoppedEmbed.data.color, parseInt((config.system?.themeColors?.error || '#FF9999').replace('#', ''), 16));
     assert.match(stoppedEmbed.data.description, /ผู้ใช้สั่งหยุดการทำงานของ Quest แล้ว/);
 
     // 4. formatRunnerStatusEmbed from raw content string
@@ -613,7 +614,7 @@ test('questDm buildQuestStoppedEmbed creates danger embed with abort reason', ()
 
     assert.ok(embed);
     assert.match(embed.data.title, /Log ระบบทำเควส/);
-    assert.equal(embed.data.color, parseInt('ED4245', 16));
+    assert.equal(embed.data.color, parseInt((config.system?.themeColors?.error || '#FF9999').replace('#', ''), 16));
     assert.match(embed.data.description, /OperatorUser/);
     assert.match(embed.data.description, /ผู้ใช้สั่งหยุดการทำงานของ Quest แล้ว/);
 });

@@ -78,7 +78,7 @@ function _buildPanelEmbed({ mode, panelState, readyCount, liveJob, sourceGuildNa
             `เลือกรูปแบบและตั้งค่าควบคุมผ่านปุ่มข้างล่าง ${emoji.dreamworld}\n\n` +
             `*Developed by <@${primaryOwnerId}>*`
         )
-        .setColor(isRunning ? 0xFEE75C : 0x57F287)
+        .setColor(isRunning ? (config.system?.themeColors?.warning || '#D2691E') : (config.system?.themeColors?.success || '#FF99FF'))
         .setTimestamp();
 
     _applyPanelImage(embed, hasAttachment);
