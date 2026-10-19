@@ -6,7 +6,7 @@ function toTimestamp(value) {
 }
 
 const UPDATE_FIELD_MAPPINGS = [
-    { key: "username", col: "username", transform: (v) => String(v) },
+    { key: "username", col: "username", transform: String },
     { key: "channelId", col: "channel_id", transform: (v) => (v ? String(v) : "dm") },
     { key: "enabled", col: "enabled", transform: (v) => (v ? 1 : 0) },
     { key: "nextCheckAt", col: "next_check_at", transform: toTimestamp },
