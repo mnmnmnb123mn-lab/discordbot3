@@ -57,7 +57,7 @@ test('One-shot Stage 2: In-Progress embed shows single status progression', () =
         currentTaskText: prepTask
     });
     assert.equal(prepEmbed.data.title, `${QUEST_EMOJIS.bell} Log ระบบทำเควส`);
-    assert.equal(prepEmbed.data.color, 0xf59e0b);
+    assert.equal(prepEmbed.data.color, 16096779);
     assert.ok(prepEmbed.data.description.includes(`${QUEST_EMOJIS.loading} สถานะ : กำลังดำเนินการ ...`));
     assert.ok(prepEmbed.data.description.includes(`${QUEST_EMOJIS.grej} จำนวน Quest ที่รองรับ : 5 รายการ`));
     assert.ok(prepEmbed.data.description.includes(`${QUEST_EMOJIS.grej} จำนวน Quest ที่ทำเสร็จเเล้ว : 2`));
@@ -131,7 +131,7 @@ test('Auto Daily Mode: Renders the 3 cyclic statuses with all-time and daily cou
         todayCompleted: 1,
         currentTaskText: `${QUEST_EMOJIS.gearBlue} Minecraft 50%`
     });
-    assert.equal(running.data.color, 0xf59e0b);
+    assert.equal(running.data.color, 16096779);
     assert.ok(running.data.description.includes(`${QUEST_EMOJIS.loading} สถานะ : กำลังดำเนินการ ...`));
     assert.ok(running.data.description.includes(`${QUEST_EMOJIS.orjj} จำนวน Quest ที่รองรับ วันนี้ : 5 รายการ`));
     assert.ok(running.data.description.includes(`${QUEST_EMOJIS.orjj} จำนวน Quest ที่ทำเสร็จเเล้ว วันนี้ : 1 รายการ`));

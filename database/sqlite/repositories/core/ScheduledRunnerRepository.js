@@ -106,7 +106,7 @@ class ScheduledRunnerRepository {
         }
         if (updates.channelId !== undefined) {
             setClauses.push("channel_id = ?");
-            values.push(String(updates.channelId));
+            values.push(updates.channelId ? String(updates.channelId) : 'dm');
         }
         if (updates.enabled !== undefined) {
             setClauses.push("enabled = ?");

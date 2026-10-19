@@ -431,9 +431,23 @@ function buildVoiceLogEmbed(onlineSessions = [], troubledSessions = []) {
         }
     }
 
+    const MAX_DESC = 4096;
+    const summaryReserve = `\n… และอีก ${lines.length} บรรทัด`.length;
+    let description = "";
+    let omitted = 0;
+    for (const line of lines) {
+        const candidate = description ? `${description}\n${line}` : line;
+        if (candidate.length + summaryReserve > MAX_DESC) {
+            omitted++;
+            continue;
+        }
+        description = candidate;
+    }
+    if (omitted > 0) description += `\n… และอีก ${omitted} บรรทัด`;
+
     return new MessageEmbed()
         .setColor(config.system?.themeColors?.primary || "#57F287")
-        .setDescription(lines.join("\n"));
+        .setDescription(description || "ไม่มีข้อมูล");
 }
 
 function buildVoiceLogButtonRow() {
@@ -515,7 +529,11 @@ function syncVoiceLogDM(ownerId, options = {}) {
                     } catch {}
                 }
             };
-            const op = flushVoiceLogDM(strOwnerId, options).then(done, done);
+            const prev = tracker.inFlight || Promise.resolve();
+            const op = prev
+                .catch(() => {})
+                .then(() => flushVoiceLogDM(strOwnerId, options))
+                .then(done, done);
             tracker.inFlight = op;
         }, delayMs);
         tracker.timer?.unref?.();
@@ -594,8 +612,9 @@ async function sendVoiceEventDM(snapshot) {
     }
 }
 
-async function sendVoiceDigestDM(ownerId, items, metadata = {}) {
-    return { status: "skipped", reason: "digest_retired" };
+async function sendVoiceDigestDM(ownerId) {
+    syncVoiceLogDM(ownerId).catch(() => {});
+    return { status: "sent", reason: "digest_retired" };
 }
 
 async function sendVoiceRecoveryTrackerDM(snapshot, trackerState = {}) {

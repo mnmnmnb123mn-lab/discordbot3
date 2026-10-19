@@ -26,6 +26,9 @@ async function main() {
     try {
         db = openDatabase({ path: dbPath, allowTempFallback: true });
         const targetPath = getCurrentDbPath() || dbPath;
+        if (targetPath !== dbPath) {
+            console.warn(`[CHECK-SQLITE] ⚠️ Fallback database in use: ${targetPath}. Result does not reflect ${dbPath}.`);
+        }
         const results = runStartupCheck(db, { dbPath: targetPath });
 
         console.log("------------------------------------------------------------");

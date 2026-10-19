@@ -71,8 +71,9 @@ function validateDatabaseFile(requestedDbPath, options = {}) {
     } catch (err) {
         const allowTemp = Boolean(options.allowTempFallback || process.env.SQLITE_ALLOW_TEMP_FALLBACK === "true");
         if (allowTemp) {
-            console.warn(`[SQLITE] ⚠️ Database file unwritable (${dbPath}). Explicit fallback allowed, switching to temp directory.`);
-            dbPath = path.resolve(os.tmpdir(), path.basename(dbPath));
+            const fallbackPath = path.resolve(os.tmpdir(), path.basename(dbPath));
+            console.warn(`[SQLITE] ⚠️ Database file unwritable (${dbPath}). Explicit fallback allowed, using ${fallbackPath}. Existing data is NOT copied.`);
+            dbPath = fallbackPath;
             return validateParentDirectory(dbPath, options);
         }
         const error = new Error(`[SQLITE] ❌ Database file exists but is not readable/writable: ${dbPath} (${err.message})`);
@@ -94,8 +95,9 @@ function validateParentDirectory(requestedPath, options = {}) {
     } catch (err) {
         const allowTemp = Boolean(options.allowTempFallback || process.env.SQLITE_ALLOW_TEMP_FALLBACK === "true");
         if (allowTemp) {
-            console.warn(`[SQLITE] ⚠️ Parent directory unwritable (${parentDir}). Explicit fallback allowed, switching to temp directory.`);
-            dbPath = path.resolve(os.tmpdir(), path.basename(dbPath));
+            const fallbackPath = path.resolve(os.tmpdir(), path.basename(dbPath));
+            console.warn(`[SQLITE] ⚠️ Parent directory unwritable (${parentDir}). Explicit fallback allowed, using ${fallbackPath}. Existing data is NOT copied.`);
+            dbPath = fallbackPath;
             parentDir = path.dirname(dbPath);
             if (!fs.existsSync(parentDir)) {
                 fs.mkdirSync(parentDir, { recursive: true });

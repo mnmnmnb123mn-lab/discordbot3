@@ -1414,15 +1414,15 @@ async function sendDM(userId, payload) {
 function verificationDmCopy({ ok, blocked, alreadyVerified, reasonCode }) {
     if (alreadyVerified) {
         return {
-            title: ":verifygreen_pmt: คุณเคยทำการ Veriflcation ไว้เเล้ว",
-            summary: "• คุณเคยทำการ Veriflcation สำเร็จแล้ว ระบบจึงไม่สามารถเพิ่มยศให้คุณได้",
+            title: `${config.emojis?.verifygreen_pmt || config.emojis?.check_alt || "✅"} คุณเคยทำการ Verification ไว้เเล้ว`,
+            summary: "• คุณเคยทำการ Verification สำเร็จแล้ว ระบบจึงไม่สามารถเพิ่มยศให้คุณได้",
             tone: "info",
             nextAction: null
         };
     }
     if (ok) {
         return {
-            title: ":verifygreen_pmt: คุณได้ทำการ Veriflcation สำเร็จแล้ว",
+            title: `${config.emojis?.verifygreen_pmt || config.emojis?.check_alt || "✅"} คุณได้ทำการ Verification สำเร็จแล้ว`,
             summary: "• คุณผ่านการตรวจสอบเเล้วเเละได้รับยศเเล้ว",
             tone: "success",
             nextAction: null
@@ -1430,15 +1430,15 @@ function verificationDmCopy({ ok, blocked, alreadyVerified, reasonCode }) {
     }
     if (blocked) {
         return {
-            title: ":CROSS_pmt: ไม่ผ่านการ Veriflcation ของเซิฟเวอร์",
-            summary: "• บัญชีของคุณไม่ผ่านการเงื่อนไขความปลอยภัยของเซิฟเวอร์",
+            title: `${config.emojis?.CROSS_pmt || config.emojis?.error || "❌"} ไม่ผ่านการ Verification ของเซิร์ฟเวอร์`,
+            summary: "• บัญชีของคุณไม่ผ่านเงื่อนไขความปลอดภัยของเซิร์ฟเวอร์",
             tone: "warning",
             nextAction: "ติดต่อผู้ดูแลเซิร์ฟเวอร์หากต้องการสอบถามเงื่อนไขเพิ่มเติม"
         };
     }
     const stalePanel = reasonCode === "panel_revision_mismatch" || reasonCode === "role_mismatch_latest_config";
     return {
-        title: ":CROSS_pmt: คุณ Veriflcation ไม่สำเร็จ",
+        title: `${config.emojis?.CROSS_pmt || config.emojis?.error || "❌"} คุณ Verification ไม่สำเร็จ`,
         summary: "• ระบบทำการตรวจสอบไม่สำเร็จ โปรดลองใหม่อีกครั้ง",
         nextAction: stalePanel
             ? "กลับไป Discord แล้วกดปุ่มจากแผงยืนยันล่าสุด"

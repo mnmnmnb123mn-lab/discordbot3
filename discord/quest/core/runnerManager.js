@@ -252,6 +252,7 @@ async function startRunner({
     let allTimeCompleted = 0;
     let todaySupported = null;
     let todayCompleted = null;
+    const seenSupportedQuestIds = new Set();
 
     let lastRenderAt = 0;
     let pendingTimer = null;
@@ -588,7 +589,7 @@ async function startRunner({
                 issues,
                 jobKey,
                 targetMessage: liveMsg,
-                channelId: usingFallbackDm ? null : (logChannelId || channelId),
+                channelId: usingFallbackDm ? null : logChannelId,
                 client
             }).catch(() => {});
         }
@@ -630,7 +631,12 @@ async function startRunner({
         await claimScheduledCompletions(allQuests);
         const runnable = allQuests.filter((quest) => !quest.completed && isRunnableQuest(quest));
         todaySupported = runnable.length;
-        allTimeSupported += runnable.length;
+        for (const quest of runnable) {
+            if (!seenSupportedQuestIds.has(quest.id)) {
+                seenSupportedQuestIds.add(quest.id);
+                allTimeSupported += 1;
+            }
+        }
         if (!countAlreadyReported) await reportRunnableCount(runnable.length);
         countAlreadyReported = false;
         if (runnable.length === 0) {
@@ -719,11 +725,6 @@ async function startRunner({
             };
         } catch (error) {
             rethrowFatalAuth(error);
-            if (mode === 'oneshot') {
-                runnerStatus = 'error';
-                errorType = 'ENROLLMENT_FAILED';
-                await flush();
-            }
             return {
                 outcome: await questFailureOutcome(
                     quest,
@@ -1150,10 +1151,10 @@ async function startRunner({
 
     async function handleRunnerFatalError(err) {
         if (err.message === 'aborted') {
+            const hadLiveMsg = Boolean(liveMsg);
             await handleAbortError();
-            return;
-        }
-        if (isFatalAuthError(err)) {
+            if (hadLiveMsg) return;
+        } else if (isFatalAuthError(err)) {
             await handleAuthError(err);
         } else if (err?.status === 429 || err?.code === 429 || String(err?.message).includes('429')) {
             await handleRateLimitError();

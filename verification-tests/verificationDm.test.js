@@ -49,7 +49,7 @@ describe("Verification DM experience", () => {
         const serialized = JSON.stringify(sent[0]);
 
         expect(delivered).toBe(true);
-        expect(serialized).toContain("คุณเคยทำการ Veriflcation ไว้เเล้ว");
+        expect(serialized).toContain("คุณเคยทำการ Verification ไว้เเล้ว");
         expect(serialized).toContain("ระบบจึงไม่สามารถเพิ่มยศให้คุณได้");
         expect(serialized).not.toContain("ได้รับยศใหม่");
         expect(serialized).not.toContain("บัญชีที่เกี่ยวข้อง");
@@ -85,13 +85,13 @@ describe("Verification DM experience", () => {
             guildName: "เซิร์ฟเวอร์ตัวอย่าง"
         }).toJSON();
 
-        expect(success.title).toContain("คุณได้ทำการ Veriflcation สำเร็จแล้ว");
+        expect(success.title).toContain("คุณได้ทำการ Verification สำเร็จแล้ว");
         expect(success.description).toContain("คุณผ่านการตรวจสอบเเล้วเเละได้รับยศเเล้ว");
-        expect(alreadyVerified.title).toContain("คุณเคยทำการ Veriflcation ไว้เเล้ว");
+        expect(alreadyVerified.title).toContain("คุณเคยทำการ Verification ไว้เเล้ว");
         expect(alreadyVerified.description).toContain("ระบบจึงไม่สามารถเพิ่มยศให้คุณได้");
-        expect(blocked.title).toContain("ไม่ผ่านการ Veriflcation ของเซิฟเวอร์");
-        expect(blocked.description).toContain("บัญชีของคุณไม่ผ่านการเงื่อนไขความปลอยภัยของเซิฟเวอร์");
-        expect(failed.title).toContain("คุณ Veriflcation ไม่สำเร็จ");
+        expect(blocked.title).toContain("ไม่ผ่านการ Verification ของเซิร์ฟเวอร์");
+        expect(blocked.description).toContain("บัญชีของคุณไม่ผ่านเงื่อนไขความปลอดภัยของเซิร์ฟเวอร์");
+        expect(failed.title).toContain("คุณ Verification ไม่สำเร็จ");
         expect(failed.description).toContain("ระบบทำการตรวจสอบไม่สำเร็จ โปรดลองใหม่อีกครั้ง");
         expect(new Set([success.color, alreadyVerified.color, blocked.color, failed.color]).size).toBe(4);
     });

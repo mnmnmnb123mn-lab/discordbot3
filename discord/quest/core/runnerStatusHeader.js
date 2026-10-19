@@ -380,7 +380,7 @@ function resolveRunnerUsername(state) {
 
 const TASK_PREPARE_REGEX = /กำลังเตรียมทำ\s+([^\r\n]+)/;
 const TASK_WORKING_REGEX = /กำลังทำ\s+([^\r\n]+)/;
-const TASK_PERCENT_REGEX = /(?:⌛|\b)\s*([^%\r\n]+?)\s*(\d+)%/;
+const TASK_PERCENT_REGEX = /([^\r\n%]+)\s+(\d+)%/;
 
 function parseActivityTaskLine(line) {
     if (typeof line !== 'string') return null;
@@ -487,6 +487,28 @@ function buildOneShotEmbed(state, activityLines, context) {
     });
 }
 
+function resolveAutoDailyLiveEmbed(state, activityLines, context) {
+    const hasStandbyLog = activityLines.some((l) => typeof l === 'string' && (l.includes('AUTO DAILY ACTIVE') || l.includes('NEXT CHECK')));
+    let dailyStatus = state.status || 'checking';
+    if (dailyStatus !== 'running' && (dailyStatus === 'standby' || hasStandbyLog)) {
+        dailyStatus = 'standby';
+    }
+
+    const taskText = state.currentTaskText || extractCurrentTaskFromLines(activityLines);
+
+    return buildAutoDailyEmbed({
+        username: context.username,
+        status: dailyStatus,
+        allTimeSupported: state.allTimeSupported ?? (state.totalQuestCount ?? 0),
+        allTimeCompleted: state.allTimeCompleted ?? (state.completedQuestCount ?? 0),
+        todaySupported: state.todaySupported ?? state.latestQuestCount ?? null,
+        todayCompleted: state.todayCompleted ?? null,
+        currentTaskText: taskText,
+        avatarUrl: context.avatarUrl,
+        timestamp: state.timestamp
+    });
+}
+
 function buildRunnerLiveEmbed(state = {}, activityLines = []) {
     const username = resolveRunnerUsername(state);
     const ownerId = state.ownerId || null;
@@ -498,25 +520,7 @@ function buildRunnerLiveEmbed(state = {}, activityLines = []) {
 
     const isDaily = state.mode === 'scheduled' || Boolean(state.modeLine);
     if (isDaily) {
-        const hasStandbyLog = activityLines.some((l) => typeof l === 'string' && (l.includes('AUTO DAILY ACTIVE') || l.includes('NEXT CHECK')));
-        let dailyStatus = state.status || 'checking';
-        if (dailyStatus !== 'running' && (dailyStatus === 'standby' || hasStandbyLog)) {
-            dailyStatus = 'standby';
-        }
-
-        const taskText = state.currentTaskText || extractCurrentTaskFromLines(activityLines);
-
-        return buildAutoDailyEmbed({
-            username,
-            status: dailyStatus,
-            allTimeSupported: state.allTimeSupported ?? (state.totalQuestCount ?? 0),
-            allTimeCompleted: state.allTimeCompleted ?? (state.completedQuestCount ?? 0),
-            todaySupported: state.todaySupported ?? state.latestQuestCount ?? null,
-            todayCompleted: state.todayCompleted ?? null,
-            currentTaskText: taskText,
-            avatarUrl,
-            timestamp: state.timestamp
-        });
+        return resolveAutoDailyLiveEmbed(state, activityLines, context);
     }
 
     return buildOneShotEmbed(state, activityLines, context);

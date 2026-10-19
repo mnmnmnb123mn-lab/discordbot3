@@ -368,10 +368,17 @@ async function handleQuestModalSubmit(interaction) {
     const boostEmoji = config.emojis?.boost || '🚀';
     const activateEmoji = config.emojis?.activate || boostEmoji;
     let finalContent = lines.join('\n');
+    const destText = targetChannelId
+        ? `ห้อง <#${targetChannelId}>`
+        : '**DM (แชทส่วนตัว)** ของคุณ';
+    const fallbackNotice = targetChannelId
+        ? '(หากส่งเข้าห้องไม่สำเร็จ ระบบจะส่งไปยัง DM สำรอง)'
+        : '(หากปิดรับ DM ระบบจะยังคงทำงานต่อไปในเบื้องหลังตามปกติ)';
+
     if (isDaily && anyStarted) {
-        finalContent = `**${activateEmoji} AUTO DAILY QUEST เปิดใช้งานแล้ว**\n\n${finalContent}\n\nระบบได้ส่งข้อความสถานะสดไปยัง **DM (แชทส่วนตัว)** ของคุณเรียบร้อยแล้ว (หากปิดรับ DM ระบบจะยังคงทำงานต่อไปในเบื้องหลังตามปกติ) และสามารถใช้ปุ่ม **หยุด** เพื่อหยุดได้ตลอดเวลา`;
+        finalContent = `**${activateEmoji} AUTO DAILY QUEST เปิดใช้งานแล้ว**\n\n${finalContent}\n\nระบบได้ส่งข้อความสถานะสดไปยัง ${destText} เรียบร้อยแล้ว ${fallbackNotice} และสามารถใช้ปุ่ม **หยุด** เพื่อหยุดได้ตลอดเวลา`;
     } else if (anyStarted) {
-        finalContent = `**${activateEmoji} เริ่มต้นทำงาน ONE-SHOT QUEST แล้ว**\n\n${finalContent}\n\nระบบกำลังเริ่มทำเควสต์และส่งข้อความสถานะสดไปยัง **DM (แชทส่วนตัว)** ของคุณเรียบร้อยแล้ว (หากปิดรับ DM ระบบจะยังคงทำงานต่อไปในเบื้องหลังตามปกติ)`;
+        finalContent = `**${activateEmoji} เริ่มต้นทำงาน ONE-SHOT QUEST แล้ว**\n\n${finalContent}\n\nระบบกำลังเริ่มทำเควสต์และส่งข้อความสถานะสดไปยัง ${destText} เรียบร้อยแล้ว ${fallbackNotice}`;
     }
 
     return interaction.editReply({ content: finalContent });
