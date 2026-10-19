@@ -77,7 +77,10 @@ function policyAllows(type, context, mode) {
     if (mode === "important_only" && type === EVENTS.SESSION_RECOVERED) {
         return context.recoveryNoticeSent === true;
     }
-    if (mode === "important_only") return IMPORTANT_EVENTS.has(type);
+    if (mode === "important_only" && type === EVENTS.SESSION_STOPPED_MANUAL && context.actorNotified === true) {
+        return false;
+    }
+    if (mode === "important_only") return IMPORTANT_EVENTS.has(type) || type === EVENTS.SESSION_STOPPED_MANUAL;
     return true;
 }
 
@@ -443,6 +446,10 @@ function createVoiceNotificationSystem(options = {}) {
                 }
             }
 
+            if (session.ownerId && typeof dmSender.syncVoiceLogDM === "function") {
+                dmSender.syncVoiceLogDM(session.ownerId).catch(() => {});
+            }
+
             return { ...session.recoveryState };
         });
     }
@@ -475,6 +482,10 @@ function createVoiceNotificationSystem(options = {}) {
                     statusText: `${config.emojis?.loading_circle || config.emojis?.loading || "🔄"} กำลังลองเชื่อมต่อเข้าสู่ช่องเสียง (รอบที่ ${recovery.attempts}/15)...`
                 }).catch(() => {});
             }
+        }
+        const session = getSession(sessionId);
+        if (session?.ownerId && typeof dmSender.syncVoiceLogDM === "function") {
+            dmSender.syncVoiceLogDM(session.ownerId).catch(() => {});
         }
         return recovery;
     }
@@ -511,6 +522,10 @@ function createVoiceNotificationSystem(options = {}) {
                     statusText: `${config.emojis?.disable || "⏸️"} เข้าสู่โหมดพักกู้คืน (รอบที่ ${cycle}/2) พัก ${waitMinutes} นาที — จะเริ่มรอบใหม่เวลา ${timeStr} น.`
                 }).catch(() => {});
             }
+        }
+        const session = getSession(sessionId);
+        if (session?.ownerId && typeof dmSender.syncVoiceLogDM === "function") {
+            dmSender.syncVoiceLogDM(session.ownerId).catch(() => {});
         }
         return recovery;
     }
@@ -558,6 +573,11 @@ function createVoiceNotificationSystem(options = {}) {
                     statusText: `${config.emojis?.status_online || config.emojis?.success || "🟢"} กู้คืนการเชื่อมต่อสำเร็จ และยืนยันสถานะในช่องเสียงเรียบร้อยแล้ว`
                 }).catch(() => {});
             }
+        }
+
+        const readySession = getSession(sessionId);
+        if (readySession?.ownerId && typeof dmSender.syncVoiceLogDM === "function") {
+            dmSender.syncVoiceLogDM(readySession.ownerId).catch(() => {});
         }
 
         if (transition.previous.incidentId) {
@@ -622,6 +642,11 @@ function createVoiceNotificationSystem(options = {}) {
                         : `${config.emojis?.stop || config.emojis?.intrusion_icon || "🛑"} การกู้คืนสิ้นสุดลง (${context.reason || type})`
                 }).catch(() => {});
             }
+        }
+
+        const terminalSession = getSession(sessionId);
+        if (terminalSession?.ownerId && typeof dmSender.syncVoiceLogDM === "function") {
+            dmSender.syncVoiceLogDM(terminalSession.ownerId).catch(() => {});
         }
 
         return emit(sessionId, type, { ...context, incidentId: transition });

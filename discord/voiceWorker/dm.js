@@ -1,10 +1,30 @@
 "use strict";
 
+const { MessageEmbed, MessageActionRow, MessageButton } = require("../core/discordCompat");
+const { IDS } = require("../commands/customIds");
 const config = require("../config.json");
 const { getSessionShortId } = require("./session");
 const { sanitizeLogText } = require("../core/safeLogger");
 const dmService = require("../dm");
+const sessionManager = require("./sessionManager");
 const { buildDmEmbed, profileFromUser, safeText, markdownText, code } = dmService.design;
+
+function resolveEmoji(name, fallback = "") {
+    return config.emojis?.[name] || fallback;
+}
+
+const TERMINAL_TITLES = Object.freeze({
+    TOKEN_INVALID: "ระบบไม่สามารถล็อคอินได้ กรุณาลองใหม่เเละตรวจสอบToken",
+    LOGIN_FAILED: "ระบบไม่สามารถล็อคอินได้ กรุณาลองใหม่เเละตรวจสอบToken",
+    GUILD_NOT_FOUND: "บัญชีไม่พบเซิฟเวอร์ที่กำหนด กรุณาเช็คเเละลองใหม่",
+    CHANNEL_NOT_FOUND: "บัญชีไม่พบช่องเสียงที่กำหนด กรุณาเช็คเเละลองใหม่",
+    VOICE_PERMISSION_DENIED: "เกิดข้อผิดพลาด เชื่อมต่อช่องเสียงไม่สำเร็จ",
+    VOICE_CONNECTION_FAILED: "เกิดข้อผิดพลาด เชื่อมต่อช่องเสียงไม่สำเร็จ",
+    SESSION_STOPPED_IDLE: "เกินกำหนดเวลาที่ระบบออนให้เเล้ว",
+    SESSION_STOPPED_MANUAL: "ระบบได้ทำการออกจากช่องเสียงเเล้ว จากคำสั่งหยุดของผู้ใช้",
+    STOP_FAILED: "เกิดข้อผิดพลาดของToken โปรดตรวจเช็คว่าระบบได้ออกจากช่องเสียงยัง",
+    RECOVERY_EXHAUSTED: "กู้คืนไม่สำเร็จ สิ้นสุดความพยายามเชื่อมต่อ"
+});
 
 const EVENT_VIEW = Object.freeze({
     VOICE_DISCONNECTED: { color: "#FFA500", title: `${config.emojis?.alert || config.emojis?.warning || "⚠️"} การเชื่อมต่อช่องเสียงหลุด`, status: "🟠 กำลังเริ่มกู้คืนอัตโนมัติ" },
@@ -212,82 +232,6 @@ function buildVoiceEventEmbed(snapshot, profile = null) {
     });
 }
 
-async function sendVoiceEventDM(snapshot) {
-    try {
-        const profile = await dmService.resolveProfile(snapshot.accountId, {
-            id: snapshot.accountId,
-            displayName: snapshot.accountName,
-            username: snapshot.accountName,
-            avatarUrl: snapshot.accountAvatar
-        });
-        return dmService.send({
-            eventKey: `voice:${snapshot.notificationEventKey}`,
-            recipientId: snapshot.ownerId,
-            category: "voice",
-            priority: snapshot.priority,
-            payload: { embeds: [buildVoiceEventEmbed(snapshot, profile)] }
-        });
-    } catch (error) {
-        const code = plain(error?.code || error?.name, "UNKNOWN");
-        console.error(`[WORKER] ❌ Voice DM failed. session=${sanitizeLogText(snapshot.sessionId)} code=${sanitizeLogText(code)}`);
-        return { status: "failed", reason: code };
-    }
-}
-
-async function sendVoiceDigestDM(ownerId, items, metadata = {}) {
-    try {
-        const counts = new Map(Object.entries(metadata.counts || {}));
-        if (counts.size === 0) {
-            for (const item of items) counts.set(item.type, (counts.get(item.type) || 0) + 1);
-        }
-        const total = Number(metadata.total || items.length);
-        const summary = [...counts].map(([type, count]) => `• ${EVENT_VIEW[type]?.title || type}: ${count}`).join("\n");
-        const examples = items.slice(0, 5).map(item =>
-            `• ${markdownText(item.accountName)} — ${markdownText(item.guildName)} / ${markdownText(item.targetChannelName)}\n  ${markdownText(item.reason)}`
-        ).join("\n");
-        const profile = await dmService.resolveProfile(ownerId);
-        const digestReference = `digest-${Date.now().toString(36)}`;
-        const embed = buildDmEmbed({
-            tone: "info",
-            title: "📬 สรุปเหตุการณ์ช่องเสียง",
-            summary: `รวม ${total} เหตุการณ์ทั่วไปไว้ในข้อความเดียวเพื่อลดการรบกวน เหตุการณ์เร่งด่วนจะส่งแยกทันที`,
-            profile,
-            fields: [
-                { name: "📊 จำนวนแยกตามเหตุการณ์", value: summary.slice(0, 1024) || "ไม่มีรายละเอียด" },
-                { name: "🔎 รายการล่าสุด", value: safeText(examples, "ไม่มีรายละเอียด", 1024) }
-            ],
-            nextAction: "ตรวจสอบเฉพาะรายการที่ยังไม่กลับสู่สถานะปกติจากหน้า Dashboard",
-            referenceId: digestReference
-        });
-        return dmService.send({
-            eventKey: `voice:${ownerId}:${digestReference}`,
-            recipientId: ownerId,
-            category: "voice_digest",
-            priority: "low",
-            payload: { embeds: [embed] }
-        });
-    } catch (error) {
-        return { status: "failed", reason: plain(error?.code || error?.name, "UNKNOWN") };
-    }
-}
-
-function sendSessionStoppedDM(sessionId, reason) {
-    const notifications = require("./notifications");
-    let type = notifications.EVENTS.RECOVERY_EXHAUSTED;
-    if (reason === "idle") type = notifications.EVENTS.SESSION_STOPPED_IDLE;
-    else if (reason === "manual") type = notifications.EVENTS.SESSION_STOPPED_MANUAL;
-    return notifications.markTerminal(sessionId, type, { reason });
-}
-
-function sendTokenInvalidDM(sessionId) {
-    const notifications = require("./notifications");
-    return notifications.markTerminal(sessionId, notifications.EVENTS.TOKEN_INVALID);
-}
-
-function sendSessionOnlineDM(sessionId) {
-    return require("./notifications").markReady(sessionId);
-}
-
 const TRACKER_PHASE_VIEW = Object.freeze({
     starting: {
         tone: "warning",
@@ -388,58 +332,304 @@ function buildVoiceTrackerEmbed(snapshot, trackerState = {}, profile = null) {
     });
 }
 
-async function sendVoiceRecoveryTrackerDM(snapshot, trackerState = {}) {
+// ════════════════════════════════════════════════════════════════════════════
+//  🚀  REGION: RENOVATED CENTRAL LIVE LOG & TERMINAL DM SYSTEM
+// ════════════════════════════════════════════════════════════════════════════
+
+function buildTerminalAlertEmbed(type) {
+    const crossEmoji = resolveEmoji("error", "<a:CROSS_pmt:1553833049135906816>");
+    const titleText = TERMINAL_TITLES[type] || "เกิดข้อผิดพลาดในการเชื่อมต่อช่องเสียง";
+    const color = type === "SESSION_STOPPED_MANUAL" ? "#5865F2" : (config.system?.themeColors?.error || "#ED4245");
+    return new MessageEmbed()
+        .setColor(color)
+        .setTitle(`${crossEmoji} ${titleText}`);
+}
+
+async function sendVoiceTerminalDM(ownerId, type, sessionId = null) {
+    if (!ownerId) return { status: "skipped", reason: "owner_missing" };
     try {
-        const profile = await dmService.resolveProfile(snapshot.accountId, {
-            id: snapshot.accountId,
-            displayName: snapshot.accountName,
-            username: snapshot.accountName,
-            avatarUrl: snapshot.accountAvatar
-        });
-        const eventKey = `voice:tracker:${snapshot.sessionId}:${trackerState.incidentId || Date.now()}`;
-        const embed = buildVoiceTrackerEmbed(snapshot, trackerState, profile);
-        const result = await dmService.send({
+        const embed = buildTerminalAlertEmbed(type);
+        const eventKey = `voice:terminal:${ownerId}:${type}:${sessionId || Date.now()}:${Date.now()}`;
+        return await dmService.send({
             eventKey,
-            recipientId: snapshot.ownerId,
-            category: "voice_tracker",
+            recipientId: String(ownerId),
+            category: "voice_terminal",
             priority: "high",
             payload: { embeds: [embed] }
         });
-        return {
-            status: result?.status || "failed",
-            message: result?.message || null
-        };
     } catch (error) {
-        return { status: "failed", reason: plain(error?.code || error?.name, "UNKNOWN") };
+        return { status: "failed", reason: plain(error?.code || error?.message, "UNKNOWN") };
     }
 }
 
-async function editVoiceRecoveryTrackerDM(trackerRef, snapshot, trackerState = {}) {
-    if (!trackerRef) return { status: "skipped", reason: "tracker_missing" };
-    try {
-        const profile = await dmService.resolveProfile(snapshot.accountId, {
-            id: snapshot.accountId,
-            displayName: snapshot.accountName,
-            username: snapshot.accountName,
-            avatarUrl: snapshot.accountAvatar
-        });
-        const embed = buildVoiceTrackerEmbed(snapshot, trackerState, profile);
-        if (trackerRef.message && typeof trackerRef.message.edit === "function") {
-            await trackerRef.message.edit({ embeds: [embed] });
-            return { status: "updated" };
-        }
-        return { status: "skipped", reason: "no_edit_method" };
-    } catch (error) {
-        return { status: "failed", reason: plain(error?.code || error?.name, "UNKNOWN") };
+function groupSessionsByToken(sessionList) {
+    if (!Array.isArray(sessionList)) return [];
+    return [...sessionList].sort((a, b) => {
+        const tokenA = a.tokenHash || a.accountId || a.sessionId || "";
+        const tokenB = b.tokenHash || b.accountId || b.sessionId || "";
+        const cmp = String(tokenA).localeCompare(String(tokenB));
+        if (cmp !== 0) return cmp;
+        const guildA = String(a.serverId || a.guildId || "");
+        const guildB = String(b.serverId || b.guildId || "");
+        return guildA.localeCompare(guildB);
+    });
+}
+
+function resolveTroubleStatus(session, loadingEmoji) {
+    const rec = session?.recoveryState || {};
+    const phase = rec.phase;
+    const attempts = Number(rec.attempts || 0);
+    const maxAttempts = Number(config.voice_worker?.maxReconnectAttempts || 15);
+
+    if (phase === "hibernate") {
+        return "ช่วงพักก่อนลองพยามเชื่อมต่อใหม่";
     }
+    if (phase === "attempt" || (attempts > 0 && session?.reconnecting)) {
+        return `กำลังกู้คืน ${loadingEmoji} (${attempts}/${maxAttempts})`;
+    }
+    if (rec.delayed || attempts > 0) {
+        return "ระยะเวลาที่รอพยายามเชื่อมต่อ";
+    }
+    return `กำลังกู้คืน ${loadingEmoji} (${Math.max(1, attempts)}/${maxAttempts})`;
+}
+
+function buildVoiceLogEmbed(onlineSessions = [], troubledSessions = []) {
+    const bell = resolveEmoji("bell_pmt", resolveEmoji("bell", "<a:bell_pmt:1559247893343248438>"));
+    const g03 = resolveEmoji("g03_pmt", resolveEmoji("status_online", "<a:g03_pmt:1553832998468714516>"));
+    const r04fpt = resolveEmoji("r04fpt_pmt", resolveEmoji("status_offline", "<a:r04fpt_pmt:1553833007532474519>"));
+    const grej = resolveEmoji("Grej_pmt", resolveEmoji("dot_green", "<:Grej_pmt:1560405771978547340>"));
+    const reddj = resolveEmoji("reddj_pmt", resolveEmoji("dot_red", "<:reddj_pmt:1560405803792465940>"));
+    const grep = resolveEmoji("Grep_pmt", resolveEmoji("arrow_left_green", "<a:Grep_pmt:1560411233214009454>"));
+    const loading = resolveEmoji("loading", "<a:Loadingg_pmt:1553844457856827393>");
+
+    const lines = [
+        `# ${bell} Logระบบออนช่องเสียง`,
+        `${g03} บัญชีที่กำลังออนอยู่\n`
+    ];
+
+    const sortedOnline = groupSessionsByToken(onlineSessions);
+    if (sortedOnline.length > 0) {
+        for (const s of sortedOnline) {
+            const name = plain(s.accountTag || s.accountName || s.accountUsername, "บัญชีไม่ทราบชื่อ");
+            const guildId = s.serverId || s.guildId || "";
+            const channelId = s.voiceId || s.channelId || "";
+            const channelUrl = `https://discord.com/channels/${guildId}/${channelId}`;
+            const channelLabel = s.voiceName ? `[${plain(s.voiceName)}](${channelUrl})` : channelUrl;
+            lines.push(`${grej} ชื่อบัญชี ${name}${grep} ${channelLabel}`);
+        }
+    } else {
+        lines.push("- ไม่มีรายการ");
+    }
+
+    const sortedTroubled = groupSessionsByToken(troubledSessions);
+    if (sortedTroubled.length > 0) {
+        lines.push("");
+        lines.push(`${r04fpt} บัญชีที่กำลังเกิดปัญหา\n`);
+        for (const s of sortedTroubled) {
+            const name = plain(s.accountTag || s.accountName || s.accountUsername, "บัญชีไม่ทราบชื่อ");
+            const status = resolveTroubleStatus(s, loading);
+            lines.push(`${reddj} ชื่อบัญชี ${name}`);
+            lines.push(`${grep} ${status}`);
+        }
+    }
+
+    return new MessageEmbed()
+        .setColor(config.system?.themeColors?.primary || "#57F287")
+        .setDescription(lines.join("\n"));
+}
+
+function buildVoiceLogButtonRow() {
+    return new MessageActionRow().addComponents(
+        new MessageButton()
+            .setCustomId(IDS.BTN_STATUS)
+            .setLabel("สถานะ & จัดการ")
+            .setEmoji(config.emojis?.ping || "🏓")
+            .setStyle("PRIMARY")
+    );
+}
+
+function getOwnerActiveSessions(ownerId, customMap = null) {
+    const all = customMap
+        ? Array.from(customMap.values())
+        : Array.from(sessionManager.getAllSessions().values());
+    const strOwnerId = String(ownerId || "");
+    return all.filter(s => {
+        if (!s || String(s.ownerId || "") !== strOwnerId) return false;
+        if (s.state === "stopped" || s.state === "failed" || s.tokenInvalid === true) return false;
+        if (s.recoveryState?.phase === "terminal") return false;
+        return true;
+    });
+}
+
+function categorizeSessions(sessionList) {
+    const online = [];
+    const troubled = [];
+    for (const s of sessionList) {
+        const rec = s?.recoveryState || {};
+        const isDegraded = rec.phase === "degraded"
+            || rec.phase === "attempt"
+            || rec.phase === "hibernate"
+            || s?.reconnecting === true;
+
+        if (isDegraded) {
+            troubled.push(s);
+        } else {
+            online.push(s);
+        }
+    }
+    return { online, troubled };
+}
+
+const ownerLogTrackers = new Map();
+
+function syncVoiceLogDM(ownerId, options = {}) {
+    if (!ownerId) return Promise.resolve({ status: "skipped", reason: "owner_missing" });
+    const strOwnerId = String(ownerId);
+    let tracker = ownerLogTrackers.get(strOwnerId);
+    if (!tracker) {
+        tracker = {
+            ownerId: strOwnerId,
+            message: null,
+            timer: null,
+            inFlight: null
+        };
+        ownerLogTrackers.set(strOwnerId, tracker);
+    }
+
+    if (tracker.timer) {
+        clearTimeout(tracker.timer);
+        tracker.timer = null;
+    }
+
+    const delayMs = options.immediate ? 0 : 500;
+    return new Promise((resolve) => {
+        tracker.timer = setTimeout(() => {
+            tracker.timer = null;
+            const op = flushVoiceLogDM(strOwnerId, options).then(resolve).catch(resolve);
+            tracker.inFlight = op;
+        }, delayMs);
+        tracker.timer?.unref?.();
+    });
+}
+
+async function flushVoiceLogDM(ownerId, options = {}) {
+    const strOwnerId = String(ownerId);
+    const activeSessions = getOwnerActiveSessions(strOwnerId, options.allSessions);
+    const tracker = ownerLogTrackers.get(strOwnerId);
+
+    if (activeSessions.length === 0) {
+        if (tracker?.message && typeof tracker.message.delete === "function") {
+            try {
+                await tracker.message.delete().catch(() => {});
+            } catch {}
+            tracker.message = null;
+        }
+        ownerLogTrackers.delete(strOwnerId);
+        return { status: "deleted" };
+    }
+
+    const { online, troubled } = categorizeSessions(activeSessions);
+    const embed = buildVoiceLogEmbed(online, troubled);
+    const row = buildVoiceLogButtonRow();
+    const payload = {
+        embeds: [embed],
+        components: [row]
+    };
+
+    if (tracker?.message && typeof tracker.message.edit === "function") {
+        try {
+            await tracker.message.edit(payload);
+            return { status: "updated", message: tracker.message };
+        } catch {
+            tracker.message = null;
+        }
+    }
+
+    try {
+        const eventKey = `voice:log:${strOwnerId}:${Date.now()}`;
+        const result = await dmService.send({
+            eventKey,
+            recipientId: strOwnerId,
+            category: "voice_log",
+            priority: "high",
+            payload
+        });
+        if (result?.status === "sent" && result.message) {
+            if (tracker) tracker.message = result.message;
+        }
+        return result;
+    } catch (err) {
+        return { status: "failed", reason: plain(err?.message, "SEND_FAILED") };
+    }
+}
+
+async function sendVoiceEventDM(snapshot) {
+    try {
+        if (!snapshot?.ownerId) return { status: "skipped", reason: "owner_missing" };
+        if (TERMINAL_TITLES[snapshot.type]) {
+            const alertResult = await sendVoiceTerminalDM(snapshot.ownerId, snapshot.type, snapshot.sessionId);
+            await syncVoiceLogDM(snapshot.ownerId, { immediate: true });
+            return alertResult;
+        }
+        await syncVoiceLogDM(snapshot.ownerId, { immediate: false });
+        return { status: "sent" };
+    } catch (error) {
+        const errCode = plain(error?.code || error?.name, "UNKNOWN");
+        console.error(`[WORKER] ❌ Voice DM failed. session=${sanitizeLogText(snapshot.sessionId)} code=${sanitizeLogText(errCode)}`);
+        return { status: "failed", reason: errCode };
+    }
+}
+
+async function sendVoiceDigestDM(ownerId, items, metadata = {}) {
+    return { status: "skipped", reason: "digest_retired" };
+}
+
+async function sendVoiceRecoveryTrackerDM(snapshot, trackerState = {}) {
+    await syncVoiceLogDM(snapshot.ownerId, { immediate: false });
+    return { status: "sent", message: ownerLogTrackers.get(String(snapshot.ownerId))?.message || null };
+}
+
+async function editVoiceRecoveryTrackerDM(trackerRef, snapshot, trackerState = {}) {
+    await syncVoiceLogDM(snapshot.ownerId, { immediate: false });
+    return { status: "updated" };
+}
+
+function sendSessionStoppedDM(sessionId, reason) {
+    const notifications = require("./notifications");
+    let type = notifications.EVENTS.RECOVERY_EXHAUSTED;
+    if (reason === "idle") type = notifications.EVENTS.SESSION_STOPPED_IDLE;
+    else if (reason === "manual") type = notifications.EVENTS.SESSION_STOPPED_MANUAL;
+    return notifications.markTerminal(sessionId, type, { reason });
+}
+
+function sendTokenInvalidDM(sessionId) {
+    const notifications = require("./notifications");
+    return notifications.markTerminal(sessionId, notifications.EVENTS.TOKEN_INVALID);
+}
+
+function sendSessionOnlineDM(sessionId) {
+    return require("./notifications").markReady(sessionId);
 }
 
 module.exports = {
     EVENT_VIEW,
+    EVENT_COPY,
     TRACKER_PHASE_VIEW,
+    TERMINAL_TITLES,
     createVoiceSnapshot,
     buildVoiceEventEmbed,
     buildVoiceTrackerEmbed,
+    buildTerminalAlertEmbed,
+    sendVoiceTerminalDM,
+    buildVoiceLogEmbed,
+    buildVoiceLogButtonRow,
+    groupSessionsByToken,
+    resolveTroubleStatus,
+    getOwnerActiveSessions,
+    categorizeSessions,
+    ownerLogTrackers,
+    syncVoiceLogDM,
+    flushVoiceLogDM,
     sendVoiceEventDM,
     sendVoiceDigestDM,
     sendVoiceRecoveryTrackerDM,

@@ -1590,7 +1590,7 @@ test("Webhook Manager & Delivery Engine Integration Suite", async (t) => {
 
         // 1. Embed structure checks
         assert.ok(embed, "Embed exists");
-        assert.match(embed.title, /(:bell_pmt:|<a:bell_pmt:|<:Discord_pmt:) Log Verify ผู้ใช้งาน/);
+        assert.match(embed.title, /(:bell_pmt:|<a:bell_pmt:\d+>|<a:bell_pmt:|<:Discord_pmt:) Log Verify ผู้ใช้งาน/);
         assert.match(embed.description, /ข้อมูลจากเซิร์ฟเวอร์\s*:\s*Phomueangtai Community/);
         assert.match(embed.description, /เซิร์ฟเวอร์ id\s*:\s*\(123456789012345678\)/);
         assert.match(embed.description, /User\s*:\s*<@554433221100>/);

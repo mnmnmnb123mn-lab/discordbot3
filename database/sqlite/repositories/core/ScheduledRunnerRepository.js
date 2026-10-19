@@ -25,7 +25,7 @@ class ScheduledRunnerRepository {
         const info = stmt.run(
             String(data.ownerId),
             data.guildId ? String(data.guildId) : null,
-            String(data.channelId),
+            data.channelId ? String(data.channelId) : 'dm',
             String(data.accountId),
             String(data.username || ""),
             String(data.token_ciphertext),
@@ -167,7 +167,7 @@ class ScheduledRunnerRepository {
             id: row.id,
             ownerId: row.owner_id,
             guildId: row.guild_id,
-            channelId: row.channel_id,
+            channelId: (row.channel_id === 'dm' || !row.channel_id) ? null : row.channel_id,
             accountId: row.account_id,
             username: row.username,
             token_ciphertext: row.token_ciphertext,

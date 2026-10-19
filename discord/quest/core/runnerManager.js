@@ -30,7 +30,13 @@ try {
 } catch {
     // Safe swallow if already registered
 }
-const { formatRunnerStatusContent, formatRunnerStatusEmbed } = require('./runnerStatusHeader');
+const {
+    formatRunnerStatusContent,
+    formatRunnerStatusEmbed,
+    formatQuestCurrentTask,
+    buildQuestErrorEmbed,
+    resolveDiscordAvatarUrl
+} = require('./runnerStatusHeader');
 const {
     createOneShotQuestSession,
     getNextPendingOneShotQuest,
@@ -211,11 +217,13 @@ async function startRunner({
     ownerId,
     userToken,
     channelId = null,
+    logChannelId = null,
     client = null,
     mode = 'oneshot',
     scheduleId = null,
     accountId: initialAccountId = null,
     username: initialUsername = null,
+    avatarUrl: initialAvatarUrl = null,
     initialNextCheckAt = null
 }) {
     if (jobs.has(jobKey)) throw new Error(`Job ${jobKey} กำลังทำงานอยู่`);
@@ -226,9 +234,25 @@ async function startRunner({
 
     let liveMsg = null;
     let outputChannel = null;
+    let usingFallbackDm = false;
     let dmDisabled = false;
     let username = initialUsername ?? '...';
     let accountId = initialAccountId;
+    let avatarUrl = initialAvatarUrl || null;
+    let runnerStatus = 'checking';
+    let errorType = null;
+    let errorMessage = null;
+    let currentTaskText = '-';
+    let totalQuestsCount = null;
+    let completedQuestsCount = 0;
+    const completedQuestNames = [];
+
+    // Auto Daily counters
+    let allTimeSupported = 0;
+    let allTimeCompleted = 0;
+    let todaySupported = null;
+    let todayCompleted = null;
+
     let lastRenderAt = 0;
     let pendingTimer = null;
     let flushPromise = Promise.resolve();
@@ -248,6 +272,23 @@ async function startRunner({
     async function resolveOutputChannel() {
         if (dmDisabled) return null;
         if (outputChannel?.isTextBased?.()) return outputChannel;
+
+        if (logChannelId && client && !usingFallbackDm) {
+            try {
+                const targetCh = client.channels?.cache?.get?.(logChannelId)
+                    || await client.channels?.fetch?.(logChannelId).catch(() => null);
+                if (targetCh?.isTextBased?.()) {
+                    outputChannel = targetCh;
+                    return outputChannel;
+                }
+                console.warn(`[Quest Runner:${jobKey}] Specified log channel ${logChannelId} not found or not text-based; falling back to DM`);
+                usingFallbackDm = true;
+            } catch (chErr) {
+                console.warn(`[Quest Runner:${jobKey}] Failed to fetch channel ${logChannelId}: ${chErr.message}; falling back to DM`);
+                usingFallbackDm = true;
+            }
+        }
+
         if (!client || !ownerId) return null;
 
         const dm = await resolveUserDMChannel(client, ownerId);
@@ -264,12 +305,26 @@ async function startRunner({
             const visibleLines = [...logLines];
             let rawContent = '```\n' + visibleLines.join('\n') + '\n```';
             const embedState = {
+                ownerId,
                 username,
                 accountId,
+                avatarUrl,
                 mode,
                 modeLine: mode === 'scheduled' ? '🤖 AUTO DAILY ENABLED' : null,
                 nextCheckAt,
-                status: signal.aborted ? 'stopped' : undefined
+                status: signal.aborted ? 'stopped' : runnerStatus,
+                errorType,
+                errorMessage,
+                currentTaskText,
+                totalQuests: totalQuestsCount,
+                totalQuestCount: totalQuestsCount,
+                completedQuests: completedQuestsCount,
+                completedQuestCount: completedQuestsCount,
+                completedQuestList: [...completedQuestNames],
+                allTimeSupported,
+                allTimeCompleted,
+                todaySupported,
+                todayCompleted
             };
             const liveEmbed = formatRunnerStatusEmbed(rawContent, embedState);
             const payload = { embeds: [liveEmbed] };
@@ -298,11 +353,26 @@ async function startRunner({
                         outputChannel = null;
                     }
                 } else {
+                    if (outputChannel && logChannelId && outputChannel.id === logChannelId && !usingFallbackDm && ownerId && client) {
+                        console.warn(`[Quest Runner:${jobKey}] Failed to send log to guild channel ${logChannelId} (${err.code || err.message}); falling back to DM`);
+                        usingFallbackDm = true;
+                        outputChannel = null;
+                        try {
+                            const dm = await resolveUserDMChannel(client, ownerId);
+                            if (dm?.isTextBased?.()) {
+                                outputChannel = dm;
+                                liveMsg = await dm.send(payload);
+                                return;
+                            }
+                        } catch (dmErr) {
+                            console.warn(`[Quest Runner:${jobKey}] Fallback to DM also failed (${dmErr.code || dmErr.message})`);
+                        }
+                    }
                     dmDisabled = true;
                     outputChannel = null;
                     liveMsg = null;
                 }
-                console.warn(`[Quest Runner:${jobKey}] DM message update failed (${err.code || err.message}); continuing runner silently without DM`);
+                console.warn(`[Quest Runner:${jobKey}] Log message update failed (${err.code || err.message}); continuing runner silently without output`);
             }
         });
 
@@ -333,6 +403,7 @@ async function startRunner({
     const jobRecord = {
         ownerId,
         accountId,
+        avatarUrl,
         mode,
         scheduleId,
         controller,
@@ -340,6 +411,7 @@ async function startRunner({
         summary: () => ({
             username,
             accountId,
+            avatarUrl,
             mode,
             scheduleId,
             lifecycle: jobRecord.lifecycle,
@@ -444,6 +516,10 @@ async function startRunner({
 
     async function reportOneShotExternalCompletion(quest) {
         if (mode !== 'oneshot') return null;
+        if (!completedQuestNames.includes(quest.name)) {
+            completedQuestNames.push(quest.name);
+        }
+        completedQuestsCount = completedQuestNames.length;
         completeOneShotQuest(oneShotSession, quest.id);
         await reportOneShotTerminalState();
         return oneShotOutcome();
@@ -451,6 +527,10 @@ async function startRunner({
 
     async function reportOneShotBotCompletion(quest) {
         if (mode !== 'oneshot') return null;
+        if (!completedQuestNames.includes(quest.name)) {
+            completedQuestNames.push(quest.name);
+        }
+        completedQuestsCount = completedQuestNames.length;
         const status = completeOneShotQuest(oneShotSession, quest.id);
         if (status !== ONE_SHOT_QUEST_STATUS.COMPLETED_BY_BOT) {
             return reportOneShotExternalCompletion(quest);
@@ -462,18 +542,19 @@ async function startRunner({
     async function reportOneShotSummary() {
         if (mode !== 'oneshot' || oneShotSummaryReported) return;
         oneShotSummaryReported = true;
+        runnerStatus = 'completed';
         const summary = oneShotSummary();
         addLog(`🔎 ${username}: พบ ${summary.totalSupportedQuests} QUESTS`);
-        addLog(`🎉 ${username}: ทำสำเร็จ ${summary.completedByBotCount} QUESTS`);
+        addLog(`🎉 ${username}: ทำสำเร็จ ${completedQuestsCount} QUESTS`);
         addLog('🧹 QUEST ACTIVITY CLEARED');
 
         let issues = [];
         if (summary.totalSupportedQuests === 0) {
             addLog('ℹ️ ไม่พบ Quest ที่บอทสามารถทำได้ในขณะนี้');
-        } else if (summary.issues.length === 0 && summary.completedByBotCount === summary.totalSupportedQuests) {
+        } else if (summary.issues.length === 0 && completedQuestsCount === summary.totalSupportedQuests) {
             addLog('🎉 บอทได้เข้าไปทำ Quest ทั้งหมดเสร็จสิ้นทั้งหมดแล้ว');
         } else {
-            addLog(summary.completedByBotCount === 0
+            addLog(completedQuestsCount === 0
                 ? '❌ บอทไม่สามารถดำเนินการ Quest ให้สำเร็จได้'
                 : '⚠️ มีบาง Quest ที่บอทดำเนินการไม่สำเร็จ');
             summary.issues.forEach((issue, index) => {
@@ -488,12 +569,16 @@ async function startRunner({
                 ownerId,
                 accountId,
                 username,
+                avatarUrl,
                 mode: 'oneshot',
-                totalQuests: summary.totalSupportedQuests,
-                completedQuests: summary.completedByBotCount,
+                totalQuests: totalQuestsCount ?? summary.totalSupportedQuests,
+                completedQuests: completedQuestsCount,
+                completedQuestList: completedQuestNames,
                 issues,
                 jobKey,
-                targetMessage: liveMsg
+                targetMessage: liveMsg,
+                channelId: usingFallbackDm ? null : (logChannelId || channelId),
+                client
             }).catch(() => {});
         }
     }
@@ -501,7 +586,16 @@ async function startRunner({
     async function prepareOneShotRound(allQuests) {
         if (!oneShotSession) {
             const initialRunnable = allQuests.filter((quest) => !quest.completed && isRunnableQuest(quest));
+            totalQuestsCount = initialRunnable.length;
+            completedQuestsCount = 0;
+            if (initialRunnable.length === 0) {
+                runnerStatus = 'error';
+                errorType = 'NO_RUNNABLE_QUESTS';
+                await flush();
+                return { outcome: { attempted: false, progressed: false, supportedCount: 0 } };
+            }
             oneShotSession = createOneShotQuestSession(initialRunnable);
+            runnerStatus = 'running';
             await reportOneShotInitialState();
         }
         if (isOneShotSessionComplete(oneShotSession)) {
@@ -524,9 +618,19 @@ async function startRunner({
     async function prepareScheduledRound(allQuests) {
         await claimScheduledCompletions(allQuests);
         const runnable = allQuests.filter((quest) => !quest.completed && isRunnableQuest(quest));
+        todaySupported = runnable.length;
+        allTimeSupported += runnable.length;
         if (!countAlreadyReported) await reportRunnableCount(runnable.length);
         countAlreadyReported = false;
-        if (runnable.length === 0) return { outcome: { attempted: false, progressed: false, supportedCount: 0 } };
+        if (runnable.length === 0) {
+            runnerStatus = 'standby';
+            currentTaskText = 'เสร็จสิ้นเเล้ววันนี้';
+            await flush();
+            return { outcome: { attempted: false, progressed: false, supportedCount: 0 } };
+        }
+        runnerStatus = 'running';
+        todayCompleted ??= 0;
+        await render();
         return { runnable, initialQuest: runnable[0] };
     }
 
@@ -576,6 +680,7 @@ async function startRunner({
         if (mode === 'oneshot') {
             markOneShotQuestRunning(oneShotSession, quest.id, quest.progressSecs);
         }
+        currentTaskText = formatQuestCurrentTask({ stage: 'preparing', gameName: quest.name });
         addLog(questActivityLine('⏭️', `กำลังเตรียมทำ ${quest.name}`));
         await render();
     }
@@ -603,6 +708,11 @@ async function startRunner({
             };
         } catch (error) {
             rethrowFatalAuth(error);
+            if (mode === 'oneshot') {
+                runnerStatus = 'error';
+                errorType = 'ENROLLMENT_FAILED';
+                await flush();
+            }
             return {
                 outcome: await questFailureOutcome(
                     quest,
@@ -615,6 +725,7 @@ async function startRunner({
     }
 
     async function announceQuestProgress(quest) {
+        currentTaskText = formatQuestCurrentTask({ stage: 'doing', gameName: quest.name });
         addLog(questActivityLine('▶️', `กำลังทำ ${quest.name}`));
         const initialPercent = Math.min(100, Math.max(0, Math.floor(quest.progress)));
         addLog(questActivityLine('⌛', `${quest.name} ${initialPercent}%`));
@@ -630,6 +741,7 @@ async function startRunner({
 
         const onServerProgress = async (fresh) => {
             const percent = fresh.completed ? 100 : Math.min(100, Math.floor(fresh.progress));
+            currentTaskText = formatQuestCurrentTask({ stage: 'progress', gameName: quest.name, percent });
             if (mode === 'oneshot') {
                 recordOneShotVerifiedProgress(oneShotSession, quest.id, fresh.progressSecs, {
                     completed: fresh.completed
@@ -709,7 +821,11 @@ async function startRunner({
 
     async function finalizeQuestCompletion(fresh, hooks) {
         await hooks.onServerProgress(fresh);
+        if (!completedQuestNames.includes(fresh.name)) {
+            completedQuestNames.push(fresh.name);
+        }
         if (mode === 'oneshot') {
+            completedQuestsCount = completedQuestNames.length;
             const status = completeOneShotQuest(oneShotSession, fresh.id);
             await claimSilently(fresh);
             return status === ONE_SHOT_QUEST_STATUS.COMPLETED_BY_BOT
@@ -717,6 +833,8 @@ async function startRunner({
                 : reportOneShotExternalCompletion(fresh);
         }
 
+        todayCompleted = (todayCompleted || 0) + 1;
+        allTimeCompleted += 1;
         await claimSilently(fresh);
         const latestQuests = await fetchQuests(userToken, signal);
         const supportedRemaining = latestQuests.filter((item) => !item.completed && isRunnableQuest(item)).length;
@@ -750,18 +868,29 @@ async function startRunner({
     }
 
     async function initializeRunnerSession() {
-        if (!accountId || !initialUsername) {
-            const me = await fetchMe(userToken, signal);
-            username = me.username ?? 'unknown';
-            accountId = me.id ?? accountId;
+        if (!accountId || !initialUsername || !avatarUrl) {
+            try {
+                const me = await fetchMe(userToken, signal);
+                username = me.username ?? username ?? 'unknown';
+                accountId = me.id ?? accountId;
+                if (!avatarUrl) {
+                    avatarUrl = resolveDiscordAvatarUrl(me);
+                }
+            } catch {
+                // Subsequent runner logic handles errors
+            }
         }
         const job = jobs.get(jobKey);
-        if (job) job.accountId = accountId;
+        if (job) {
+            job.accountId = accountId;
+            job.avatarUrl = avatarUrl;
+        }
         addLog(`✅ LOGIN : ${username}`);
         if (mode === 'scheduled') {
             addLog('🤖 AUTO DAILY ENABLED — CHECK 00:00 / 08:00 / 16:00');
         }
-        await render();
+        runnerStatus = 'checking';
+        await flush();
     }
 
     async function restoreInitialSchedule() {
@@ -839,11 +968,14 @@ async function startRunner({
         persistSchedule({ nextCheckAt });
 
         const bkkLocal = zonedParts(scheduledAt, 'Asia/Bangkok');
-        const isEndOfDayRollover = bkkLocal.hour === 0;
-
+        runnerStatus = 'standby';
+        currentTaskText = 'เสร็จสิ้นเเล้ววันนี้';
         if (isEndOfDayRollover && liveMsg) {
             await liveMsg.delete().catch(() => {});
             liveMsg = null;
+            todaySupported = 0;
+            todayCompleted = 0;
+            currentTaskText = '-';
         }
 
         addLog(`💤 ${username}: AUTO DAILY ACTIVE`);
@@ -913,19 +1045,29 @@ async function startRunner({
     }
 
     async function handleRunnerFatalError(err) {
-        if (err.message === 'aborted') {
+        const isAbort = err.message === 'aborted';
+        const isAuth = isFatalAuthError(err);
+        const is429 = err?.status === 429 || err?.code === 429 || String(err?.message).includes('429');
+
+        if (isAbort) {
+            runnerStatus = 'stopped';
+            errorType = 'RUNNER_ABORTED';
             addLog(`🛑 ${username}: RUNNER STOPPED`);
             if (liveMsg) {
                 const stoppedEmbed = buildQuestStoppedEmbed({
                     username,
                     accountId,
-                    reason: 'สั่งหยุดการทำงานจากแผงควบคุม (/quest panel)',
+                    ownerId,
+                    avatarUrl,
+                    reason: 'ผู้ใช้สั่งหยุดการทำงานของ Quest แล้ว',
                     jobKey
                 });
                 await liveMsg.edit({ embeds: [stoppedEmbed] }).catch(() => {});
                 return;
             }
-        } else if (isFatalAuthError(err)) {
+        } else if (isAuth) {
+            runnerStatus = 'error';
+            errorType = 'FATAL_AUTH_FAILURE';
             const authReason = err?.code === 'TOKEN_QUARANTINED' ? 'Token quarantined' : 'Token invalid';
             addLog(`🔒 ${username}: AUTH FAILED (${authReason})`);
             persistSchedule({ lastError: `Fatal auth failure (${authReason.toLowerCase()})` });
@@ -933,6 +1075,8 @@ async function startRunner({
                 const authFailEmbed = buildQuestAuthFailureEmbed({
                     username,
                     accountId,
+                    ownerId,
+                    avatarUrl,
                     jobKey
                 });
                 await liveMsg.edit({ embeds: [authFailEmbed] }).catch(() => {});
@@ -942,12 +1086,35 @@ async function startRunner({
                     ownerId,
                     accountId,
                     username,
+                    avatarUrl,
                     jobKey
                 }).catch(() => {});
             }
+        } else if (is429) {
+            runnerStatus = 'error';
+            errorType = 'RATE_LIMIT_429';
+            addLog(`⚠️ ${username}: RATE LIMIT (429)`);
+            if (liveMsg) {
+                const rateLimitEmbed = buildQuestErrorEmbed({
+                    errorType: 'RATE_LIMIT_429',
+                    ownerId,
+                    username
+                });
+                await liveMsg.edit({ embeds: [rateLimitEmbed] }).catch(() => {});
+            }
         } else {
+            runnerStatus = 'error';
+            errorType = 'EXECUTION_FAILED';
             addLog(`❌ ${username}: FATAL ERROR — ${err.message}`);
             persistSchedule({ lastError: err.message });
+            if (liveMsg) {
+                const execFailEmbed = buildQuestErrorEmbed({
+                    errorType: 'EXECUTION_FAILED',
+                    ownerId,
+                    username
+                });
+                await liveMsg.edit({ embeds: [execFailEmbed] }).catch(() => {});
+            }
             sendWebhookEvent({
                 target: 'ALERT',
                 severity: 'ERROR',
@@ -1029,11 +1196,13 @@ async function restoreScheduledRunners(client) {
 
         try {
             const token = decryptRunnerRecordToken(row);
+            const targetLogChannelId = (row.channelId && row.channelId !== 'dm') ? row.channelId : null;
             await startRunner({
                 jobKey: `scheduled:${row._id}`,
                 ownerId: row.ownerId,
                 userToken: token,
-                channelId: row.channelId,
+                channelId: targetLogChannelId,
+                logChannelId: targetLogChannelId,
                 client,
                 mode: 'scheduled',
                 scheduleId: String(row._id),
@@ -1061,6 +1230,7 @@ async function startUserQuestSession({
     invokerTag,
     guildId = null,
     channelId = null,
+    logChannelId = null,
     tokens = [],
     mode = 'oneshot'
 }) {
@@ -1119,10 +1289,11 @@ async function startUserQuestSession({
 
                 const accountId = me.id;
                 const username = me.username;
+                const avatarUrl = resolveDiscordAvatarUrl(me);
 
                 await withAccountAdmissionLock(accountId, async () => {
                     if (findAnyJobByAccount(accountId)) {
-                        results.push({ started: false, line: `${config.emojis?.warning || '⚠️'} **${username}** มี Runner ทำงานอยู่แล้วในระบบ` });
+                        results.push({ started: false, line: `${config.emojis?.warning || '⚠️'} **${username}** : Token นี้ กำลังทำงานอยู่เเล้วในระบบ` });
                         return;
                     }
 
@@ -1131,7 +1302,7 @@ async function startUserQuestSession({
                         const sched = await createScheduledRunner({
                             ownerId: invokerId,
                             guildId,
-                            channelId,
+                            channelId: logChannelId || 'dm',
                             accountId,
                             username,
                             token
@@ -1148,11 +1319,13 @@ async function startUserQuestSession({
                         ownerId: invokerId,
                         userToken: token,
                         channelId,
+                        logChannelId,
                         client,
                         mode,
                         scheduleId,
                         accountId,
-                        username
+                        username,
+                        avatarUrl
                     });
 
                     results.push({

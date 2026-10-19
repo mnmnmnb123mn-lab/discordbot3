@@ -4,6 +4,10 @@ const config = require('../../config.json');
 const dmService = require('../../dm');
 const { buildDmEmbed, profileFromUser, safeText, markdownText, code } = dmService.design;
 const { withTimeoutValue } = require('../../core/timers');
+const {
+    buildQuestErrorEmbed,
+    buildOneShotCompletedEmbed
+} = require('./runnerStatusHeader');
 
 const FETCH_RECIPIENT_TIMEOUT_MS = 3000;
 
@@ -108,34 +112,44 @@ function buildQuestSummaryEmbed({
     mode = 'oneshot',
     username = 'บัญชีไม่ทราบชื่อ',
     accountId = 'ไม่ทราบ',
+    ownerId = null,
     totalQuests = 0,
     completedQuests = 0,
+    completedQuestList = [],
     issues = [],
     jobKey = '',
     profile = null,
+    avatarUrl = null,
     timestamp = Date.now()
 } = {}) {
-    const isDaily = mode === 'scheduled';
-    const tone = questSummaryTone({ totalQuests, completedQuests, issues });
-    const { title, summary } = _resolveQuestSummaryContent(tone, isDaily);
-    const fields = _buildQuestSummaryFields({ username, accountId, isDaily, totalQuests, completedQuests, issues });
-
-    const nextAction = isDaily
-        ? 'ระบบจะตรวจสอบและทำเควสต์ใหม่ให้อัตโนมัติตามรอบเวลา 00:00 / 08:00 / 16:00 น. หรือสั่งหยุดได้ด้วยปุ่ม STOP'
-        : 'สามารถเปิดแผงควบคุม `/quest panel` เพื่อเริ่ม One-shot รอบใหม่หรือเปิดใช้งาน Auto Daily ได้ตลอดเวลา';
-
-    return buildDmEmbed({
-        tone,
-        title,
-        summary,
-        profile: profile || profileFromUser(null, {
-            id: accountId,
+    const resolvedAvatarUrl = avatarUrl || profile?.avatarUrl || profile?.avatar || null;
+    if (totalQuests === 0) {
+        return buildQuestErrorEmbed({
+            errorType: 'NO_RUNNABLE_QUESTS',
+            ownerId: ownerId || (accountId !== 'ไม่ทราบ' ? accountId : null),
             username,
-            displayName: username
-        }),
-        fields,
-        nextAction,
-        referenceId: jobKey ? safeText(jobKey.slice(-16), 'quest', 32) : 'quest',
+            avatarUrl: resolvedAvatarUrl,
+            timestamp
+        });
+    }
+
+    if (completedQuests === 0 && issues.length > 0) {
+        return buildQuestErrorEmbed({
+            errorType: 'EXECUTION_FAILED',
+            ownerId: ownerId || (accountId !== 'ไม่ทราบ' ? accountId : null),
+            username,
+            avatarUrl: resolvedAvatarUrl,
+            timestamp
+        });
+    }
+
+    return buildOneShotCompletedEmbed({
+        ownerId: ownerId || (accountId !== 'ไม่ทราบ' ? accountId : null),
+        username,
+        totalQuests,
+        completedQuests,
+        completedQuestList,
+        avatarUrl: resolvedAvatarUrl,
         timestamp
     });
 }
@@ -146,33 +160,17 @@ function buildQuestSummaryEmbed({
 function buildQuestAuthFailureEmbed({
     username = 'บัญชีไม่ทราบชื่อ',
     accountId = 'ไม่ทราบ',
+    ownerId = null,
     jobKey = '',
     profile = null,
+    avatarUrl = null,
     timestamp = Date.now()
 } = {}) {
-    return buildDmEmbed({
-        tone: 'danger',
-        title: `${config.emojis?.red_card || config.emojis?.error || '🚫'} Token บัญชี Quest ใช้งานไม่ได้`,
-        summary: 'Discord ปฏิเสธการเข้าสู่ระบบ Token ของบัญชีนี้อาจหมดอายุ ถูกรีเซ็ตรหัสผ่าน หรือไม่ถูกต้อง',
-        profile: profile || profileFromUser(null, {
-            id: accountId,
-            username,
-            displayName: username
-        }),
-        fields: [
-            {
-                name: '🎮 บัญชีที่พบปัญหา',
-                value: `${markdownText(username)}\n${code(accountId)}`,
-                inline: true
-            },
-            {
-                name: `${config.emojis?.lock || '🔒'} สาเหตุ`,
-                value: 'Authentication Token Invalid หรือ Expired',
-                inline: true
-            }
-        ],
-        nextAction: 'กรุณารับ Token ใหม่ของบัญชีนี้ แล้วใช้คำสั่ง `/quest panel` เพื่อเปิดใช้งานใหม่อีกครั้ง',
-        referenceId: jobKey ? safeText(jobKey.slice(-16), 'quest', 32) : 'quest',
+    return buildQuestErrorEmbed({
+        errorType: 'FATAL_AUTH_FAILURE',
+        ownerId: ownerId || (accountId !== 'ไม่ทราบ' ? accountId : null),
+        username,
+        avatarUrl: avatarUrl || profile?.avatarUrl || profile?.avatar || null,
         timestamp
     });
 }
@@ -183,34 +181,19 @@ function buildQuestAuthFailureEmbed({
 function buildQuestStoppedEmbed({
     username = 'บัญชีไม่ทราบชื่อ',
     accountId = 'ไม่ทราบ',
-    reason = 'สั่งหยุดการทำงานจากแผงควบคุม (/quest panel)',
+    ownerId = null,
+    reason = 'ผู้ใช้สั่งหยุดการทำงานของ Quest แล้ว',
     jobKey = '',
     profile = null,
+    avatarUrl = null,
     timestamp = Date.now()
 } = {}) {
-    return buildDmEmbed({
-        tone: 'danger',
-        title: `${config.emojis?.stop || '🛑'} สั่งหยุดการทำงานของ Quest แล้ว`,
-        summary: 'ระบบได้รับการสั่งหยุดการทำงาน จึงได้ยุติกระบวนการทำเควสต์สำหรับบัญชีนี้ทันที',
-        profile: profile || profileFromUser(null, {
-            id: accountId,
-            username,
-            displayName: username
-        }),
-        fields: [
-            {
-                name: '🎮 บัญชีที่หยุดทำงาน',
-                value: `${markdownText(username)}\n${code(accountId)}`,
-                inline: true
-            },
-            {
-                name: `${config.emojis?.stop || '🛑'} เหตุผลที่หยุด`,
-                value: markdownText(reason),
-                inline: true
-            }
-        ],
-        nextAction: 'สามารถเปิดแผงควบคุม `/quest panel` เพื่อเริ่มการทำงานใหม่อีกครั้งได้ทุกเมื่อ',
-        referenceId: jobKey ? safeText(jobKey.slice(-16), 'quest', 32) : 'quest',
+    return buildQuestErrorEmbed({
+        errorType: 'RUNNER_ABORTED',
+        errorMessage: reason,
+        ownerId: ownerId || (accountId !== 'ไม่ทราบ' ? accountId : null),
+        username,
+        avatarUrl: avatarUrl || profile?.avatarUrl || profile?.avatar || null,
         timestamp
     });
 }
@@ -223,34 +206,31 @@ async function sendQuestSummaryDM({
     ownerId,
     accountId,
     username,
+    avatarUrl = null,
     mode = 'oneshot',
     totalQuests = 0,
     completedQuests = 0,
+    completedQuestList = [],
     issues = [],
     jobKey = '',
-    targetMessage = null
+    targetMessage = null,
+    channelId = null,
+    client = null
 }) {
     if (!ownerId && !targetMessage) return { status: 'skipped', reason: 'owner_missing' };
 
     try {
-        let profile = null;
-        if (ownerId) {
-            profile = await dmService.resolveProfile(ownerId, {
-                id: ownerId,
-                username,
-                displayName: username
-            });
-        }
-
         const embed = buildQuestSummaryEmbed({
             mode,
             username,
             accountId,
+            ownerId,
+            avatarUrl,
             totalQuests,
             completedQuests,
+            completedQuestList,
             issues,
             jobKey,
-            profile,
             timestamp: Date.now()
         });
 
@@ -263,6 +243,19 @@ async function sendQuestSummaryDM({
                 if (!ownerId) {
                     return { status: 'failed', reason: editErr.message };
                 }
+            }
+        }
+
+        if (channelId && client) {
+            try {
+                const targetCh = client.channels?.cache?.get?.(channelId)
+                    || await client.channels?.fetch?.(channelId).catch(() => null);
+                if (targetCh?.isTextBased?.()) {
+                    await targetCh.send({ embeds: [embed] });
+                    return { status: 'delivered', target: 'channel' };
+                }
+            } catch (chErr) {
+                console.warn(`[Quest DM] Failed to send summary to channel ${channelId}: ${chErr.message}; falling back to DM`);
             }
         }
 
@@ -290,6 +283,7 @@ async function sendQuestAuthFailureDM({
     ownerId,
     accountId,
     username,
+    avatarUrl = null,
     jobKey = ''
 }) {
     if (!ownerId) return { status: 'skipped', reason: 'owner_missing' };
@@ -306,6 +300,7 @@ async function sendQuestAuthFailureDM({
             accountId,
             jobKey,
             profile,
+            avatarUrl,
             timestamp: Date.now()
         });
 

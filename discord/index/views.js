@@ -1362,7 +1362,7 @@ ${navBar("/settings")}
     <h3>🎛️ การตั้งค่าทั่วไป</h3>
 
     <label>จำนวน Session พร้อมกันสูงสุด</label>
-    <input type="number" id="maxSessions" value="${maxSessions}" min="1" max="100">
+    <input type="number" id="maxSessions" value="${maxSessions}" min="1" max="1000">
 
     <label>จำนวนคำขอ API สูงสุดต่อนาที</label>
     <input type="number" id="rateLimitRequests" value="${rateLimitReq}" min="1" max="60">

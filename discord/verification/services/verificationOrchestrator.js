@@ -602,7 +602,8 @@ async function _handleBlockedVerification({
     guildSummary,
     oauthAttemptStartedAt,
     policySnapshot,
-    stateObj
+    stateObj,
+    channelId
 }) {
     if (securityEval.moderationAction && securityEval.moderationAction !== "allow" && securityEval.moderationAction !== "deny_role") {
         await safeSideEffect("moderateMember", () => discord.moderateVerificationMember(
@@ -662,6 +663,17 @@ async function _handleBlockedVerification({
         device,
         verifiedAt: Date.now()
     });
+
+    await safeSideEffect("sendVerificationDM", () => discord.sendVerificationDM(profile.id, {
+        ok: false,
+        result: "blocked",
+        guildId,
+        guildName,
+        channelId,
+        roleName,
+        reasonCode: securityEval.blockedReason,
+        reason: securityEval.blockedReason
+    }));
 
     return {
         statusCode: 200,
@@ -767,7 +779,8 @@ async function _evaluateVerificationSecurity({
             guildSummary,
             oauthAttemptStartedAt,
             policySnapshot,
-            stateObj
+            stateObj,
+            channelId: verificationConfig?.channelId || null
         });
         return { isBlocked: true, response };
     }
@@ -950,6 +963,8 @@ async function _saveVerificationPersistence({
 async function _handleFailedRoleAssignment({
     req,
     guildId,
+    guildName,
+    channelId,
     profile,
     configuredRoleId,
     roleName,
@@ -988,6 +1003,17 @@ async function _handleFailedRoleAssignment({
             console.error("[VERIFY] Failed to record recovery for failed attempt persistence failure:", err);
         });
     }
+
+    await safeSideEffect("sendVerificationDM", () => discord.sendVerificationDM(profile.id, {
+        ok: false,
+        result: "failed",
+        guildId,
+        guildName,
+        channelId,
+        roleName,
+        reasonCode: finalReason,
+        reason: finalReason
+    }));
 
     if (isLookupError) {
         return {
@@ -1080,6 +1106,7 @@ async function _verifyAndRecoverPersistence({
 async function _dispatchVerificationWebhookAndDM({
     guildId,
     guildName,
+    channelId,
     roleName,
     profile,
     verifyLogSaved,
@@ -1124,8 +1151,11 @@ async function _dispatchVerificationWebhookAndDM({
     await safeSideEffect("sendVerificationDM", () => discord.sendVerificationDM(profile.id, {
         ok: true,
         result: "success",
+        guildId,
         guildName,
+        channelId,
         roleName,
+        reasonCode: finalReason,
         reason: finalReason
     }));
 }
@@ -1225,6 +1255,8 @@ async function executeVerification({
         return _handleFailedRoleAssignment({
             req,
             guildId,
+            guildName,
+            channelId: preconditions.guildConfig?.verification?.channelId,
             profile,
             configuredRoleId,
             roleName,
@@ -1257,6 +1289,7 @@ async function executeVerification({
     await _dispatchVerificationWebhookAndDM({
         guildId,
         guildName,
+        channelId: preconditions.guildConfig?.verification?.channelId,
         roleName,
         profile,
         verifyLogSaved,

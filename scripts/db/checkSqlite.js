@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 "use strict";
 
-const { openDatabase, closeDatabase, resolveDbPath } = require("../../database/sqlite/connection");
+const { openDatabase, closeDatabase, resolveDbPath, getCurrentDbPath } = require("../../database/sqlite/connection");
 const { runStartupCheck } = require("../../database/sqlite/maintenance/startupCheck");
 
 function parseArgs() {
@@ -24,8 +24,9 @@ async function main() {
 
     let db;
     try {
-        db = openDatabase({ path: dbPath });
-        const results = runStartupCheck(db, { dbPath });
+        db = openDatabase({ path: dbPath, allowTempFallback: true });
+        const targetPath = getCurrentDbPath() || dbPath;
+        const results = runStartupCheck(db, { dbPath: targetPath });
 
         console.log("------------------------------------------------------------");
         console.log(`[CHECK-SQLITE] Status:               ${results.ok ? "✅ HEALTHY" : "❌ FAILED"}`);

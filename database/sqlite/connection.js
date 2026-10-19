@@ -48,8 +48,9 @@ function openMemoryDatabase(options) {
     return activeDb;
 }
 
-function validateDatabaseFile(dbPath) {
-    if (!fs.existsSync(dbPath)) return;
+function validateDatabaseFile(requestedDbPath, options = {}) {
+    let dbPath = requestedDbPath;
+    if (!fs.existsSync(dbPath)) return dbPath;
 
     let stats;
     try {
@@ -68,13 +69,20 @@ function validateDatabaseFile(dbPath) {
     try {
         fs.accessSync(dbPath, fs.constants.R_OK | fs.constants.W_OK);
     } catch (err) {
+        const allowTemp = Boolean(options.allowTempFallback || process.env.SQLITE_ALLOW_TEMP_FALLBACK === "true");
+        if (allowTemp) {
+            console.warn(`[SQLITE] ⚠️ Database file unwritable (${dbPath}). Explicit fallback allowed, switching to temp directory.`);
+            dbPath = path.resolve(os.tmpdir(), path.basename(dbPath));
+            return validateParentDirectory(dbPath, options);
+        }
         const error = new Error(`[SQLITE] ❌ Database file exists but is not readable/writable: ${dbPath} (${err.message})`);
         error.code = "SQLITE_FILE_NOT_WRITABLE";
         throw error;
     }
+    return dbPath;
 }
 
-function validateParentDirectory(requestedPath, options) {
+function validateParentDirectory(requestedPath, options = {}) {
     let dbPath = requestedPath;
     let parentDir = path.dirname(dbPath);
 
@@ -128,8 +136,8 @@ function openDatabase(options = {}) {
         return openMemoryDatabase(options);
     }
 
-    validateDatabaseFile(requestedPath);
-    const dbPath = validateParentDirectory(requestedPath, options);
+    let dbPath = validateParentDirectory(requestedPath, options);
+    dbPath = validateDatabaseFile(dbPath, options);
     assertDatabaseLocks(dbPath);
 
     const isNew = !fs.existsSync(dbPath) || fs.statSync(dbPath).size === 0;
