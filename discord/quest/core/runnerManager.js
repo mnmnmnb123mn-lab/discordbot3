@@ -299,81 +299,92 @@ async function startRunner({
         return null;
     }
 
+    function buildRunnerEmbedState() {
+        return {
+            ownerId,
+            username,
+            accountId,
+            avatarUrl,
+            mode,
+            modeLine: mode === 'scheduled' ? '🤖 AUTO DAILY ENABLED' : null,
+            nextCheckAt,
+            status: signal.aborted ? 'stopped' : runnerStatus,
+            errorType,
+            errorMessage,
+            currentTaskText,
+            totalQuests: totalQuestsCount,
+            totalQuestCount: totalQuestsCount,
+            completedQuests: completedQuestsCount,
+            completedQuestCount: completedQuestsCount,
+            completedQuestList: [...completedQuestNames],
+            allTimeSupported,
+            allTimeCompleted,
+            todaySupported,
+            todayCompleted
+        };
+    }
+
+    async function handleFlushDeliveryError(err, payload, editingExisting) {
+        if (editingExisting) {
+            liveMsg = null;
+            if (isPermanentDmError(err)) {
+                dmDisabled = true;
+                outputChannel = null;
+            }
+        } else {
+            if (outputChannel && logChannelId && outputChannel.id === logChannelId && !usingFallbackDm && ownerId && client) {
+                console.warn(`[Quest Runner:${jobKey}] Failed to send log to guild channel ${logChannelId} (${err.code || err.message}); falling back to DM`);
+                usingFallbackDm = true;
+                outputChannel = null;
+                try {
+                    const dm = await resolveUserDMChannel(client, ownerId);
+                    if (dm?.isTextBased?.()) {
+                        outputChannel = dm;
+                        liveMsg = await dm.send(payload);
+                        return;
+                    }
+                } catch (dmErr) {
+                    console.warn(`[Quest Runner:${jobKey}] Fallback to DM also failed (${dmErr.code || dmErr.message})`);
+                }
+            }
+            dmDisabled = true;
+            outputChannel = null;
+            liveMsg = null;
+        }
+        console.warn(`[Quest Runner:${jobKey}] Log message update failed (${err.code || err.message}); continuing runner silently without output`);
+    }
+
+    async function deliverFlushPayload(payload) {
+        if (dmDisabled) return;
+        const editingExisting = Boolean(liveMsg);
+        try {
+            if (!liveMsg) {
+                const ch = await resolveOutputChannel();
+                if (!ch?.isTextBased?.()) {
+                    dmDisabled = true;
+                    return;
+                }
+                liveMsg = await ch.send(payload);
+            } else {
+                await liveMsg.edit(payload);
+            }
+        } catch (err) {
+            await handleFlushDeliveryError(err, payload, editingExisting);
+        }
+    }
+
     async function flush({ silentRollover = false } = {}) {
         const task = flushPromise.then(async () => {
             lastRenderAt = Date.now();
             const visibleLines = [...logLines];
-            let rawContent = '```\n' + visibleLines.join('\n') + '\n```';
-            const embedState = {
-                ownerId,
-                username,
-                accountId,
-                avatarUrl,
-                mode,
-                modeLine: mode === 'scheduled' ? '🤖 AUTO DAILY ENABLED' : null,
-                nextCheckAt,
-                status: signal.aborted ? 'stopped' : runnerStatus,
-                errorType,
-                errorMessage,
-                currentTaskText,
-                totalQuests: totalQuestsCount,
-                totalQuestCount: totalQuestsCount,
-                completedQuests: completedQuestsCount,
-                completedQuestCount: completedQuestsCount,
-                completedQuestList: [...completedQuestNames],
-                allTimeSupported,
-                allTimeCompleted,
-                todaySupported,
-                todayCompleted
-            };
+            const rawContent = '```\n' + visibleLines.join('\n') + '\n```';
+            const embedState = buildRunnerEmbedState();
             const liveEmbed = formatRunnerStatusEmbed(rawContent, embedState);
             const payload = { embeds: [liveEmbed] };
             if (silentRollover) {
                 payload.flags = 4096;
             }
-
-            if (dmDisabled) return;
-            const editingExisting = Boolean(liveMsg);
-            try {
-                if (!liveMsg) {
-                    const ch = await resolveOutputChannel();
-                    if (!ch?.isTextBased?.()) {
-                        dmDisabled = true;
-                        return;
-                    }
-                    liveMsg = await ch.send(payload);
-                } else {
-                    await liveMsg.edit(payload);
-                }
-            } catch (err) {
-                if (editingExisting) {
-                    liveMsg = null;
-                    if (isPermanentDmError(err)) {
-                        dmDisabled = true;
-                        outputChannel = null;
-                    }
-                } else {
-                    if (outputChannel && logChannelId && outputChannel.id === logChannelId && !usingFallbackDm && ownerId && client) {
-                        console.warn(`[Quest Runner:${jobKey}] Failed to send log to guild channel ${logChannelId} (${err.code || err.message}); falling back to DM`);
-                        usingFallbackDm = true;
-                        outputChannel = null;
-                        try {
-                            const dm = await resolveUserDMChannel(client, ownerId);
-                            if (dm?.isTextBased?.()) {
-                                outputChannel = dm;
-                                liveMsg = await dm.send(payload);
-                                return;
-                            }
-                        } catch (dmErr) {
-                            console.warn(`[Quest Runner:${jobKey}] Fallback to DM also failed (${dmErr.code || dmErr.message})`);
-                        }
-                    }
-                    dmDisabled = true;
-                    outputChannel = null;
-                    liveMsg = null;
-                }
-                console.warn(`[Quest Runner:${jobKey}] Log message update failed (${err.code || err.message}); continuing runner silently without output`);
-            }
+            await deliverFlushPayload(payload);
         });
 
         flushPromise = task.catch(() => {});
@@ -968,6 +979,7 @@ async function startRunner({
         persistSchedule({ nextCheckAt });
 
         const bkkLocal = zonedParts(scheduledAt, 'Asia/Bangkok');
+        const isEndOfDayRollover = bkkLocal.hour === 0;
         runnerStatus = 'standby';
         currentTaskText = 'เสร็จสิ้นเเล้ววันนี้';
         if (isEndOfDayRollover && liveMsg) {
@@ -1044,96 +1056,109 @@ async function startRunner({
         }
     }
 
-    async function handleRunnerFatalError(err) {
-        const isAbort = err.message === 'aborted';
-        const isAuth = isFatalAuthError(err);
-        const is429 = err?.status === 429 || err?.code === 429 || String(err?.message).includes('429');
+    async function handleAbortError() {
+        runnerStatus = 'stopped';
+        errorType = 'RUNNER_ABORTED';
+        addLog(`🛑 ${username}: RUNNER STOPPED`);
+        if (liveMsg) {
+            const stoppedEmbed = buildQuestStoppedEmbed({
+                username,
+                accountId,
+                ownerId,
+                avatarUrl,
+                reason: 'ผู้ใช้สั่งหยุดการทำงานของ Quest แล้ว',
+                jobKey
+            });
+            await liveMsg.edit({ embeds: [stoppedEmbed] }).catch(() => {});
+        }
+    }
 
-        if (isAbort) {
-            runnerStatus = 'stopped';
-            errorType = 'RUNNER_ABORTED';
-            addLog(`🛑 ${username}: RUNNER STOPPED`);
-            if (liveMsg) {
-                const stoppedEmbed = buildQuestStoppedEmbed({
-                    username,
-                    accountId,
-                    ownerId,
-                    avatarUrl,
-                    reason: 'ผู้ใช้สั่งหยุดการทำงานของ Quest แล้ว',
-                    jobKey
-                });
-                await liveMsg.edit({ embeds: [stoppedEmbed] }).catch(() => {});
-                return;
-            }
-        } else if (isAuth) {
-            runnerStatus = 'error';
-            errorType = 'FATAL_AUTH_FAILURE';
-            const authReason = err?.code === 'TOKEN_QUARANTINED' ? 'Token quarantined' : 'Token invalid';
-            addLog(`🔒 ${username}: AUTH FAILED (${authReason})`);
-            persistSchedule({ lastError: `Fatal auth failure (${authReason.toLowerCase()})` });
-            if (liveMsg) {
-                const authFailEmbed = buildQuestAuthFailureEmbed({
-                    username,
-                    accountId,
-                    ownerId,
-                    avatarUrl,
-                    jobKey
-                });
-                await liveMsg.edit({ embeds: [authFailEmbed] }).catch(() => {});
-            }
-            if (!dmDisabled) {
-                await sendQuestAuthFailureDM({
-                    ownerId,
-                    accountId,
-                    username,
-                    avatarUrl,
-                    jobKey
-                }).catch(() => {});
-            }
-        } else if (is429) {
-            runnerStatus = 'error';
-            errorType = 'RATE_LIMIT_429';
-            addLog(`⚠️ ${username}: RATE LIMIT (429)`);
-            if (liveMsg) {
-                const rateLimitEmbed = buildQuestErrorEmbed({
-                    errorType: 'RATE_LIMIT_429',
-                    ownerId,
-                    username
-                });
-                await liveMsg.edit({ embeds: [rateLimitEmbed] }).catch(() => {});
-            }
-        } else {
-            runnerStatus = 'error';
-            errorType = 'EXECUTION_FAILED';
-            addLog(`❌ ${username}: FATAL ERROR — ${err.message}`);
-            persistSchedule({ lastError: err.message });
-            if (liveMsg) {
-                const execFailEmbed = buildQuestErrorEmbed({
-                    errorType: 'EXECUTION_FAILED',
-                    ownerId,
-                    username
-                });
-                await liveMsg.edit({ embeds: [execFailEmbed] }).catch(() => {});
-            }
-            sendWebhookEvent({
-                target: 'ALERT',
-                severity: 'ERROR',
-                category: 'QUEST',
-                code: 'quest.runner_system_error',
-                state: 'OPEN',
-                title: 'QUEST RUNNER CRASH',
-                description: `เกิดข้อผิดพลาดร้ายแรงใน Quest Runner: ${err.message}`,
-                impact: `Quest Runner ของผู้ใช้ ${username} หยุดการทำงานกะทันหัน`,
-                action: 'ตรวจสอบข้อผิดพลาดและ stack trace ในระบบ Quest',
-                context: {
-                    'บัญชี': `${username} (${accountId})`,
-                    'ผู้สั่งการ': ownerId,
-                    'โหมด': mode,
-                    'รหัสข้อผิดพลาด': String(err?.code || err?.name || 'runner_error')
-                },
-                dedupeKey: `quest-runner-error:${accountId}:${err.message}`,
-                dedupeMs: 5 * 60 * 1000
+    async function handleAuthError(err) {
+        runnerStatus = 'error';
+        errorType = 'FATAL_AUTH_FAILURE';
+        const authReason = err?.code === 'TOKEN_QUARANTINED' ? 'Token quarantined' : 'Token invalid';
+        addLog(`🔒 ${username}: AUTH FAILED (${authReason})`);
+        persistSchedule({ lastError: `Fatal auth failure (${authReason.toLowerCase()})` });
+        if (liveMsg) {
+            const authFailEmbed = buildQuestAuthFailureEmbed({
+                username,
+                accountId,
+                ownerId,
+                avatarUrl,
+                jobKey
+            });
+            await liveMsg.edit({ embeds: [authFailEmbed] }).catch(() => {});
+        }
+        if (!dmDisabled) {
+            await sendQuestAuthFailureDM({
+                ownerId,
+                accountId,
+                username,
+                avatarUrl,
+                jobKey
             }).catch(() => {});
+        }
+    }
+
+    async function handleRateLimitError() {
+        runnerStatus = 'error';
+        errorType = 'RATE_LIMIT_429';
+        addLog(`⚠️ ${username}: RATE LIMIT (429)`);
+        if (liveMsg) {
+            const rateLimitEmbed = buildQuestErrorEmbed({
+                errorType: 'RATE_LIMIT_429',
+                ownerId,
+                username
+            });
+            await liveMsg.edit({ embeds: [rateLimitEmbed] }).catch(() => {});
+        }
+    }
+
+    async function handleExecutionFailure(err) {
+        runnerStatus = 'error';
+        errorType = 'EXECUTION_FAILED';
+        addLog(`❌ ${username}: FATAL ERROR — ${err.message}`);
+        persistSchedule({ lastError: err.message });
+        if (liveMsg) {
+            const execFailEmbed = buildQuestErrorEmbed({
+                errorType: 'EXECUTION_FAILED',
+                ownerId,
+                username
+            });
+            await liveMsg.edit({ embeds: [execFailEmbed] }).catch(() => {});
+        }
+        sendWebhookEvent({
+            target: 'ALERT',
+            severity: 'ERROR',
+            category: 'QUEST',
+            code: 'quest.runner_system_error',
+            state: 'OPEN',
+            title: 'QUEST RUNNER CRASH',
+            description: `เกิดข้อผิดพลาดร้ายแรงใน Quest Runner: ${err.message}`,
+            impact: `Quest Runner ของผู้ใช้ ${username} หยุดการทำงานกะทันหัน`,
+            action: 'ตรวจสอบข้อผิดพลาดและ stack trace ในระบบ Quest',
+            context: {
+                'บัญชี': `${username} (${accountId})`,
+                'ผู้สั่งการ': ownerId,
+                'โหมด': mode,
+                'รหัสข้อผิดพลาด': String(err?.code || err?.name || 'runner_error')
+            },
+            dedupeKey: `quest-runner-error:${accountId}:${err.message}`,
+            dedupeMs: 5 * 60 * 1000
+        }).catch(() => {});
+    }
+
+    async function handleRunnerFatalError(err) {
+        if (err.message === 'aborted') {
+            await handleAbortError();
+            return;
+        }
+        if (isFatalAuthError(err)) {
+            await handleAuthError(err);
+        } else if (err?.status === 429 || err?.code === 429 || String(err?.message).includes('429')) {
+            await handleRateLimitError();
+        } else {
+            await handleExecutionFailure(err);
         }
         await flush();
     }

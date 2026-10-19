@@ -1474,11 +1474,10 @@ function buildVerificationDmComponents(data = {}) {
 
     const ok = !!data.ok;
     const channelId = data.channelId ? String(data.channelId) : null;
-    const targetUrl = ok
-        ? `https://discord.com/channels/${guildId}`
-        : (channelId
-            ? `https://discord.com/channels/${guildId}/${channelId}`
-            : `https://discord.com/channels/${guildId}`);
+    let targetUrl = `https://discord.com/channels/${guildId}`;
+    if (!ok && channelId) {
+        targetUrl = `https://discord.com/channels/${guildId}/${channelId}`;
+    }
 
     const button = new MessageButton()
         .setStyle("LINK")

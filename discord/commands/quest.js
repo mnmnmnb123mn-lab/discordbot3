@@ -248,7 +248,7 @@ async function handleQuestStopAllAction(interaction) {
         await interaction.deferUpdate();
     }
     const crossEmoji = config.emojis?.CROSS_pmt || config.emojis?.error || '<a:CROSS_pmt:1553833049135906816>';
-    const stoppedCount = stopAllForUser(interaction.user.id);
+    stopAllForUser(interaction.user.id);
     const scheduledList = await listScheduledRunners(interaction.user.id).catch(() => []);
     for (const r of scheduledList) {
         stopScheduledJob(interaction.user.id, String(r._id));

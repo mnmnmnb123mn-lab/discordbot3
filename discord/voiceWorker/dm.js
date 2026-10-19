@@ -423,13 +423,11 @@ function buildVoiceLogEmbed(onlineSessions = [], troubledSessions = []) {
 
     const sortedTroubled = groupSessionsByToken(troubledSessions);
     if (sortedTroubled.length > 0) {
-        lines.push("");
-        lines.push(`${r04fpt} บัญชีที่กำลังเกิดปัญหา\n`);
+        lines.push("", `${r04fpt} บัญชีที่กำลังเกิดปัญหา\n`);
         for (const s of sortedTroubled) {
             const name = plain(s.accountTag || s.accountName || s.accountUsername, "บัญชีไม่ทราบชื่อ");
             const status = resolveTroubleStatus(s, loading);
-            lines.push(`${reddj} ชื่อบัญชี ${name}`);
-            lines.push(`${grep} ${status}`);
+            lines.push(`${reddj} ชื่อบัญชี ${name}`, `${grep} ${status}`);
         }
     }
 
@@ -491,10 +489,13 @@ function syncVoiceLogDM(ownerId, options = {}) {
             ownerId: strOwnerId,
             message: null,
             timer: null,
-            inFlight: null
+            inFlight: null,
+            waiters: []
         };
         ownerLogTrackers.set(strOwnerId, tracker);
     }
+
+    if (!tracker.waiters) tracker.waiters = [];
 
     if (tracker.timer) {
         clearTimeout(tracker.timer);
@@ -503,13 +504,33 @@ function syncVoiceLogDM(ownerId, options = {}) {
 
     const delayMs = options.immediate ? 0 : 500;
     return new Promise((resolve) => {
+        tracker.waiters.push(resolve);
         tracker.timer = setTimeout(() => {
             tracker.timer = null;
-            const op = flushVoiceLogDM(strOwnerId, options).then(resolve).catch(resolve);
+            const waiters = tracker.waiters.splice(0);
+            const done = (r) => {
+                for (const w of waiters) {
+                    try {
+                        w(r);
+                    } catch {}
+                }
+            };
+            const op = flushVoiceLogDM(strOwnerId, options).then(done, done);
             tracker.inFlight = op;
         }, delayMs);
         tracker.timer?.unref?.();
     });
+}
+
+async function cleanUpEmptyOwnerTracker(tracker, strOwnerId) {
+    if (tracker?.message && typeof tracker.message.delete === "function") {
+        try {
+            await tracker.message.delete().catch(() => {});
+        } catch {}
+        tracker.message = null;
+    }
+    ownerLogTrackers.delete(strOwnerId);
+    return { status: "deleted" };
 }
 
 async function flushVoiceLogDM(ownerId, options = {}) {
@@ -518,14 +539,7 @@ async function flushVoiceLogDM(ownerId, options = {}) {
     const tracker = ownerLogTrackers.get(strOwnerId);
 
     if (activeSessions.length === 0) {
-        if (tracker?.message && typeof tracker.message.delete === "function") {
-            try {
-                await tracker.message.delete().catch(() => {});
-            } catch {}
-            tracker.message = null;
-        }
-        ownerLogTrackers.delete(strOwnerId);
-        return { status: "deleted" };
+        return cleanUpEmptyOwnerTracker(tracker, strOwnerId);
     }
 
     const { online, troubled } = categorizeSessions(activeSessions);

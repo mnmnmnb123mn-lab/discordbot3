@@ -25,37 +25,37 @@ const QUEST_ERRORS = Object.freeze({
     RUNNER_ABORTED: {
         icon: QUEST_EMOJIS.cross,
         status: 'ผู้ใช้สั่งหยุดการทำงานของ Quest แล้ว',
-        color: 0xED4245
+        color: '#ED4245'
     },
     COMPLETED_EXTERNAL: {
         icon: QUEST_EMOJIS.cross,
         status: 'ระหว่างบอทรัน มีการเปิดเล่นเองจากแอป Discord จนเควสต์จบก่อน',
-        color: 0xED4245
+        color: '#ED4245'
     },
     EXECUTION_FAILED: {
         icon: QUEST_EMOJIS.cross,
         status: 'เกิดข้อผิดพลาดของระบบdiscord บอทไม่สามารถทำงานได้ในTokenนี้ โปรดลองอีกครั้ง',
-        color: 0xED4245
+        color: '#ED4245'
     },
     ENROLLMENT_FAILED: {
         icon: QUEST_EMOJIS.cross,
         status: 'บัญชีไม่ผ่านเงื่อนไขรับเควสต์ หรือ เควสต์หมดเวลาไปก่อน',
-        color: 0xED4245
+        color: '#ED4245'
     },
     NO_RUNNABLE_QUESTS: {
         icon: QUEST_EMOJIS.sn,
         status: 'บัญชีนี้ไม่มีเควสต์ที่รองรับ หรือ ทำไปหมดแล้ว',
-        color: 0x57F287
+        color: '#57F287'
     },
     FATAL_AUTH_FAILURE: {
         icon: QUEST_EMOJIS.cross,
         status: 'Token บัญชี Quest ใช้งานไม่ได้ กรุณาลองตรวจสอบ Token นี้ เเละ ลองอีกครั้ง',
-        color: 0xED4245
+        color: '#ED4245'
     },
     RATE_LIMIT_429: {
         icon: QUEST_EMOJIS.cross,
         status: 'ติด Rate Limit ชั่วคราว (HTTP 429) / เครือข่ายหน่วง กรุณา ลองอีกครั้ง',
-        color: 0xED4245
+        color: '#ED4245'
     }
 });
 
@@ -228,7 +228,7 @@ function buildOneShotCheckingEmbed({
     ].join('\n');
 
     const embed = new MessageEmbed()
-        .setColor(0x5865F2)
+        .setColor('#5865F2')
         .setTitle(`${QUEST_EMOJIS.bell} Log ระบบทำเควส`)
         .setDescription(description)
         .setTimestamp(Number(timestamp));
@@ -260,7 +260,7 @@ function buildOneShotProgressEmbed({
     ].join('\n');
 
     const embed = new MessageEmbed()
-        .setColor(0xF59E0B)
+        .setColor('#F59E0B')
         .setTitle(`${QUEST_EMOJIS.bell} Log ระบบทำเควส`)
         .setDescription(description)
         .setTimestamp(Number(timestamp));
@@ -294,13 +294,15 @@ function buildOneShotCompletedEmbed({
     if (Array.isArray(completedQuestList) && completedQuestList.length > 0) {
         lines.push('');
         completedQuestList.forEach((questName, idx) => {
-            lines.push(`${idx + 1}.${QUEST_EMOJIS.orbs} .${questName}`);
-            lines.push(`${QUEST_EMOJIS.verifyb} เสร็จสมบูรณ์`);
+            lines.push(
+                `${idx + 1}.${QUEST_EMOJIS.orbs} .${questName}`,
+                `${QUEST_EMOJIS.verifyb} เสร็จสมบูรณ์`
+            );
         });
     }
 
     const embed = new MessageEmbed()
-        .setColor(0x57F287)
+        .setColor('#57F287')
         .setTitle(`${QUEST_EMOJIS.bell} Log ระบบทำเควส`)
         .setDescription(lines.join('\n'))
         .setTimestamp(Number(timestamp));
@@ -327,7 +329,7 @@ function buildAutoDailyEmbed({
     let todaySupportedText = 'กำลังตรวจสอบ..';
     let todayCompletedText = '-';
     let todayTaskText = '-';
-    let color = 0x5865F2;
+    let color = '#5865F2';
 
     if (status === 'running') {
         statusIcon = QUEST_EMOJIS.loading;
@@ -335,14 +337,14 @@ function buildAutoDailyEmbed({
         todaySupportedText = todaySupported != null ? `${todaySupported} รายการ` : 'กำลังตรวจสอบ..';
         todayCompletedText = todayCompleted != null ? `${todayCompleted} รายการ` : '0 รายการ';
         todayTaskText = currentTaskText || '-';
-        color = 0xF59E0B;
+        color = '#F59E0B';
     } else if (status === 'standby') {
         statusIcon = QUEST_EMOJIS.sn;
         statusText = 'ทำ Quest เสร็จเเล้ว กำลังรอวันต่อไป';
         todaySupportedText = todaySupported != null && todaySupported > 0 ? `${todaySupported} รายการ` : '-';
         todayCompletedText = todayCompleted != null && todayCompleted > 0 ? `${todayCompleted} รายการ` : '-';
         todayTaskText = 'เสร็จสิ้นเเล้ววันนี้';
-        color = 0x57F287;
+        color = '#57F287';
     }
 
     const description = [
@@ -376,36 +378,41 @@ function resolveRunnerUsername(state) {
     return 'ไม่ทราบชื่อ';
 }
 
+const TASK_PREPARE_REGEX = /กำลังเตรียมทำ\s+([^\r\n]+)/;
+const TASK_WORKING_REGEX = /กำลังทำ\s+([^\r\n]+)/;
+const TASK_PERCENT_REGEX = /(?:⌛|\b)\s*([^%\r\n]+?)\s*(\d+)%/;
+
+function parseActivityTaskLine(line) {
+    if (typeof line !== 'string') return null;
+    if (line.includes('กำลังเตรียมทำ')) {
+        const match = TASK_PREPARE_REGEX.exec(line);
+        return match ? `${QUEST_EMOJIS.grep} กำลังเตรียมทำ ${match[1].trim()}` : line;
+    }
+    if (line.includes('กำลังทำ')) {
+        const match = TASK_WORKING_REGEX.exec(line);
+        return match ? `${QUEST_EMOJIS.grep} กำลังทำ ${match[1].trim()}` : line;
+    }
+    if (line.includes('%')) {
+        const match = TASK_PERCENT_REGEX.exec(line);
+        if (match) {
+            return `${QUEST_EMOJIS.gearBlue} ${match[1].replace(/^[^\w\sก-๙]+/, '').trim()} ${match[2]}%`;
+        }
+    }
+    return null;
+}
+
 function extractCurrentTaskFromLines(activityLines) {
     if (!Array.isArray(activityLines) || activityLines.length === 0) return '-';
     for (let i = activityLines.length - 1; i >= 0; i--) {
         const line = activityLines[i];
-        if (typeof line !== 'string') continue;
-        if (line.includes('กำลังเตรียมทำ')) {
-            const match = line.match(/กำลังเตรียมทำ\s+(.+)$/);
-            return match ? `${QUEST_EMOJIS.grep} กำลังเตรียมทำ ${match[1]}` : line;
-        }
-        if (line.includes('กำลังทำ')) {
-            const match = line.match(/กำลังทำ\s+(.+)$/);
-            return match ? `${QUEST_EMOJIS.grep} กำลังทำ ${match[1]}` : line;
-        }
-        if (line.includes('%')) {
-            const match = line.match(/(?:⌛|\b)\s*(.+?)\s*(\d+)%/);
-            if (match) {
-                return `${QUEST_EMOJIS.gearBlue} ${match[1].replace(/^[^\w\sก-๙]+/, '').trim()} ${match[2]}%`;
-            }
-        }
+        const task = parseActivityTaskLine(line);
+        if (task) return task;
     }
     return '-';
 }
 
-function buildRunnerLiveEmbed(state = {}, activityLines = []) {
-    const username = resolveRunnerUsername(state);
-    const ownerId = state.ownerId || null;
-    const avatarUrl = state.avatarUrl || null;
-    const isDaily = state.mode === 'scheduled' || Boolean(state.modeLine);
-
-    // 1. Explicit or detected Error state
+function resolveRunnerErrorEmbed(state, activityLines, context) {
+    const { ownerId, username, avatarUrl } = context;
     if (state.errorType) {
         return buildQuestErrorEmbed({
             errorType: state.errorType,
@@ -439,7 +446,57 @@ function buildRunnerLiveEmbed(state = {}, activityLines = []) {
         });
     }
 
-    // 2. Scheduled / Auto Daily Mode
+    return null;
+}
+
+function buildOneShotEmbed(state, activityLines, context) {
+    const { ownerId, username, avatarUrl } = context;
+    const total = state.totalQuests ?? state.totalQuestCount;
+    const completed = state.completedQuests ?? state.completedQuestCount ?? 0;
+    const completedList = state.completedQuestList || [];
+
+    const isAllDone = state.status === 'completed' || (typeof total === 'number' && total > 0 && completed >= total);
+    if (isAllDone) {
+        return buildOneShotCompletedEmbed({
+            ownerId,
+            username,
+            totalQuests: total,
+            completedQuests: completed,
+            completedQuestList: completedList,
+            avatarUrl,
+            timestamp: state.timestamp
+        });
+    }
+
+    if (state.status === 'checking' || total === undefined || total === null) {
+        return buildOneShotCheckingEmbed({
+            username,
+            avatarUrl,
+            timestamp: state.timestamp
+        });
+    }
+
+    const taskText = state.currentTaskText || extractCurrentTaskFromLines(activityLines);
+    return buildOneShotProgressEmbed({
+        username,
+        totalQuests: total,
+        completedQuests: completed,
+        currentTaskText: taskText,
+        avatarUrl,
+        timestamp: state.timestamp
+    });
+}
+
+function buildRunnerLiveEmbed(state = {}, activityLines = []) {
+    const username = resolveRunnerUsername(state);
+    const ownerId = state.ownerId || null;
+    const avatarUrl = state.avatarUrl || null;
+    const context = { username, ownerId, avatarUrl };
+
+    const errorEmbed = resolveRunnerErrorEmbed(state, activityLines, context);
+    if (errorEmbed) return errorEmbed;
+
+    const isDaily = state.mode === 'scheduled' || Boolean(state.modeLine);
     if (isDaily) {
         const hasStandbyLog = activityLines.some((l) => typeof l === 'string' && (l.includes('AUTO DAILY ACTIVE') || l.includes('NEXT CHECK')));
         let dailyStatus = state.status || 'checking';
@@ -462,44 +519,7 @@ function buildRunnerLiveEmbed(state = {}, activityLines = []) {
         });
     }
 
-    // 3. One-Shot Mode
-    const total = state.totalQuests ?? state.totalQuestCount;
-    const completed = state.completedQuests ?? state.completedQuestCount ?? 0;
-    const completedList = state.completedQuestList || [];
-
-    // Check if completed
-    const isAllDone = state.status === 'completed' || (typeof total === 'number' && total > 0 && completed >= total);
-    if (isAllDone) {
-        return buildOneShotCompletedEmbed({
-            ownerId,
-            username,
-            totalQuests: total,
-            completedQuests: completed,
-            completedQuestList: completedList,
-            avatarUrl,
-            timestamp: state.timestamp
-        });
-    }
-
-    // Check if initial checking
-    if (state.status === 'checking' || total === undefined || total === null) {
-        return buildOneShotCheckingEmbed({
-            username,
-            avatarUrl,
-            timestamp: state.timestamp
-        });
-    }
-
-    // In-Progress
-    const taskText = state.currentTaskText || extractCurrentTaskFromLines(activityLines);
-    return buildOneShotProgressEmbed({
-        username,
-        totalQuests: total,
-        completedQuests: completed,
-        currentTaskText: taskText,
-        avatarUrl,
-        timestamp: state.timestamp
-    });
+    return buildOneShotEmbed(state, activityLines, context);
 }
 
 function formatRunnerStatusEmbed(content, state = {}) {

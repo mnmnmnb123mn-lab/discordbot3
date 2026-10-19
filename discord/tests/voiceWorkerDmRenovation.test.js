@@ -14,6 +14,7 @@ const {
     categorizeSessions,
     TERMINAL_TITLES,
     flushVoiceLogDM,
+    syncVoiceLogDM,
     ownerLogTrackers
 } = dm;
 
@@ -156,4 +157,17 @@ test("Voice Worker DM Renovation: flushVoiceLogDM deletes message when active se
     assert.equal(res.status, "deleted");
     assert.equal(deleted, true);
     assert.equal(ownerLogTrackers.has("owner-empty"), false);
+});
+
+test("Voice Worker DM Renovation: syncVoiceLogDM debounces multiple calls and settles all awaiting promises", async () => {
+    const p1 = syncVoiceLogDM("owner-multi-call", { allSessions: new Map() });
+    const p2 = syncVoiceLogDM("owner-multi-call", { allSessions: new Map() });
+    const p3 = syncVoiceLogDM("owner-multi-call", { allSessions: new Map(), immediate: true });
+
+    const results = await Promise.all([p1, p2, p3]);
+    assert.equal(results.length, 3);
+    for (const r of results) {
+        assert.ok(r);
+        assert.equal(r.status, "deleted");
+    }
 });

@@ -198,6 +198,35 @@ function buildQuestStoppedEmbed({
     });
 }
 
+async function tryEditExistingSummaryMessage(targetMessage, embed, ownerId) {
+    if (!targetMessage || typeof targetMessage.edit !== 'function') return null;
+    try {
+        await targetMessage.edit({ embeds: [embed] });
+        return { status: 'delivered', target: 'message_edit' };
+    } catch (editErr) {
+        console.warn(`[Quest DM] Failed to edit existing message into summary: ${editErr.message}`);
+        if (!ownerId) {
+            return { status: 'failed', reason: editErr.message };
+        }
+        return null;
+    }
+}
+
+async function trySendSummaryToChannel(client, channelId, embed) {
+    if (!channelId || !client) return false;
+    try {
+        const targetCh = client.channels?.cache?.get?.(channelId)
+            || await client.channels?.fetch?.(channelId).catch(() => null);
+        if (targetCh?.isTextBased?.()) {
+            await targetCh.send({ embeds: [embed] });
+            return true;
+        }
+    } catch (chErr) {
+        console.warn(`[Quest DM] Failed to send summary to channel ${channelId}: ${chErr.message}; falling back to DM`);
+    }
+    return false;
+}
+
 /**
  * Sends a quest summary DM via the central dmService outbox,
  * or edits the existing live message in-place if provided.
@@ -234,29 +263,11 @@ async function sendQuestSummaryDM({
             timestamp: Date.now()
         });
 
-        if (targetMessage && typeof targetMessage.edit === 'function') {
-            try {
-                await targetMessage.edit({ embeds: [embed] });
-                return { status: 'delivered', target: 'message_edit' };
-            } catch (editErr) {
-                console.warn(`[Quest DM] Failed to edit existing message into summary: ${editErr.message}`);
-                if (!ownerId) {
-                    return { status: 'failed', reason: editErr.message };
-                }
-            }
-        }
+        const editResult = await tryEditExistingSummaryMessage(targetMessage, embed, ownerId);
+        if (editResult) return editResult;
 
-        if (channelId && client) {
-            try {
-                const targetCh = client.channels?.cache?.get?.(channelId)
-                    || await client.channels?.fetch?.(channelId).catch(() => null);
-                if (targetCh?.isTextBased?.()) {
-                    await targetCh.send({ embeds: [embed] });
-                    return { status: 'delivered', target: 'channel' };
-                }
-            } catch (chErr) {
-                console.warn(`[Quest DM] Failed to send summary to channel ${channelId}: ${chErr.message}; falling back to DM`);
-            }
+        if (await trySendSummaryToChannel(client, channelId, embed)) {
+            return { status: 'delivered', target: 'channel' };
         }
 
         const tone = questSummaryTone({ totalQuests, completedQuests, issues });
