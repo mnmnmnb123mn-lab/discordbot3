@@ -342,10 +342,22 @@ test("Presence & Platform Renovation System Suite", async (t) => {
         assert.equal(toggleRes.enabled, false);
         assert.equal(manager.scheduler.isRunning, false);
 
+        // saveRotation while already running restarts cleanly with new items without stalling
+        await manager.saveRotation({ enabled: true, items: newRotationItems });
+        assert.equal(manager.scheduler.isRunning, true);
+        const updatedItems = [
+            { id: "r3", name: "Afternoon", durationMinutes: 15, status: "dnd", platform: "vr", enabled: true }
+        ];
+        const restartRes = await manager.saveRotation({ enabled: true, items: updatedItems });
+        assert.equal(restartRes.success, true);
+        assert.equal(manager.scheduler.isRunning, true);
+        assert.equal(manager.scheduler.currentItem.id, "r3");
+        assert.equal(manager.scheduler.currentItem.status, "dnd");
+
         // getState
         const state = manager.getState();
         assert.equal(state.isInitialized, true);
-        assert.equal(state.currentStatus, "online");
+        assert.equal(state.currentStatus, "dnd");
         assert.equal(state.currentPlatform, "web");
         assert.ok(state.supportedPlatforms.length >= 7);
         assert.ok(state.supportedStatuses.length === 4);

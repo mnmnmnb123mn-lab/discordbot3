@@ -183,6 +183,7 @@ class PresenceManager {
         }
 
         if (isEnabled) {
+            this.scheduler.stop();
             await this.scheduler.start((item) => this.executeRotationStep(item));
         } else {
             this.scheduler.stop();
