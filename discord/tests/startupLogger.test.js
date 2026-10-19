@@ -81,3 +81,13 @@ test("runtime normalization preserves already formatted and redacted lines", () 
     assert.equal(normalizeRuntimeLine("log", bootLine), bootLine);
     assert.doesNotMatch(normalizeRuntimeLine("error", "[AUTH] token=private-value"), /private-value/);
 });
+
+test("startup logger divider emits a clean visual separator line", () => { // NOSONAR -- node:test assertions are not recognized by Sonar S2699.
+    const lines = [];
+    const logger = createStartupLogger({
+        consoleLike: { log: line => lines.push(line), warn: () => {}, error: () => {} }
+    });
+    logger.divider("SYSTEM");
+    assert.equal(lines.length, 1);
+    assert.match(lines[0], /^\[BOOT\] \[ℹ️ INFO\] \[SYSTEM\] ═{56}$/);
+});

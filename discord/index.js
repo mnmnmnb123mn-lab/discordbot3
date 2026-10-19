@@ -415,7 +415,9 @@ async function loadDisabledCommandsForBoot() {
 
 async function boot() {
     const bootStartedAt = Date.now();
-    bootLog.info("SYSTEM", "Starting Phomueangtai Enterprise System", { node: process.version, pid: process.pid });
+    bootLog.divider("SYSTEM");
+    bootLog.info("SYSTEM", "🚀 Starting Phomueangtai Enterprise System", { node: process.version, pid: process.pid });
+    bootLog.divider("SYSTEM");
     const result = await runBootLifecycle({
         runStage: (...args) => bootLog.runStage(...args),
         startHttpServer,
@@ -646,6 +648,13 @@ async function initializeClientReady() {
     bootLog.success("READY", "Post-ready initialization completed", {
         durationMs: Date.now() - readyStartedAt
     });
+    bootLog.divider("READY");
+    bootLog.success("READY", "🎉 ALL SYSTEMS OPERATIONAL — BOT IS ONLINE", {
+        durationMs: Date.now() - readyStartedAt,
+        user: client.user.tag
+    });
+    bootLog.info("READY", `🌐 Owner Dashboard: ${getOwnerDashboardBaseUrl()}`);
+    bootLog.divider("READY");
 }
 
 readyInitializationController = createReadyInitializationController({
@@ -661,8 +670,10 @@ readyInitializationController = createReadyInitializationController({
 client.on("ready", () => { readyInitializationController.start(); });
 
 boot().catch(async err => {
+    bootLog.divider("SYSTEM");
     bootLog.error("SYSTEM", "Fatal boot failure", {
         code: err?.code || err?.name || "fatal_boot_failure"
     });
+    bootLog.divider("SYSTEM");
     await system.terminateAfterFatal("boot", err);
 });

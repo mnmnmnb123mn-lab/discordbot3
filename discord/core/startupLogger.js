@@ -145,6 +145,7 @@ function createStartupLogger({ consoleLike = console, now = Date.now, prefix = "
         warn: (scope, message, details) => write("warn", scope, message, details),
         error: (scope, message, details) => write("error", scope, message, details),
         skip: (scope, message, details) => write("skip", scope, message, details),
+        divider: (scope = "SYSTEM") => write("info", scope, "═".repeat(56)),
         runStage
     };
 }
