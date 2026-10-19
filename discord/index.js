@@ -415,9 +415,9 @@ async function loadDisabledCommandsForBoot() {
 
 async function boot() {
     const bootStartedAt = Date.now();
-    bootLog.divider("SYSTEM");
-    bootLog.info("SYSTEM", "🚀 Starting Phomueangtai Enterprise System", { node: process.version, pid: process.pid });
-    bootLog.divider("SYSTEM");
+    bootLog.banner("🚀 PHOMUEANGTAI ENTERPRISE BOT — STARTING PRODUCTION RUNTIME", [
+        `Node: ${process.version} | PID: ${process.pid} | Arch: ${process.arch}`
+    ]);
     const result = await runBootLifecycle({
         runStage: (...args) => bootLog.runStage(...args),
         startHttpServer,
@@ -648,13 +648,10 @@ async function initializeClientReady() {
     bootLog.success("READY", "Post-ready initialization completed", {
         durationMs: Date.now() - readyStartedAt
     });
-    bootLog.divider("READY");
-    bootLog.success("READY", "🎉 ALL SYSTEMS OPERATIONAL — BOT IS ONLINE", {
-        durationMs: Date.now() - readyStartedAt,
-        user: client.user.tag
-    });
-    bootLog.info("READY", `🌐 Owner Dashboard: ${getOwnerDashboardBaseUrl()}`);
-    bootLog.divider("READY");
+    bootLog.banner("🎉 ALL SYSTEMS OPERATIONAL — BOT IS READY & ONLINE", [
+        `User: ${client.user.tag} | Ready Duration: ${Date.now() - readyStartedAt}ms`,
+        `🌐 Owner Dashboard: ${getOwnerDashboardBaseUrl()}`
+    ]);
 }
 
 readyInitializationController = createReadyInitializationController({
@@ -670,10 +667,9 @@ readyInitializationController = createReadyInitializationController({
 client.on("ready", () => { readyInitializationController.start(); });
 
 boot().catch(async err => {
-    bootLog.divider("SYSTEM");
-    bootLog.error("SYSTEM", "Fatal boot failure", {
-        code: err?.code || err?.name || "fatal_boot_failure"
-    });
-    bootLog.divider("SYSTEM");
+    bootLog.banner("❌ FATAL BOOT FAILURE — SYSTEM HALTED", [
+        `Code: ${err?.code || err?.name || "fatal_boot_failure"}`,
+        `Error: ${err?.message || "Unknown error"}`
+    ]);
     await system.terminateAfterFatal("boot", err);
 });
