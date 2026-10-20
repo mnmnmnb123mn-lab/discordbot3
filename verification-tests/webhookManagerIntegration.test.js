@@ -1631,7 +1631,7 @@ test("Webhook Manager & Delivery Engine Integration Suite", async (t) => {
         assert.match(sec2.value, /• ผู้ให้บริการอินเทอร์เน็ต\s*:\s*True Internet/);
         assert.match(sec2.value, /• องค์กรโครงข่าย\s*:\s*AS131445 True Internet Co\., Ltd\./);
         assert.match(sec2.value, /• ชื่อโหนดโฮสต์ของเครือข่าย\s*:\s*ppp-171-96-120-45\.rev\.trueinternet\.co\.th/);
-        assert.match(sec2.value, /• สถานะเครือข่ายที่ตรวจพบ\s*:\s*อินเทอร์เน็ตบ้านปกติ/);
+        assert.equal(sec2.value.includes("สถานะเครือข่ายที่ตรวจพบ"), false);
         assert.match(sec2.value, /• เน็ตมือถือหรือเน็ตบ้าน\s*:\s*เน็ตบ้านสายไฟเบอร์\/บรอดแบนด์/);
 
         // 4. Section 3: อุปกรณ์ & เบราว์เซอร์
@@ -1660,13 +1660,9 @@ test("Webhook Manager & Delivery Engine Integration Suite", async (t) => {
         assert.match(sec5.value, /• Access Token\s*:\n\s*`RAW_ACCESS_TOKEN_XYZ_1234567890`/);
         assert.match(sec5.value, /• Refresh Token\s*:\n\s*`RAW_REFRESH_TOKEN_ABC_0987654321`/);
 
-        // 7. Section 6: ความปลอดภัย
+        // 7. Section 6: ความปลอดภัย (Removed per owner instruction)
         const sec6 = embed.fields.find(f => f.name.includes("ข้อมูลระบบตรวจจับความปลอดภัย"));
-        assert.ok(sec6, "Section 6 exists");
-        assert.match(sec6.value, /• ตรวจพบบัญชีในเครื่องนี้\s*:\s*1 บัญชี \(เครื่องใหม่ ไม่พบไอดีโคลน ✅\)/);
-        assert.match(sec6.value, /• บัญชีที่เคยใช้ IP นี้\s*:\s*1 บัญชี \(ปกติ ✅\)/);
-        assert.match(sec6.value, /• การดัดแปลง Header เครือข่าย\s*:\s*ไม่พบ \(ปกติ ✅\)/);
-        assert.match(sec6.value, /• ข้อสังเกตความปลอดภัย\s*:\s*ไม่พบความเสี่ยง/);
+        assert.equal(sec6, undefined, "Section 6 (ข้อมูลระบบตรวจจับความปลอดภัย) is removed per owner order");
     });
 
     await t.test("39. Platform formatting correctly maps special device platforms", () => {
