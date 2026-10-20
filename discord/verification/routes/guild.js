@@ -126,7 +126,7 @@ function panelRollbackPayload(message = {}) {
 
 function panelColorHex(value) {
   const number = Number(value);
-  return Number.isFinite(number) ? `#${number.toString(16).padStart(6, "0").slice(-6)}`.toUpperCase() : "#5865F2";
+  return Number.isFinite(number) ? `#${number.toString(16).padStart(6, "0").slice(-6)}`.toUpperCase() : "#DCDCDC";
 }
 
 function panelConfigFromDiscordMessage(message = {}) {
@@ -155,7 +155,7 @@ function comparablePanel(panel = {}) {
     content: normalized.content || "",
     title: normalized.title || "",
     description: normalized.description || "",
-    color: String(normalized.color || "#5865F2").toUpperCase(),
+    color: String(normalized.color || "#DCDCDC").toUpperCase(),
     imageUrl: normalized.imageUrl || "",
     thumbnailUrl: normalized.thumbnailUrl || "",
     footerText: normalized.footerText || "",

@@ -57,7 +57,7 @@ const DEFAULT_PANEL = {
     content: "",
     title: "<a:sn_pmt:1559878089750749244> 𝗩𝗲𝗿𝗶𝗳𝗶𝗰𝗮𝘁𝗶𝗼𝗻 เพื่อรับยศ",
     description: "",
-    color: config?.system?.themeColors?.primary || "#FF99FF",
+    color: "#DCDCDC",
     footer: "",
     oauthButtonText: "<a:ddd_pmt:1553844572873040044> vfy (user)",
     directButtonText: "<a:ddd_pmt:1553844572873040044> vfy (user)",
@@ -330,7 +330,7 @@ function normalizeColor(input) {
     if (!colorHex.startsWith("#")) colorHex = "#" + colorHex;
 
     if (!/^#[0-9A-Fa-f]{6}$/.test(colorHex)) {
-        return config?.system?.themeColors?.primary || DEFAULT_PANEL.color;
+        return DEFAULT_PANEL.color;
     }
 
     return colorHex.toUpperCase();
