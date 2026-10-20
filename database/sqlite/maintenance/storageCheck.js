@@ -157,7 +157,7 @@ function assessPlacementWarnings(pathsInfo, persistenceInfo, isProduction, allow
         return { persistentRecommended: false, pathWarning: false, warnings: [], errors: [] };
     }
 
-    if (allowInSource) {
+    if (allowInSource === true) {
         return {
             persistentRecommended: true,
             pathWarning: false,
@@ -173,8 +173,12 @@ function assessPlacementWarnings(pathsInfo, persistenceInfo, isProduction, allow
         warnings.push(warnMsg);
 
         if (hasInSource) {
-            const fatalMsg = `[PRODUCTION_STORAGE] ❌ In production mode, SQLite storage must not reside inside source tree (${repoRoot}) without explicit operator override ALLOW_IN_SOURCE_STORAGE=true. (Mount external volume e.g. /persistent/... or configure explicit external paths SQLITE_DB_PATH, SQLITE_BACKUP_DIR, SQLITE_ASSET_DIR).`;
-            errors.push(fatalMsg);
+            if (allowInSource === false) {
+                const fatalMsg = `[PRODUCTION_STORAGE] ❌ In production mode, SQLite storage must not reside inside source tree (${repoRoot}) without explicit operator override ALLOW_IN_SOURCE_STORAGE=true. (Mount external volume e.g. /persistent/... or configure explicit external paths SQLITE_DB_PATH, SQLITE_BACKUP_DIR, SQLITE_ASSET_DIR).`;
+                errors.push(fatalMsg);
+            } else {
+                warnings.push(`[PRODUCTION_STORAGE] ℹ️ Auto-storage mode selected local workspace directory (${repoRoot}/data). Ensure persistent volumes (/persistent) are configured in hosting dashboard if data must survive container rebuilds.`);
+            }
         }
         return { persistentRecommended: true, pathWarning: true, warnings, errors };
     }
@@ -271,7 +275,16 @@ function checkVolumeSpaces(targetDirs, permissions) {
 function evaluateStoragePaths(options = {}) {
     const isProduction = (options.env || process.env.NODE_ENV) === "production";
     const repoRoot = path.resolve(process.cwd());
-    const allowInSource = options.allowInSource !== undefined ? Boolean(options.allowInSource) : process.env.ALLOW_IN_SOURCE_STORAGE === "true";
+    let allowInSource;
+    if (options.allowInSource !== undefined) {
+        allowInSource = Boolean(options.allowInSource);
+    } else if (process.env.ALLOW_IN_SOURCE_STORAGE === "true") {
+        allowInSource = true;
+    } else if (process.env.ALLOW_IN_SOURCE_STORAGE === "false" || process.env.STORAGE_STRICT === "true") {
+        allowInSource = false;
+    } else {
+        allowInSource = null;
+    }
 
     const pathsInfo = resolveStoragePaths(options, repoRoot);
     const persistenceInfo = classifyPersistence(pathsInfo, isProduction);
