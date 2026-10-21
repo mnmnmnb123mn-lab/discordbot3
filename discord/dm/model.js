@@ -37,17 +37,25 @@ const DmNotificationFacade = {
     async updateOne(filter, update, options) {
         return getDmNotificationRepository().updateOne(filter, update, options);
     },
-    async findOne(filter) {
-        return getDmNotificationRepository().findOne(filter);
-    },
-    async findOneAndUpdate(filter, update, options) {
+    findOne(filter) {
         const repo = getDmNotificationRepository();
-        if (update?.$set?.status === "sending") {
-            const claimed = repo.claimRecord({ id: filter._id, _id: filter._id });
-            return claimed;
-        }
-        repo.updateOne(filter, update);
-        return repo.findOne(filter);
+        const promise = Promise.resolve().then(() => repo.findOne(filter));
+        promise.lean = () => promise;
+        return promise;
+    },
+    findOneAndUpdate(filter, update, options) {
+        const repo = getDmNotificationRepository();
+        const execute = async () => {
+            if (update?.$set?.status === "sending") {
+                const claimed = repo.claimRecord({ id: filter._id, _id: filter._id });
+                return claimed;
+            }
+            repo.updateOne(filter, update);
+            return repo.findOne(filter);
+        };
+        const promise = execute();
+        promise.lean = () => promise;
+        return promise;
     },
     find(filter = {}) {
         const repo = getDmNotificationRepository();
@@ -62,6 +70,9 @@ const DmNotificationFacade = {
             },
             async lean() {
                 return repo.find(filter, { limit: this._limit, sort: this._sort });
+            },
+            then(onFulfilled, onRejected) {
+                return this.lean().then(onFulfilled, onRejected);
             }
         };
     },
