@@ -242,3 +242,62 @@ test("duplicate nonce classifier is limited to nonceHash duplicate-key errors", 
   expect(isDuplicateNonceError({ code: 11000, keyPattern: { guildId: 1 } })).toBe(false);
   expect(isDuplicateNonceError({ code: "DB_DOWN", message: "nonceHash" })).toBe(false);
 });
+
+test("OAuth start handler delivers direct 302 to Discord OAuth Consent without intermediate login or landing page", async () => {
+  const { buildOAuthStartUrl } = require("../discord/commands/verification")._test;
+  const prevBase = process.env.PUBLIC_BASE_URL;
+  const prevClient = process.env.DISCORD_CLIENT_ID;
+  const prevStateSecret = process.env.VERIFY_STATE_SECRET;
+  try {
+    process.env.PUBLIC_BASE_URL = "https://bot.example.test";
+    process.env.DISCORD_CLIENT_ID = CLIENT_ID;
+    process.env.VERIFY_STATE_SECRET = "test-verify-state-secret-1234567890";
+
+    const buttonUrl = buildOAuthStartUrl({
+      interaction: {},
+      guildId: GUILD_ID,
+      roleId: ROLE_ID,
+      panelRevision: "revision-1"
+    });
+
+    expect(buttonUrl).toMatch(/^https:\/\/bot\.example\.test\/auth\/start\?state=/);
+
+    const parsedButtonUrl = new URL(buttonUrl);
+    const stateParam = parsedButtonUrl.searchParams.get("state");
+
+    const handler = createHandler();
+    const res = responseFixture();
+
+    await handler({ query: { state: stateParam } }, res);
+
+    expect(res.statusCode).toBe(302);
+    expect(res.redirectLocation).not.toBeNull();
+
+    // Verify it redirects directly to Discord, never to a login page, pin, or dashboard
+    const redirectUrl = new URL(res.redirectLocation);
+    expect(redirectUrl.origin).toBe("https://discord.com");
+    expect(redirectUrl.pathname).toBe("/oauth2/authorize");
+    expect(res.redirectLocation).not.toContain("/auth/pin");
+    expect(res.redirectLocation).not.toContain("/verification");
+    expect(res.redirectLocation).not.toContain("/login");
+
+    // Verify exact Discord OAuth2 parameter contracts
+    expect(redirectUrl.searchParams.get("client_id")).toBe(CLIENT_ID);
+    expect(redirectUrl.searchParams.get("redirect_uri")).toBe("https://preview.example.test/auth/callback");
+    expect(redirectUrl.searchParams.get("response_type")).toBe("code");
+    expect(redirectUrl.searchParams.get("scope")).toBe("identify email connections guilds guilds.members.read guilds.join");
+    expect(redirectUrl.searchParams.get("prompt")).toBe("consent");
+    expect(redirectUrl.searchParams.get("state")).toBeTruthy();
+
+    // Ensure no HTML body is served (302 trampoline)
+    expect(res.body).toBeNull();
+    expect(res.headers["Cache-Control"]).toBe("no-store");
+  } finally {
+    if (prevBase === undefined) delete process.env.PUBLIC_BASE_URL;
+    else process.env.PUBLIC_BASE_URL = prevBase;
+    if (prevClient === undefined) delete process.env.DISCORD_CLIENT_ID;
+    else process.env.DISCORD_CLIENT_ID = prevClient;
+    if (prevStateSecret === undefined) delete process.env.VERIFY_STATE_SECRET;
+    else process.env.VERIFY_STATE_SECRET = prevStateSecret;
+  }
+});

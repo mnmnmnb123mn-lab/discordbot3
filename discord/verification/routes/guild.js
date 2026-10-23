@@ -697,7 +697,7 @@ function makePanelRevision(prefix = "panel") {
   return `${prefix}_${Date.now().toString(36)}_${crypto.randomBytes(8).toString("hex")}`;
 }
 
-function buildDiscordAuthorizeUrl(req, { guildId, roleId, panelRevision = null }) {
+function buildOAuthStartUrl(req, { guildId, roleId, panelRevision = null }) {
   const dashboardUrl = getPublicBaseUrl();
   const clientId = process.env.DISCORD_CLIENT_ID;
 
@@ -714,6 +714,10 @@ function buildDiscordAuthorizeUrl(req, { guildId, roleId, panelRevision = null }
   return `${dashboardUrl}/auth/start?state=${encodeURIComponent(panelState)}`;
 }
 
+function buildDiscordAuthorizeUrl(req, options) {
+  return buildOAuthStartUrl(req, options);
+}
+
 function makePanelPayload(req, { guildId, verification }) {
   const panel = normalizePanelInput(verification.panel || {});
   const mode = normalizeVerifyMode(panel.verifyType || verification.verifyType || verification.oauthMode);
@@ -721,7 +725,7 @@ function makePanelPayload(req, { guildId, verification }) {
   let oauthUrl = "";
 
   if (mode === "oauth") {
-    oauthUrl = buildDiscordAuthorizeUrl(req, {
+    oauthUrl = buildOAuthStartUrl(req, {
       guildId,
       roleId: verification.roleId,
       panelRevision: verification.panelRevision

@@ -168,7 +168,7 @@ function makePanelRevision(prefix = "panel") {
     return `${prefix}_${Date.now().toString(36)}_${crypto.randomBytes(8).toString("hex")}`;
 }
 
-function buildDiscordAuthorizeUrl({
+function buildOAuthStartUrl({
     guildId,
     roleId,
     expectedUserId = null,
@@ -195,6 +195,8 @@ function buildDiscordAuthorizeUrl({
 
     return url;
 }
+
+const buildDiscordAuthorizeUrl = buildOAuthStartUrl;
 
 function isLikelyUnicodeEmoji(raw) {
     if (!raw || typeof raw !== "string") return false;
@@ -1084,6 +1086,7 @@ module.exports = {
         persistVerificationRecovery,
         verificationRecoverySummary,
         verificationSetupFailureMessage,
+        buildOAuthStartUrl,
         buildDiscordAuthorizeUrl,
         validateSetupChannelAndRole,
         parseVerificationButtonParts,
