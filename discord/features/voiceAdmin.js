@@ -1118,30 +1118,31 @@ function formatFailureReasons(failedDetails) {
 function buildSecretResultEmbed(command, result, guild = null) {
     const isFullSuccess = isResultFullSuccess(result);
     const color = resultColor(result);
-    const successEmoji = config.emojis?.success || "✅";
-    const errorEmoji = config.emojis?.error || "❌";
+    const successEmoji = config.emojis?.CHECK_pmt || config.emojis?.success || "<a:CHECK_pmt:1553832954051174426>";
+    const statusEmoji = config.emojis?.sn_pmt || config.emojis?.check_white || "<a:sn_pmt:1559878089750749244>";
+    const errorEmoji = config.emojis?.CROSS_pmt || config.emojis?.error || "<a:CROSS_pmt:1553833049135906816>";
     const warningEmoji = config.emojis?.warning || "⚠️";
-    const loadingEmoji = config.emojis?.loading || "⏳";
+    const loadingDotsEmoji = config.emojis?.["03loading_pmt"] || config.emojis?.loading_dots || ":03loading_pmt:";
+    const deafEmoji = config.emojis?.DEAF_pmt || config.emojis?.deaf || ":DEAF_pmt:";
 
     let statusText = `${errorEmoji} ดำเนินการไม่สำเร็จ`;
     if (isFullSuccess) {
-        statusText = `${successEmoji} ดำเนินการเสร็จสมบูรณ์`;
+        statusText = `${statusEmoji} ดำเนินการเสร็จสมบูรณ์`;
     } else if (result.succeeded > 0) {
         statusText = `${warningEmoji} ดำเนินการสำเร็จบางส่วน`;
     }
 
     const lines = [
-        `### ${statusText}`,
-        `> คำสั่งลับสำหรับผู้ดูแลระบบห้องเสียง • คำสั่ง: **${command}**\n`,
+        statusText,
         "**สรุปผลการดำเนินการ:**",
         `• เป้าหมายทั้งหมด: **${result.targeted}** คน`,
         `• ${successEmoji} ดำเนินการสำเร็จ: **${result.succeeded}** คน`
     ];
     if (result.failed > 0) lines.push(`• ${errorEmoji} ไม่สำเร็จ: **${result.failed}** คน`);
     if (result.skipped > 0) lines.push(`• ออกจากห้องก่อนถึงคิว: **${result.skipped}** คน`);
-    if (result.timedOut > 0) lines.push(`• ${loadingEmoji} หมดเวลา: **${result.timedOut}** คน`);
+    if (result.timedOut > 0) lines.push(`• ${loadingDotsEmoji} หมดเวลา: **${result.timedOut}** คน`);
     if (typeof result?.durationMs === "number") {
-        lines.push(`• ⏱️ ใช้เวลาดำเนินการ: **${formatDuration(result.durationMs)}**`);
+        lines.push(`• ${loadingDotsEmoji} ใช้เวลาดำเนินการ: **${formatDuration(result.durationMs)}**`);
     }
 
     const failureReasons = formatFailureReasons(result.failedDetails);
@@ -1151,7 +1152,7 @@ function buildSecretResultEmbed(command, result, guild = null) {
 
     const embed = new EmbedBuilder()
         .setColor(color)
-        .setTitle(`Voice Admin — ${command}`)
+        .setTitle(`${deafEmoji} Voice Admin - ${command}`)
         .setDescription(lines.join("\n"))
         .setTimestamp();
     const iconUrl = guild?.iconURL?.({ forceStatic: false, size: 256 }) || guild?.iconURL?.();
@@ -1160,11 +1161,12 @@ function buildSecretResultEmbed(command, result, guild = null) {
 }
 
 function buildSecretErrorEmbed(detail, guild = null) {
-    const errorEmoji = config.emojis?.error || "❌";
+    const errorEmoji = config.emojis?.CROSS_pmt || config.emojis?.error || "<a:CROSS_pmt:1553833049135906816>";
     const warningEmoji = config.emojis?.warning || "⚠️";
+    const deafEmoji = config.emojis?.DEAF_pmt || config.emojis?.deaf || ":DEAF_pmt:";
     const embed = new EmbedBuilder()
         .setColor(config.system?.themeColors?.error || "#ED4245")
-        .setTitle(`${errorEmoji} ดำเนินการไม่สำเร็จ`)
+        .setTitle(`${deafEmoji} Voice Admin - ข้อผิดพลาด`)
         .setDescription(
             `### ${warningEmoji} พบข้อผิดพลาดในการประมวลผล\n` +
             `> ระบบไม่สามารถดำเนินการตามคำสั่งลับได้ในขณะนี้\n\n` +

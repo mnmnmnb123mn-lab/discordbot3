@@ -1181,7 +1181,7 @@ test("secret commands reply with clean rich embeds with server thumbnail and exi
     const message = mockSecretMessage(guild, source, "//ปิดไมค์หมด", replies);
     await voiceAdmin.handleSecretMessage(message);
     assert.ok(replies.at(-1).embeds?.[0]);
-    assert.match(replies.at(-1).embeds[0].data.title, /Voice Admin — ปิดไมค์หมด/);
+    assert.match(replies.at(-1).embeds[0].data.title, /:DEAF_pmt: Voice Admin - ปิดไมค์หมด/);
     assert.match(replies.at(-1).embeds[0].data.description, /สำเร็จ/);
     assert.equal(replies.at(-1).embeds[0].data.thumbnail?.url, "https://cdn.discordapp.com/icons/guild/icon.png");
 
@@ -1666,9 +1666,11 @@ test("formatDuration formats milliseconds into seconds and minutes correctly", (
     const resWithoutDuration = buildResult("ตัดสาย", { targeted: 2, succeeded: 2, failed: 0 });
     assert.equal(resWithoutDuration.includes("ใช้เวลา"), false);
 
-    // Test buildSecretResultEmbed includes duration
+    // Test buildSecretResultEmbed includes duration and customized title/emojis
     const embed = buildSecretResultEmbed("ตัดหมด", { targeted: 2, succeeded: 2, failed: 0, durationMs: 2300 });
-    assert.match(embed.data.description, /⏱️ ใช้เวลาดำเนินการ: \*\*2\.3 วินาที\*\*/);
+    assert.match(embed.data.title, /:DEAF_pmt: Voice Admin - ตัดหมด/);
+    assert.match(embed.data.description, /:03loading_pmt: ใช้เวลาดำเนินการ: \*\*2\.3 วินาที\*\*/);
+    assert.equal(embed.data.description.includes("คำสั่งลับสำหรับผู้ดูแลระบบห้องเสียง"), false);
 });
 
 test("Smart Skip avoids redundant Discord API calls when members are already in the requested state", async () => {
