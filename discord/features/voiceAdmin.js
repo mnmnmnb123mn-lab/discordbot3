@@ -760,10 +760,18 @@ function formatDuration(durationMs) {
 }
 
 function buildResult(action, result) {
-    const skipped = result.skipped ? ` | ออกจากห้องก่อนถึงคิว ${result.skipped} คน` : "";
-    const timeout = result.timedOut ? ` | หมดเวลา ${result.timedOut} คน` : "";
-    const duration = typeof result?.durationMs === "number" ? ` | ใช้เวลา ${formatDuration(result.durationMs)}` : "";
-    return `**${action}** — เป้าหมาย ${result.targeted} คน | สำเร็จ ${result.succeeded} คน | ไม่สำเร็จ ${result.failed} คน${skipped}${timeout}${duration}`;
+    const lines = [
+        `**${action}**`,
+        `• เป้าหมาย ${result.targeted} คน`,
+        `• สำเร็จ ${result.succeeded} คน`,
+        `• ไม่สำเร็จ ${result.failed} คน`
+    ];
+    if (result.skipped) lines.push(`• ออกจากห้องก่อนถึงคิว ${result.skipped} คน`);
+    if (result.timedOut) lines.push(`• หมดเวลา ${result.timedOut} คน`);
+    if (typeof result?.durationMs === "number") {
+        lines.push(`• ใช้เวลา ${formatDuration(result.durationMs)}`);
+    }
+    return lines.join("\n");
 }
 function _isOperationCompleteSuccess(targeted, succeeded, incomplete) {
     return targeted > 0 && succeeded === targeted && incomplete === 0;
@@ -1036,7 +1044,7 @@ async function _executePanelAction(interaction, action, destination) {
     await interaction.editReply(buildPanel(interaction.channel, `> ${_resolveActionLoadingText(action)}`, action)).catch(() => {});
     try {
         const result = await runPanelAction(interaction, action, destination);
-        return interaction.editReply(buildPanel(interaction.channel, `> ${resultEmoji(result)} ${buildResult("ผลการทำงาน", result)}`, action));
+        return interaction.editReply(buildPanel(interaction.channel, `${resultEmoji(result)} ${buildResult("ผลการทำงาน", result)}`, action));
     }
     catch (error) {
         const detail = describePanelActionFailure(error);

@@ -703,7 +703,8 @@ test("component matcher and result format include new numeric result fields", ()
     assert.equal(_test.isVoiceAdminInteraction({ isButton: () => true, customId: IDS.LOCK_MUTE }), true);
     assert.equal(_test.isVoiceAdminInteraction({ isChannelSelectMenu: () => true, customId: IDS.MOVE }), true);
     assert.equal(_test.isVoiceAdminInteraction({ isButton: () => true, customId: "btn_start" }), false);
-    assert.match(_test.buildResult("งาน", { targeted: 3, succeeded: 1, failed: 1, timedOut: 1, persistenceFailed: 1 }), /หมดเวลา 1 คน/);
+    assert.match(_test.buildResult("งาน", { targeted: 3, succeeded: 1, failed: 1, timedOut: 1, persistenceFailed: 1 }), /• หมดเวลา 1 คน/);
+    assert.match(_test.buildResult("ผลการทำงาน", { targeted: 1, succeeded: 1, failed: 0, durationMs: 0 }), /\*\*ผลการทำงาน\*\*\n• เป้าหมาย 1 คน\n• สำเร็จ 1 คน\n• ไม่สำเร็จ 0 คน\n• ใช้เวลา 0\.0 วินาที/);
     assert.equal(_test.resultEmoji({ targeted: 2, succeeded: 2, failed: 0, skipped: 0, timedOut: 0, persistenceFailed: 0 }), config.emojis?.success || "✅");
     assert.equal(_test.resultEmoji({ targeted: 2, succeeded: 1, failed: 1, skipped: 0, timedOut: 0, persistenceFailed: 0 }), config.emojis?.warning || "⚠️");
     assert.equal(_test.resultEmoji({ targeted: 2, succeeded: 0, failed: 2, skipped: 0, timedOut: 0, persistenceFailed: 2 }), config.emojis?.error || "❌");
@@ -762,6 +763,7 @@ test("panel interactions refresh, reject invalid controls, and execute selected 
     await voiceAdmin.handleVoiceAdminInteraction({ ...base, customId: IDS.DISCONNECT });
     assert.deepEqual(target.calls.at(-1), ["disconnect"]);
     assert.match(base.edited.embeds[0].data.title, /:DEAF_pmt: Voice Admin - ตัดสายทั้งหมด/);
+    assert.match(base.edited.embeds[0].data.description, /(?:<a:CHECK_pmt:\d+>|:CHECK_pmt:) \*\*ผลการทำงาน\*\*\n• เป้าหมาย 1 คน\n• สำเร็จ 1 คน\n• ไม่สำเร็จ 0 คน/);
 });
 
 test("owner message commands are handled before normal processing and malformed messages exit silently", async () => {
