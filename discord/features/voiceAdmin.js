@@ -25,6 +25,20 @@ const IDS = Object.freeze({
     UNLOCK_DEAF: "voiceadmin:unlock-deaf", REFRESH: "voiceadmin:refresh", MOVE: "voiceadmin:move"
 });
 
+const PANEL_ACTION_NAMES = Object.freeze({
+    disconnect: "ตัดสายทั้งหมด",
+    mute: "ปิดไมค์",
+    deaf: "ปิดหู",
+    unmute: "เปิดไมค์",
+    undeaf: "เปิดหู",
+    move: "ย้ายสมาชิก"
+});
+
+function resolvePanelActionName(action) {
+    if (!action) return null;
+    return PANEL_ACTION_NAMES[action] || action;
+}
+
 let defaultRepo = null;
 function getRepository() {
     if (!defaultRepo) defaultRepo = new VoiceAdminRepository();
@@ -791,7 +805,7 @@ function isStillInSource(member, source) {
     const channelId = member?.voice?.channelId || member?.voice?.channel?.id || null;
     return String(channelId || "") === String(source.id);
 }
-function buildPanel(channel, status = null) {
+function buildPanel(channel, status = null, action = null) {
     const members = Array.from(channel?.members?.values?.() || []); const inChannel = new Set(members.map(member => String(member.id)));
     let mute = 0; let deaf = 0;
     for (const [id, lock] of getGuildLocks(channel?.guild?.id)) {
@@ -808,9 +822,12 @@ function buildPanel(channel, status = null) {
     if (status) {
         descriptionLines.push(`\n${status}`);
     }
+    const deafEmoji = config.emojis?.DEAF_pmt || config.emojis?.deaf || ":DEAF_pmt:";
+    const actionName = resolvePanelActionName(action);
+    const title = actionName ? `${deafEmoji} Voice Admin - ${actionName}` : `${deafEmoji} Voice Admin`;
     const embed = new EmbedBuilder()
         .setColor(config.system?.themeColors?.primary || "#5865F2")
-        .setTitle(`${config.emojis?.voice_ch || "🔊"} จัดการห้องเสียง`)
+        .setTitle(title)
         .setDescription(descriptionLines.join("\n"))
         .setTimestamp();
     const iconUrl = channel?.guild?.iconURL?.({ forceStatic: false, size: 256 }) || channel?.guild?.iconURL?.();
@@ -1003,26 +1020,27 @@ async function _resolveMoveDestination(interaction) {
 }
 
 function _resolveActionLoadingText(action) {
+    const loadingDotsEmoji = config.emojis?.["03loading_pmt"] || config.emojis?.loading_dots || config.emojis?.loading || "⏳";
     const actionLoadingText = ({
-        disconnect: `${config.emojis?.loading || "⏳"} กำลังตัดสายทั้งหมด...`,
-        mute: `${config.emojis?.loading || "⏳"} กำลังปิดไมค์...`,
-        deaf: `${config.emojis?.loading || "⏳"} กำลังปิดหู...`,
-        unmute: `${config.emojis?.loading || "⏳"} กำลังเปิดไมค์...`,
-        undeaf: `${config.emojis?.loading || "⏳"} กำลังเปิดหู...`,
-        move: `${config.emojis?.loading || "⏳"} กำลังย้ายสมาชิก...`
+        disconnect: `${loadingDotsEmoji} กำลังตัดสายทั้งหมด...`,
+        mute: `${loadingDotsEmoji} กำลังปิดไมค์...`,
+        deaf: `${loadingDotsEmoji} กำลังปิดหู...`,
+        unmute: `${loadingDotsEmoji} กำลังเปิดไมค์...`,
+        undeaf: `${loadingDotsEmoji} กำลังเปิดหู...`,
+        move: `${loadingDotsEmoji} กำลังย้ายสมาชิก...`
     })[action];
-    return actionLoadingText || `${config.emojis?.loading || "⏳"} กำลังดำเนินการ...`;
+    return actionLoadingText || `${loadingDotsEmoji} กำลังดำเนินการ...`;
 }
 
 async function _executePanelAction(interaction, action, destination) {
-    await interaction.editReply(buildPanel(interaction.channel, `> ${_resolveActionLoadingText(action)}`)).catch(() => {});
+    await interaction.editReply(buildPanel(interaction.channel, `> ${_resolveActionLoadingText(action)}`, action)).catch(() => {});
     try {
         const result = await runPanelAction(interaction, action, destination);
-        return interaction.editReply(buildPanel(interaction.channel, `> ${resultEmoji(result)} ${buildResult("ผลการทำงาน", result)}`));
+        return interaction.editReply(buildPanel(interaction.channel, `> ${resultEmoji(result)} ${buildResult("ผลการทำงาน", result)}`, action));
     }
     catch (error) {
         const detail = describePanelActionFailure(error);
-        return interaction.editReply(buildPanel(interaction.channel, `> ${config.emojis?.error || "❌"} ${detail}`));
+        return interaction.editReply(buildPanel(interaction.channel, `> ${config.emojis?.CROSS_pmt || config.emojis?.error || "❌"} ${detail}`, action));
     }
 }
 
@@ -1032,7 +1050,7 @@ async function handleVoiceAdminInteraction(interaction) {
     if (interaction.customId === IDS.REFRESH) return interaction.update(buildPanel(interaction.channel));
     await interaction.deferUpdate();
     const action = PANEL_ACTION_MAP[interaction.customId];
-    if (!action) return interaction.editReply(buildPanel(interaction.channel, `> ${config.emojis?.error || "❌"} คำสั่งแผงนี้ไม่ถูกต้อง`));
+    if (!action) return interaction.editReply(buildPanel(interaction.channel, `> ${config.emojis?.CROSS_pmt || config.emojis?.error || "❌"} คำสั่งแผงนี้ไม่ถูกต้อง`, "ข้อผิดพลาด"));
     const destination = action === "move" ? await _resolveMoveDestination(interaction) : null;
     return _executePanelAction(interaction, action, destination);
 }
@@ -1647,7 +1665,7 @@ module.exports = {
     handleVoiceStateUpdate, handleAuditLogEntry, handleMemberUpdate, handleMemberRemove, reconcileConnectedLocks,
     _test: {
         parseSecretCommand, sourceMembers, isVoiceChannel, isStillInSource, buildResult, resultEmoji, buildPersistenceFailureContext, getLock, setCachedLock, lockKey, noticeKey, BULK_SKIPPED,
-        changeContains, buildPanel, isAdministrator, verifyVoiceAdminAccess, runBulkUnsafe, withDeadline, isVoiceAdminInteraction,
+        changeContains, buildPanel, PANEL_ACTION_NAMES, resolvePanelActionName, isAdministrator, verifyVoiceAdminAccess, runBulkUnsafe, withDeadline, isVoiceAdminInteraction,
         operationWasAcknowledged, writeLock, clearLockField, clearBothLocks, clearAllLocksForMember, lockVoiceState,
         unlockVoiceState, unlockBoth, disconnectMembers, moveMembers, ensureBotPermission, runPanelAction, setVoiceBoth,
         isPermanentDiscordError, classifyVoiceAdminError, formatFailureReasons, buildSecretResultEmbed,

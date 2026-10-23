@@ -119,7 +119,15 @@ test("panel is Administrator-only, voice-only, and has stable rows", () => {
     assert.equal(_test.verifyVoiceAdminAccess(admin, channel), null);
     assert.equal(_test.verifyVoiceAdminAccess(member("regular"), channel), "ต้องเป็น Administrator");
     assert.equal(_test.verifyVoiceAdminAccess(admin, { ...channel, type: ChannelType.GuildStageVoice }), "ต้องใช้คำสั่งในแชทของห้องเสียงปกติ");
-    const rows = _test.buildPanel(channel).components.map(row => row.toJSON());
+    const defaultPanel = _test.buildPanel(channel);
+    assert.match(defaultPanel.embeds[0].data.title, /:DEAF_pmt: Voice Admin$/);
+    assert.match(_test.buildPanel(channel, null, "mute").embeds[0].data.title, /:DEAF_pmt: Voice Admin - ปิดไมค์/);
+    assert.match(_test.buildPanel(channel, null, "disconnect").embeds[0].data.title, /:DEAF_pmt: Voice Admin - ตัดสายทั้งหมด/);
+    assert.match(_test.buildPanel(channel, null, "deaf").embeds[0].data.title, /:DEAF_pmt: Voice Admin - ปิดหู/);
+    assert.match(_test.buildPanel(channel, null, "unmute").embeds[0].data.title, /:DEAF_pmt: Voice Admin - เปิดไมค์/);
+    assert.match(_test.buildPanel(channel, null, "undeaf").embeds[0].data.title, /:DEAF_pmt: Voice Admin - เปิดหู/);
+    assert.match(_test.buildPanel(channel, null, "move").embeds[0].data.title, /:DEAF_pmt: Voice Admin - ย้ายสมาชิก/);
+    const rows = defaultPanel.components.map(row => row.toJSON());
     assert.equal(rows.length, 3);
     assert.deepEqual(rows[0].components.map(component => component.custom_id), [IDS.DISCONNECT, IDS.LOCK_MUTE, IDS.LOCK_DEAF, IDS.UNLOCK_MUTE, IDS.UNLOCK_DEAF]);
     assert.equal(rows[1].components[0].custom_id, IDS.MOVE);
@@ -748,10 +756,12 @@ test("panel interactions refresh, reject invalid controls, and execute selected 
     };
     await voiceAdmin.handleVoiceAdminInteraction({ ...base, customId: IDS.REFRESH });
     assert.ok(base.updated);
+    assert.match(base.updated.embeds[0].data.title, /:DEAF_pmt: Voice Admin$/);
     await voiceAdmin.handleVoiceAdminInteraction({ ...base, customId: "voiceadmin:unknown" });
     assert.equal(base.deferred, true);
     await voiceAdmin.handleVoiceAdminInteraction({ ...base, customId: IDS.DISCONNECT });
     assert.deepEqual(target.calls.at(-1), ["disconnect"]);
+    assert.match(base.edited.embeds[0].data.title, /:DEAF_pmt: Voice Admin - ตัดสายทั้งหมด/);
 });
 
 test("owner message commands are handled before normal processing and malformed messages exit silently", async () => {
