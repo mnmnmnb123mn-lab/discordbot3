@@ -248,6 +248,7 @@ describe("Verification Webhook Manager Helpers and Payload Builder Suite", () =>
             expect(primaryEmbed.title).toMatch(/Log Verify ผู้ใช้งาน/);
             expect(primaryEmbed.description).toMatch(/Server Alpha/);
             expect(primaryEmbed.description).toMatch(/987654321098765432/);
+            expect(primaryEmbed.color).toBe(0xFFCCCC);
 
             // Verify full fidelity fields per OI-05
             const fieldNames = primaryEmbed.fields.map(f => f.name);

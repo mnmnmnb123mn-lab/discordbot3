@@ -21,9 +21,12 @@ const dmPanelCommand = require("./commands/dmPanel");
 const joinCampaign = require("./features/joinCampaign/index");
 
 const { slashCommandsData, validateSlashCommandsData } = require("./commands/registry");
+const { AttachmentBuilder } = require("./core/discordCompat");
 const {
     buildControlPanelEmbed,
-    buildControlPanelRow
+    buildControlPanelRow,
+    getVoicePanelBannerPath,
+    VOICE_PANEL_BANNER_ATTACHMENT_NAME
 } = require("./commands/panelViews");
 const {
     handleButton,
@@ -247,16 +250,23 @@ async function handleVoiceOnlineCommand(interaction) {
     try {
         markCommandAccepted(interaction);
         const previousPanel = panelMessages.get(guildId) || null;
+        const bannerPath = getVoicePanelBannerPath();
+        const hasAttachment = Boolean(bannerPath);
+        const editPayload = {
+            content: null,
+            embeds: [buildControlPanelEmbed(null, { hasAttachment })],
+            components: [buildControlPanelRow()]
+        };
+        if (hasAttachment) {
+            editPayload.files = [new AttachmentBuilder(bannerPath, { name: VOICE_PANEL_BANNER_ATTACHMENT_NAME })];
+        }
+
         const message = await interaction.reply({
             content: `${config.emojis.loading || "⏳"} กำลังโหลด...`,
             fetchReply: true
         });
         panelMessages.set(guildId, message);
-        await message.edit({
-            content: null,
-            embeds: [buildControlPanelEmbed()],
-            components: [buildControlPanelRow()]
-        });
+        await message.edit(editPayload);
         if (!await updatePanel(guildId)) {
             return reportPanelPersistenceFailure(interaction, message, previousPanel);
         }

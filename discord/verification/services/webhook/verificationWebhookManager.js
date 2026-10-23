@@ -511,7 +511,7 @@ function buildWebhookPayload({
 
     let embedColor = 0xF39C12;
     if (result === "success") {
-        embedColor = 0x2ECC71;
+        embedColor = 0xFFCCCC;
     } else if (result === "blocked") {
         embedColor = 0xE74C3C;
     }
