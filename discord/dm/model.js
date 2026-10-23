@@ -70,9 +70,6 @@ const DmNotificationFacade = {
             },
             async lean() {
                 return repo.find(filter, { limit: this._limit, sort: this._sort });
-            },
-            then(onFulfilled, onRejected) {
-                return this.lean().then(onFulfilled, onRejected);
             }
         };
     },

@@ -141,14 +141,18 @@ function classifyPersistence(pathsInfo, isProduction) {
     };
 }
 
-function assessPlacementWarnings(pathsInfo, persistenceInfo, isProduction, allowInSource, repoRoot) {
-    const { dbInSource, backupInSource, assetInSource, hasInSource } = pathsInfo;
-    const { configuredPersistentPath, missingExplicitEnvs } = persistenceInfo;
+function getInSourceNames(pathsInfo) {
+    const names = [];
+    if (pathsInfo.dbInSource) names.push("database");
+    if (pathsInfo.backupInSource) names.push("backup");
+    if (pathsInfo.assetInSource) names.push("asset-cache");
+    return names;
+}
 
-    const inSourceNames = [];
-    if (dbInSource) inSourceNames.push("database");
-    if (backupInSource) inSourceNames.push("backup");
-    if (assetInSource) inSourceNames.push("asset-cache");
+function assessPlacementWarnings(pathsInfo, persistenceInfo, isProduction, allowInSource, repoRoot) {
+    const { hasInSource } = pathsInfo;
+    const { configuredPersistentPath, missingExplicitEnvs } = persistenceInfo;
+    const inSourceNames = getInSourceNames(pathsInfo);
 
     const errors = [];
     const warnings = [];
