@@ -123,8 +123,12 @@ class DmNotificationRepository {
     }
 
     claimRecord(record, now = Date.now()) {
-        const id = record.id || record._id;
+        const id = record?.id || record?._id;
         if (!id) return null;
+
+        const maxAttemptTime = typeof record?.nextAttemptAt?.$lte === "number"
+            ? Math.min(record.nextAttemptAt.$lte, now)
+            : now;
 
         const stmt = this.db.prepare(`
             UPDATE dm_notifications
@@ -132,7 +136,7 @@ class DmNotificationRepository {
             WHERE id = ? AND status IN ('pending', 'retrying') AND next_attempt_at <= ?
         `);
 
-        const info = stmt.run(now, id, now);
+        const info = stmt.run(now, id, maxAttemptTime);
         if (info.changes === 1) {
             return this.findById(id);
         }
