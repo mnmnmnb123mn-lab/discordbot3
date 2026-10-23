@@ -1134,6 +1134,7 @@ function buildSecretResultEmbed(command, result, guild = null) {
 
     const lines = [
         statusText,
+        "",
         "**สรุปผลการดำเนินการ:**",
         `• เป้าหมายทั้งหมด: **${result.targeted}** คน`,
         `• ${successEmoji} ดำเนินการสำเร็จ: **${result.succeeded}** คน`
@@ -1230,8 +1231,9 @@ async function handleSecretMessage(message) {
         excludeId: parsed.includeAdministrators ? message.author.id : null
     });
 
+    const loadingProgressEmoji = config.emojis?.["03loading_pmt"] || config.emojis?.loading_dots || config.emojis?.loading || "⏳";
     const pendingPromise = sendSecretMessage(message, {
-        content: `> ${config.emojis?.loading || "⏳"} กำลังดำเนินการ...`
+        content: `> ${loadingProgressEmoji} กำลังดำเนินการ...`
     }).catch(() => null);
 
     try {
