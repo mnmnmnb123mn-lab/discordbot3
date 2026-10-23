@@ -27,7 +27,7 @@ function buildPreflightConfirmationPayload({
     const embed = new EmbedBuilder()
         .setTitle(`${emoji.shield} ตรวจสอบข้อมูลก่อนเริ่มดึงสมาชิก`)
         .setDescription("ตรวจสอบรายละเอียดด้านล่างให้ถูกต้องเรียบร้อย แล้วกดยืนยันเพื่อเริ่มดึงสมาชิกได้เลยครับ")
-        .setColor(config.system?.themeColors?.success || '#FF99FF')
+        .setColor(config.system?.themeColors?.success || '#CC66FF')
         .addFields([
             {
                 name: `${emoji.sparkle} รูปแบบการทำงาน`,

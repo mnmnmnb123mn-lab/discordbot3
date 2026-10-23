@@ -45,7 +45,7 @@ const QUEST_ERRORS = Object.freeze({
     NO_RUNNABLE_QUESTS: {
         icon: QUEST_EMOJIS.sn,
         status: 'บัญชีนี้ไม่มีเควสต์ที่รองรับ หรือ ทำไปหมดแล้ว',
-        color: config.system?.themeColors?.success || '#FF99FF'
+        color: config.system?.themeColors?.success || '#CC66FF'
     },
     FATAL_AUTH_FAILURE: {
         icon: QUEST_EMOJIS.cross,
@@ -228,7 +228,7 @@ function buildOneShotCheckingEmbed({
     ].join('\n');
 
     const embed = new MessageEmbed()
-        .setColor(config.system?.themeColors?.info || '#FFCCFF')
+        .setColor(config.system?.themeColors?.info || '#FFCCCC')
         .setTitle(`${QUEST_EMOJIS.bell} Log ระบบทำเควส`)
         .setDescription(description)
         .setTimestamp(Number(timestamp));
@@ -302,7 +302,7 @@ function buildOneShotCompletedEmbed({
     }
 
     const embed = new MessageEmbed()
-        .setColor(config.system?.themeColors?.success || '#FF99FF')
+        .setColor(config.system?.themeColors?.success || '#CC66FF')
         .setTitle(`${QUEST_EMOJIS.bell} Log ระบบทำเควส`)
         .setDescription(lines.join('\n'))
         .setTimestamp(Number(timestamp));
@@ -329,7 +329,7 @@ function buildAutoDailyEmbed({
     let todaySupportedText = 'กำลังตรวจสอบ..';
     let todayCompletedText = '-';
     let todayTaskText = '-';
-    let color = config.system?.themeColors?.info || '#FFCCFF';
+    let color = config.system?.themeColors?.info || '#FFCCCC';
 
     if (status === 'running') {
         statusIcon = QUEST_EMOJIS.loading;
@@ -344,7 +344,7 @@ function buildAutoDailyEmbed({
         todaySupportedText = todaySupported != null && todaySupported > 0 ? `${todaySupported} รายการ` : '-';
         todayCompletedText = todayCompleted != null && todayCompleted > 0 ? `${todayCompleted} รายการ` : '-';
         todayTaskText = 'เสร็จสิ้นเเล้ววันนี้';
-        color = config.system?.themeColors?.success || '#FF99FF';
+        color = config.system?.themeColors?.success || '#CC66FF';
     }
 
     const description = [

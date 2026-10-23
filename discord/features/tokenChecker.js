@@ -7,9 +7,9 @@ const config = require('../config.json');
 
 const THEME_COLORS = Object.freeze({
     BOOST: '#EB459E',
-    NITRO: config.system?.themeColors?.info || '#FFCCFF',
-    NORMAL: config.system?.themeColors?.primary || '#FF99FF',
-    BOT: config.system?.themeColors?.info || '#FFCCFF',
+    NITRO: config.system?.themeColors?.info || '#FFCCCC',
+    NORMAL: config.system?.themeColors?.primary || '#CC66FF',
+    BOT: config.system?.themeColors?.info || '#FFCCCC',
     INVALID: config.system?.themeColors?.error || '#FF9999'
 });
 

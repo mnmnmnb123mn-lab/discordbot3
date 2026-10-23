@@ -4,8 +4,8 @@ const { MessageEmbed } = require("../core/discordCompat");
 const config = require("../config.json");
 
 const COLORS = Object.freeze({
-    success: config.system?.themeColors?.success || "#FF99FF",
-    info: config.system?.themeColors?.info || "#FFCCFF",
+    success: config.system?.themeColors?.success || "#CC66FF",
+    info: config.system?.themeColors?.info || "#FFCCCC",
     warning: config.system?.themeColors?.warning || "#D2691E",
     action: config.system?.themeColors?.warning || "#D2691E",
     danger: config.system?.themeColors?.error || "#FF9999",
