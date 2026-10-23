@@ -836,8 +836,7 @@ function buildPanel(channel, status = null, action = null) {
     const embed = new EmbedBuilder()
         .setColor(config.system?.themeColors?.primary || "#5865F2")
         .setTitle(title)
-        .setDescription(descriptionLines.join("\n"))
-        .setTimestamp();
+        .setDescription(descriptionLines.join("\n"));
     const iconUrl = channel?.guild?.iconURL?.({ forceStatic: false, size: 256 }) || channel?.guild?.iconURL?.();
     if (iconUrl) embed.setThumbnail(iconUrl);
     const actions = new ActionRowBuilder().addComponents(
@@ -1180,8 +1179,7 @@ function buildSecretResultEmbed(command, result, guild = null) {
     const embed = new EmbedBuilder()
         .setColor(color)
         .setTitle(`${deafEmoji} Voice Admin - ${command}`)
-        .setDescription(lines.join("\n"))
-        .setTimestamp();
+        .setDescription(lines.join("\n"));
     const iconUrl = guild?.iconURL?.({ forceStatic: false, size: 256 }) || guild?.iconURL?.();
     if (iconUrl) embed.setThumbnail(iconUrl);
     return embed;
@@ -1199,8 +1197,7 @@ function buildSecretErrorEmbed(detail, guild = null) {
             `> ระบบไม่สามารถดำเนินการตามคำสั่งลับได้ในขณะนี้\n\n` +
             `**รายละเอียดข้อผิดพลาด:**\n` +
             `• ${detail}`
-        )
-        .setTimestamp();
+        );
     const iconUrl = guild?.iconURL?.({ forceStatic: false, size: 256 }) || guild?.iconURL?.();
     if (iconUrl) embed.setThumbnail(iconUrl);
     return embed;

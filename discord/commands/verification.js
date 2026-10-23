@@ -871,8 +871,7 @@ function buildVerificationSetupResultEmbed({
                 value: panelOptions.showTs ? "เปิด" : "ปิด",
                 inline: true
             }
-        )
-        .setTimestamp();
+        );
 }
 
 async function handleSetupVerify(interaction) {
@@ -997,7 +996,6 @@ async function executeDirectRoleAssignment(interaction, member, role, roleId) {
                     .setColor(config.system?.themeColors?.success || "#57F287")
                     .setTitle(`${config.emojis?.check_alt || config.emojis?.success || "✅"} รับยศเรียบร้อย`)
                     .setDescription(`ยศ: ${role.toString()}`)
-                    .setTimestamp()
             ],
             ephemeral: true
         });

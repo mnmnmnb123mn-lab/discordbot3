@@ -101,8 +101,7 @@ function buildDmEmbed(options = {}) {
         .setColor(COLORS[options.tone] || COLORS.info)
         .setTitle(title)
         .setDescription(summary)
-        .addFields(fields)
-        .setTimestamp(timestamp);
+        .addFields(fields);
 
     if (profile.avatarUrl) embed.setThumbnail(profile.avatarUrl);
     return embed;
