@@ -392,3 +392,45 @@ test("claimRecord gracefully handles findOneAndUpdate even if lean is not presen
         dmService._test.resetTestState();
     }
 });
+
+test("DmNotification.findOneAndUpdate passes leaseUntil and status filter to claimRecord", async () => {
+    const { getDmNotificationRepository } = require("../../database/repositories/dm");
+    const repo = getDmNotificationRepository();
+    const originalClaimRecord = repo.claimRecord;
+
+    let capturedFilter = null;
+    let capturedNow = null;
+    let capturedLeaseUntil = null;
+
+    repo.claimRecord = (filter, now, leaseUntil) => {
+        capturedFilter = filter;
+        capturedNow = now;
+        capturedLeaseUntil = leaseUntil;
+        return { ...filter, status: "sending", nextAttemptAt: leaseUntil };
+    };
+
+    try {
+        const leaseTarget = Date.now() + 60000;
+        const res = await DmNotification.findOneAndUpdate(
+            {
+                _id: "test_claim_id_123",
+                status: { $in: ["pending", "retrying", "sending"] },
+                nextAttemptAt: { $lte: Date.now() }
+            },
+            {
+                $set: {
+                    status: "sending",
+                    nextAttemptAt: leaseTarget,
+                    updatedAt: Date.now()
+                }
+            }
+        ).lean();
+
+        assert.ok(res);
+        assert.equal(capturedFilter.id, "test_claim_id_123");
+        assert.deepEqual(capturedFilter.status.$in, ["pending", "retrying", "sending"]);
+        assert.equal(capturedLeaseUntil, leaseTarget);
+    } finally {
+        repo.claimRecord = originalClaimRecord;
+    }
+});

@@ -48,7 +48,8 @@ const DmNotificationFacade = {
         const execute = async () => {
             if (update?.$set?.status === "sending") {
                 const targetId = filter?._id || filter?.id;
-                const claimed = repo.claimRecord({ ...filter, id: targetId, _id: targetId });
+                const leaseUntil = update?.$set?.nextAttemptAt || null;
+                const claimed = repo.claimRecord({ ...filter, id: targetId, _id: targetId }, Date.now(), leaseUntil);
                 return claimed;
             }
             repo.updateOne(filter, update);

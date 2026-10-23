@@ -122,21 +122,32 @@ class DmNotificationRepository {
         return null;
     }
 
-    claimRecord(record, now = Date.now()) {
+    claimRecord(record, now = Date.now(), leaseUntil = null) {
         const id = record?.id || record?._id;
         if (!id) return null;
 
         const maxAttemptTime = typeof record?.nextAttemptAt?.$lte === "number"
             ? Math.min(record.nextAttemptAt.$lte, now)
-            : now;
+            : (typeof record?.nextAttemptAt === "number" ? Math.min(record.nextAttemptAt, now) : now);
+
+        const statuses = Array.isArray(record?.status?.$in) && record.status.$in.length > 0
+            ? record.status.$in
+            : (typeof record?.status === "string"
+                ? [record.status]
+                : (typeof record?.status?.$eq === "string" ? [record.status.$eq] : ["pending", "retrying"]));
+        const ph = statuses.map(() => "?").join(",");
+
+        const effectiveLeaseUntil = typeof leaseUntil === "number"
+            ? leaseUntil
+            : (typeof record?.leaseUntil === "number" ? record.leaseUntil : null);
 
         const stmt = this.db.prepare(`
             UPDATE dm_notifications
-            SET status = 'sending', updated_at = ?
-            WHERE id = ? AND status IN ('pending', 'retrying') AND next_attempt_at <= ?
+            SET status = 'sending', updated_at = ?, next_attempt_at = COALESCE(?, next_attempt_at)
+            WHERE id = ? AND status IN (${ph}) AND next_attempt_at <= ?
         `);
 
-        const info = stmt.run(now, id, maxAttemptTime);
+        const info = stmt.run(now, effectiveLeaseUntil, id, ...statuses, maxAttemptTime);
         if (info.changes === 1) {
             return this.findById(id);
         }
