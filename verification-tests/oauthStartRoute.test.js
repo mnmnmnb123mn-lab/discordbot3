@@ -24,10 +24,17 @@ async function withTestServer(app, fn) {
   });
   try {
     const address = server.address();
-    return await fn(`http://127.0.0.1:${address.port}`);
+    return await fn(address.port);
   } finally {
     await new Promise(resolve => server.close(resolve));
   }
+}
+
+async function localTestFetch(port, path, options = {}) {
+  const safePort = Number(port);
+  const target = new URL(path, `http://127.0.0.1:${safePort}/`);
+  // nosemgrep -- Local ephemeral test probe bounded to loopback 127.0.0.1.
+  return fetch(target, options);
 }
 
 function responseFixture() {
@@ -346,8 +353,8 @@ test("Express app route registration mounts /auth/start and handles unready stat
   expect(authStartRoute).toBeDefined();
   expect(authStartRoute.methods).toContain("get");
 
-  await withTestServer(testApp, async (baseUrl) => {
-    const res = await fetch(`${baseUrl}/auth/start`, { redirect: "manual" });
+  await withTestServer(testApp, async (port) => {
+    const res = await localTestFetch(port, "/auth/start", { redirect: "manual" });
     expect(res.status).toBe(503);
     const body = await res.json();
     expect(body.success).toBe(false);
@@ -405,9 +412,9 @@ test("Express app live HTTP pipeline delivers direct 302 to Discord OAuth Consen
     expect(parsedButtonUrl.origin).toBe(CANONICAL_PUBLIC_BASE_URL);
     expect(parsedButtonUrl.pathname).toBe("/auth/start");
 
-    await withTestServer(testApp, async (baseUrl) => {
+    await withTestServer(testApp, async (port) => {
       // 1. Valid panel state initiates OAuth flow
-      const response = await fetch(`${baseUrl}/auth/start?state=${encodeURIComponent(stateParam)}`, {
+      const response = await localTestFetch(port, `/auth/start?state=${encodeURIComponent(stateParam)}`, {
         redirect: "manual"
       });
 
@@ -445,7 +452,7 @@ test("Express app live HTTP pipeline delivers direct 302 to Discord OAuth Consen
       expect(responseBody).not.toContain("<form id=\"pinForm\"");
 
       // 2. Tampered or invalid state returns 400 (not login page)
-      const invalidRes = await fetch(`${baseUrl}/auth/start?state=tampered.state.payload`, {
+      const invalidRes = await localTestFetch(port, "/auth/start?state=tampered.state.payload", {
         redirect: "manual"
       });
       expect(invalidRes.status).toBe(400);
@@ -454,7 +461,7 @@ test("Express app live HTTP pipeline delivers direct 302 to Discord OAuth Consen
       expect(invalidBody).not.toContain("<form");
 
       // 3. Missing state returns 400 (not login page)
-      const missingRes = await fetch(`${baseUrl}/auth/start`, {
+      const missingRes = await localTestFetch(port, "/auth/start", {
         redirect: "manual"
       });
       expect(missingRes.status).toBe(400);
