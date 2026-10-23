@@ -277,6 +277,7 @@ function buildOneShotCompletedEmbed({
     totalQuests = 0,
     completedQuests = 0,
     completedQuestList = [],
+    issues = [],
     avatarUrl = null,
     timestamp = Date.now()
 } = {}) {
@@ -291,12 +292,28 @@ function buildOneShotCompletedEmbed({
         `${QUEST_EMOJIS.grej} จำนวน Quest ที่ทำเสร็จเเล้ว : ${doneCount} รายการ`
     ];
 
+    let currentIdx = 0;
     if (Array.isArray(completedQuestList) && completedQuestList.length > 0) {
         lines.push('');
-        completedQuestList.forEach((questName, idx) => {
+        completedQuestList.forEach((questName) => {
+            currentIdx += 1;
             lines.push(
-                `${idx + 1}.${QUEST_EMOJIS.orbs} .${questName}`,
+                `${currentIdx}.${QUEST_EMOJIS.orbs} ${questName}`,
                 `${QUEST_EMOJIS.verifyb} เสร็จสมบูรณ์`
+            );
+        });
+    }
+
+    if (Array.isArray(issues) && issues.length > 0) {
+        if (currentIdx === 0) lines.push('');
+        issues.forEach((issue) => {
+            const questName = typeof issue === 'string' ? issue : (issue?.name || 'Quest ไม่ทราบชื่อ');
+            if (completedQuestList?.includes(questName)) return;
+            currentIdx += 1;
+            const reason = typeof issue === 'object' && issue?.reason ? issue.reason : 'รับ Quest ไม่สำเร็จ';
+            lines.push(
+                `${currentIdx}.${QUEST_EMOJIS.orbs} ${questName}`,
+                `${QUEST_EMOJIS.cross} ไม่สำเร็จ (${reason})`
             );
         });
     }
@@ -464,6 +481,7 @@ function buildOneShotEmbed(state, activityLines, context) {
     const total = state.totalQuests ?? state.totalQuestCount;
     const completed = state.completedQuests ?? state.completedQuestCount ?? 0;
     const completedList = state.completedQuestList || [];
+    const issues = state.issues || [];
 
     const isAllDone = state.status === 'completed' || (typeof total === 'number' && total > 0 && completed >= total);
     if (isAllDone) {
@@ -473,6 +491,7 @@ function buildOneShotEmbed(state, activityLines, context) {
             totalQuests: total,
             completedQuests: completed,
             completedQuestList: completedList,
+            issues,
             avatarUrl,
             timestamp: state.timestamp
         });

@@ -149,6 +149,7 @@ function buildQuestSummaryEmbed({
         totalQuests,
         completedQuests,
         completedQuestList,
+        issues,
         avatarUrl: resolvedAvatarUrl,
         timestamp
     });

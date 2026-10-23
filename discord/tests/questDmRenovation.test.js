@@ -99,10 +99,41 @@ test('One-shot Stage 3: Completed embed matches user blueprint with tags and ite
     assert.ok(desc.includes(`${QUEST_EMOJIS.grej} จำนวน Quest ที่รองรับ : 3 รายการ`));
     assert.ok(desc.includes(`${QUEST_EMOJIS.grej} จำนวน Quest ที่ทำเสร็จเเล้ว : 3 รายการ`));
 
-    // Pattern 1.:Orbs_pmt: .Name \n :verifyb_pmt: เสร็จสมบูรณ์
-    assert.ok(desc.includes(`1.${QUEST_EMOJIS.orbs} .Call of Duty: Modern Warfare 4\n${QUEST_EMOJIS.verifyb} เสร็จสมบูรณ์`));
-    assert.ok(desc.includes(`2.${QUEST_EMOJIS.orbs} .Valorant\n${QUEST_EMOJIS.verifyb} เสร็จสมบูรณ์`));
-    assert.ok(desc.includes(`3.${QUEST_EMOJIS.orbs} .Genshin Impact\n${QUEST_EMOJIS.verifyb} เสร็จสมบูรณ์`));
+    // Pattern 1.:Orbs_pmt: Name \n :verifyb_pmt: เสร็จสมบูรณ์
+    assert.ok(desc.includes(`1.${QUEST_EMOJIS.orbs} Call of Duty: Modern Warfare 4\n${QUEST_EMOJIS.verifyb} เสร็จสมบูรณ์`));
+    assert.ok(desc.includes(`2.${QUEST_EMOJIS.orbs} Valorant\n${QUEST_EMOJIS.verifyb} เสร็จสมบูรณ์`));
+    assert.ok(desc.includes(`3.${QUEST_EMOJIS.orbs} Genshin Impact\n${QUEST_EMOJIS.verifyb} เสร็จสมบูรณ์`));
+});
+
+test('One-shot Stage 3: Completed embed includes uncompleted issues with reason', () => {
+    const embed = buildOneShotCompletedEmbed({
+        ownerId: '15225714593369',
+        username: 'deklnwfreefrie',
+        totalQuests: 5,
+        completedQuests: 3,
+        completedQuestList: [
+            'Call of Duty: Modern Warfare 4',
+            'Cyberpunk: Edgerunners 2 Update',
+            'Firefox Browser'
+        ],
+        issues: [
+            { name: 'Fortnite: Chapter 6', reason: 'รับ Quest ไม่สำเร็จ' },
+            { name: 'Honkai: Star Rail', reason: 'Discord ยังไม่ยืนยันการรับ Quest' }
+        ]
+    });
+
+    assert.ok(embed);
+    const desc = embed.data.description;
+    assert.ok(desc.includes(`${QUEST_EMOJIS.kroles} : <@15225714593369>`));
+    assert.ok(desc.includes(`${QUEST_EMOJIS.discord} Username Token : deklnwfreefrie`));
+    assert.ok(desc.includes(`${QUEST_EMOJIS.sn} สถานะ : ทำ Quest อัตโนมัติเสร็จสิ้นแล้ว`));
+    assert.ok(desc.includes(`${QUEST_EMOJIS.grej} จำนวน Quest ที่รองรับ : 5 รายการ`));
+    assert.ok(desc.includes(`${QUEST_EMOJIS.grej} จำนวน Quest ที่ทำเสร็จเเล้ว : 3 รายการ`));
+    assert.ok(desc.includes(`1.${QUEST_EMOJIS.orbs} Call of Duty: Modern Warfare 4\n${QUEST_EMOJIS.verifyb} เสร็จสมบูรณ์`));
+    assert.ok(desc.includes(`2.${QUEST_EMOJIS.orbs} Cyberpunk: Edgerunners 2 Update\n${QUEST_EMOJIS.verifyb} เสร็จสมบูรณ์`));
+    assert.ok(desc.includes(`3.${QUEST_EMOJIS.orbs} Firefox Browser\n${QUEST_EMOJIS.verifyb} เสร็จสมบูรณ์`));
+    assert.ok(desc.includes(`4.${QUEST_EMOJIS.orbs} Fortnite: Chapter 6\n${QUEST_EMOJIS.cross} ไม่สำเร็จ (รับ Quest ไม่สำเร็จ)`));
+    assert.ok(desc.includes(`5.${QUEST_EMOJIS.orbs} Honkai: Star Rail\n${QUEST_EMOJIS.cross} ไม่สำเร็จ (Discord ยังไม่ยืนยันการรับ Quest)`));
 });
 
 test('Auto Daily Mode: Renders the 3 cyclic statuses with all-time and daily counters', () => {
