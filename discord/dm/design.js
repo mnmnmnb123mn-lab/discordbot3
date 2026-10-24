@@ -98,7 +98,7 @@ function buildDmEmbed(options = {}) {
     const fields = fitFields(fieldCandidates, title.length + summary.length);
 
     const embed = new MessageEmbed()
-        .setColor(COLORS[options.tone] || COLORS.info)
+        .setColor(options.color || COLORS[options.tone] || COLORS.info)
         .setTitle(title)
         .setDescription(summary)
         .addFields(fields);

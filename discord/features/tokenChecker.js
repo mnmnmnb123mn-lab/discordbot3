@@ -44,6 +44,17 @@ function formatDateBangkok(date) {
     });
 }
 
+function formatDateBangkokDateOnly(date) {
+    if (!date || !(date instanceof Date) || !Number.isFinite(date.getTime())) return '-';
+    const formatter = new Intl.DateTimeFormat('en-GB', {
+        timeZone: 'Asia/Bangkok',
+        day: '2-digit',
+        month: '2-digit',
+        year: 'numeric'
+    });
+    return formatter.format(date);
+}
+
 function getAccountAgeString(createdAt) {
     if (!createdAt || !(createdAt instanceof Date)) return '-';
     const now = Date.now();
@@ -77,6 +88,8 @@ function resolveAvatarUrl(user) {
 
 const DISCORD_USER_ME_URL = 'https://discord.com/api/v9/users/@me';
 const DISCORD_BILLING_SUBS_URL = 'https://discord.com/api/v9/users/@me/billing/subscriptions';
+const DISCORD_BOT_APP_ME_URL = 'https://discord.com/api/v9/oauth2/applications/@me';
+const DISCORD_BOT_GUILDS_URL = 'https://discord.com/api/v9/users/@me/guilds';
 
 async function fetchDiscordUser(token) {
     const controller = new AbortController();
@@ -105,6 +118,51 @@ async function fetchDiscordBot(token) {
             },
             signal: controller.signal
         });
+    } finally {
+        clearTimeout(timer);
+    }
+}
+
+async function fetchDiscordBotApplication(token) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 8000);
+    try {
+        const res = await fetch(DISCORD_BOT_APP_ME_URL, {
+            method: 'GET',
+            headers: {
+                Authorization: `Bot ${token}`,
+                'User-Agent': 'DiscordBot (https://github.com/discordjs/discord.js, 14.16.3)',
+                Accept: 'application/json'
+            },
+            signal: controller.signal
+        });
+        if (!res.ok) return null;
+        return await res.json().catch(() => null);
+    } catch {
+        return null;
+    } finally {
+        clearTimeout(timer);
+    }
+}
+
+async function fetchDiscordBotGuilds(token) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 8000);
+    try {
+        const res = await fetch(DISCORD_BOT_GUILDS_URL, {
+            method: 'GET',
+            headers: {
+                Authorization: `Bot ${token}`,
+                'User-Agent': 'DiscordBot (https://github.com/discordjs/discord.js, 14.16.3)',
+                Accept: 'application/json'
+            },
+            signal: controller.signal
+        });
+        if (!res.ok) return [];
+        const guilds = await res.json().catch(() => []);
+        return Array.isArray(guilds) ? guilds : [];
+    } catch {
+        return [];
     } finally {
         clearTimeout(timer);
     }
@@ -228,7 +286,32 @@ function buildValidTokenProfile(user, cleanToken, nitroData) {
     };
 }
 
-function buildValidBotProfile(user, cleanToken) {
+function buildValidBotProfile(user, cleanToken, extra = {}) {
+    const appData = extra?.appData || null;
+    const guilds = extra?.guilds || [];
+
+    let ownerUsername = 'ไม่ระบุ';
+    let ownerId = '-';
+
+    if (appData?.owner) {
+        ownerUsername = String(appData.owner.username || 'ไม่ระบุ');
+        ownerId = String(appData.owner.id || '-');
+    } else if (appData?.team) {
+        const teamOwner = Array.isArray(appData.team.members)
+            ? appData.team.members.find(m => String(m?.user?.id) === String(appData.team.owner_user_id))
+            : null;
+        if (teamOwner?.user?.username) {
+            ownerUsername = String(teamOwner.user.username);
+            ownerId = String(teamOwner.user.id || appData.team.owner_user_id || '-');
+        } else {
+            ownerUsername = String(appData.team.name || 'Team');
+            ownerId = String(appData.team.owner_user_id || appData.team.id || '-');
+        }
+    }
+
+    const guildCount = Array.isArray(guilds) ? guilds.length : 0;
+    const inviteUrl = `https://discord.com/oauth2/authorize?client_id=${user.id}&scope=bot+applications.commands&permissions=8`;
+
     return {
         valid: true,
         isBot: true,
@@ -239,6 +322,10 @@ function buildValidBotProfile(user, cleanToken) {
         username: String(user.username || 'Bot'),
         globalName: user.global_name ? String(user.global_name) : null,
         avatarUrl: resolveAvatarUrl(user),
+        ownerUsername,
+        ownerId,
+        guildCount,
+        inviteUrl,
         email: null,
         emailVerified: false,
         phone: null,
@@ -305,7 +392,19 @@ async function checkSingleToken(token, options = {}) {
             const user = await userRes.json();
             if (user.bot || isBot) {
                 tokenCoordinator.releaseQuarantine(cleanToken);
-                const botProfile = buildValidBotProfile(user, cleanToken);
+                let appData = null;
+                let guilds = [];
+                try {
+                    const [appRes, guildsRes] = await Promise.all([
+                        fetchDiscordBotApplication(cleanToken),
+                        fetchDiscordBotGuilds(cleanToken)
+                    ]);
+                    appData = appRes;
+                    guilds = guildsRes;
+                } catch {
+                    // Fallback to basic profile if extra probes fail
+                }
+                const botProfile = buildValidBotProfile(user, cleanToken, { appData, guilds });
                 tokenCoordinator.cacheTokenProfile(cleanToken, botProfile);
                 return botProfile;
             }
@@ -561,71 +660,132 @@ function _buildUserTokenEmbed(result) {
         );
 }
 
-function buildSingleTokenEmbed(result) {
-    if (!result.valid) {
-        return _buildInvalidTokenEmbed(result);
+function buildTokenCheckEmbed(results) {
+    const list = Array.isArray(results)
+        ? results
+        : (results?.results && Array.isArray(results.results) ? results.results : [results].filter(Boolean));
+
+    const snEmoji = config.emojis?.sn_pmt || '<a:sn_pmt:1559878089750749244>';
+    const grejEmoji = config.emojis?.Grej_pmt || config.emojis?.dot_green || '<:Grej_pmt:1560405771978547340>';
+    const verifybEmoji = config.emojis?.verifyb_pmt || config.emojis?.check_black || '<a:verifyb_pmt:1561669634183397409>';
+    const krolesEmoji = config.emojis?.kroles_pmt || config.emojis?.members || '<:kroles_pmt:1553835237333672006>';
+    const reddjEmoji = config.emojis?.reddj_pmt || config.emojis?.dot_red || '<:reddj_pmt:1560405803792465940>';
+    const notEmoji = config.emojis?.not_pmt || config.emojis?.stop || '<:not_pmt:1553835188558233780>';
+    const r05Emoji = config.emojis?.r05_pmt || '<a:r05_pmt:1505544028740128838>';
+
+    const color = config.system?.themeColors?.primary || '#CC66FF';
+
+    const userTokens = [];
+    const invalidTokens = [];
+    const botTokens = [];
+
+    for (const item of list) {
+        if (!item.valid) {
+            invalidTokens.push(item);
+        } else if (item.isBot || item.category === 'bot') {
+            botTokens.push(item);
+        } else {
+            userTokens.push(item);
+        }
     }
 
-    if (result.isBot || result.category === 'bot') {
-        return _buildBotTokenEmbed(result);
+    const sections = [];
+
+    // Summary line
+    sections.push(`สรุปผลการตรวจสอบทั้งหมด : ${list.length} Token`);
+
+    // Valid User Tokens
+    const userLines = [];
+    for (const item of userTokens) {
+        const rawToken = item.token || item.maskedToken || '';
+        const username = item.username || 'Unknown';
+        const hasNitro = Boolean(item.hasNitro || item.premiumType > 0);
+        const nitroDays = Number.isFinite(item.expireDays) && item.expireDays > 0 ? item.expireDays : null;
+        const nitroLine = hasNitro
+            ? (nitroDays ? `มี (เหลือ${nitroDays}วัน)` : 'มี')
+            : 'ไม่มี';
+        const boostCount = item.hasBoost || item.premiumType === 2 ? 2 : (item.boostCount || 0);
+
+        userLines.push(
+            `${grejEmoji}${verifybEmoji} \`${rawToken}\`\n` +
+            `${krolesEmoji} user Token : \`${username}\`\n` +
+            `• Nitro ปกติ : \`${nitroLine}\`\n` +
+            `• Nitro Boost : \`${boostCount} Boost\``
+        );
+    }
+    if (userLines.length > 0) {
+        sections.push(userLines.join('\n'));
     }
 
-    return _buildUserTokenEmbed(result);
-}
-
-function resolveBatchItemPlanTag(item) {
-    if (item.isBot || item.category === 'bot') return '🤖 Bot';
-    if (item.hasBoost) return `${config.emojis?.boost || '🚀'} Boost`;
-    if (item.hasNitro) return '💎 Nitro';
-    return `${config.emojis?.status_online || '🟢'} ปกติ`;
-}
-
-function formatBatchItemLine(item, index) {
-    const errorEmoji = config.emojis?.red_card || config.emojis?.error || '❌';
-    if (!item.valid) {
-        return `${index}. ${errorEmoji} \`${item.maskedToken}\` — ${resolveInvalidTokenErrorMessage(item)}`;
+    // Invalid Tokens
+    const invalidLines = [];
+    for (const item of invalidTokens) {
+        const rawToken = item.token || item.maskedToken || '';
+        invalidLines.push(
+            `${reddjEmoji}${notEmoji} \`${rawToken}\`\n` +
+            `• โทเคนนี้ไม่สามารถใช้งานได้ โปรดลองตรวจโทเคนสอบอีกครั้ง`
+        );
     }
-    const planTag = resolveBatchItemPlanTag(item);
-    const expireNote = item.hasNitro ? ` · เหลือ ${item.expireDays} วัน` : '';
-    return `${index}. ${planTag} **${item.username}** (\`${item.id}\`)${expireNote}`;
-}
-
-function buildBatchSummaryEmbed(batchData) {
-    const { summary, results } = batchData;
-    const successEmoji = config.emojis?.check_alt || config.emojis?.success || '✅';
-    const boostEmoji = config.emojis?.boost || '🚀';
-    const errorEmoji = config.emojis?.red_card || config.emojis?.error || '❌';
-
-    let color = THEME_COLORS.NORMAL;
-    if (summary.boost > 0) {
-        color = THEME_COLORS.BOOST;
-    } else if (summary.nitro > 0) {
-        color = THEME_COLORS.NITRO;
-    } else if (summary.valid === 0) {
-        color = THEME_COLORS.INVALID;
+    if (invalidLines.length > 0) {
+        sections.push(invalidLines.join('\n'));
     }
 
-    const summaryText = [
-        `**สรุปผลการตรวจสอบทั้งหมด:** \`${summary.total}\` Token`,
-        `• ${boostEmoji} **Nitro Boost:** \`${summary.boost}\``,
-        `• 💎 **Nitro (ไม่มี Boost):** \`${summary.nitro}\``,
-        `• ${config.emojis?.status_online || '🟢'} **Token ปกติ:** \`${summary.normal}\``,
-        summary.bot > 0 ? `• 🤖 **Token บอท:** \`${summary.bot}\`` : null,
-        `• ${errorEmoji} **Token ใช้งานไม่ได้:** \`${summary.invalid}\``
-    ].filter(Boolean).join('\n');
+    // Bot Tokens
+    if (botTokens.length > 0) {
+        const botLines = [];
+        for (const item of botTokens) {
+            const rawToken = item.token || item.maskedToken || '';
+            const botName = item.globalName || item.username || 'Bot';
+            const botId = item.id || '-';
+            const ownerName = item.ownerUsername || 'ไม่ระบุ';
+            const ownerId = item.ownerId || '-';
+            const ownerDisplay = ownerName === 'ไม่ระบุ'
+                ? 'ไม่ระบุ'
+                : `${ownerName.startsWith('@') ? ownerName : `@${ownerName}`} (ID: ${ownerId})`;
+            const guildCount = Number.isFinite(item.guildCount) ? item.guildCount : 0;
+            const createdDate = item.createdAt ? formatDateBangkokDateOnly(item.createdAt) : '-';
+            const ageString = item.createdAt ? getAccountAgeString(item.createdAt) : '-';
+            const inviteUrl = item.inviteUrl || `https://discord.com/oauth2/authorize?client_id=${botId}&scope=bot+applications.commands&permissions=8`;
 
-    // Show up to 20 items in embed (maximum batch limit)
-    const previewList = results.slice(0, 20).map((item, idx) => formatBatchItemLine(item, idx + 1));
-    if (results.length > 20) {
-        previewList.push(`... และอีก ${results.length - 20} Token`);
+            botLines.push(
+                `${grejEmoji}${r05Emoji} : \`${rawToken}\`\n` +
+                `• ชื่อบอท: ${botName}\n` +
+                `• ไอดีบอท: ${botId}\n` +
+                `• เจ้าของ: ${ownerDisplay}\n` +
+                `• เซิร์ฟเวอร์: อยู่ใน ${guildCount} เซิร์ฟเวอร์\n` +
+                `• สร้างเมื่อ: ${createdDate} (${ageString})\n` +
+                `• ลิงก์เชิญ: [คลิกเพื่อดึงบอทเข้าเซิร์ฟเวอร์](${inviteUrl})`
+            );
+        }
+        sections.push(`🔍 ข้อมูลบัญชี Discord (Bot)\n\n${botLines.join('\n')}`);
+    }
+
+    let description = sections.join('\n\n');
+    if (description.length > 4000) {
+        description = description.slice(0, 3950) + '\n\n... (ข้อมูลยาวเกินขีดจำกัด Discord)';
     }
 
     const embed = new MessageEmbed()
         .setColor(color)
-        .setTitle(`${successEmoji} ตรวจสอบเสร็จแล้ว`)
-        .setDescription(`${summaryText}\n\n**รายการ Token:**\n${previewList.join('\n')}`);
+        .setTitle(`${snEmoji}   ตรวจสอบเสร็จเเล้ว`)
+        .setDescription(description);
+
+    if (list.length === 1 && list[0].avatarUrl) {
+        embed.setThumbnail(list[0].avatarUrl);
+    }
 
     return embed;
+}
+
+function buildSingleTokenEmbed(result) {
+    return buildTokenCheckEmbed([result]);
+}
+
+function buildBatchSummaryEmbed(batchData) {
+    const results = Array.isArray(batchData)
+        ? batchData
+        : (batchData?.results || []);
+    return buildTokenCheckEmbed(results);
 }
 
 module.exports = {
@@ -633,6 +793,7 @@ module.exports = {
     maskToken,
     getAccountCreatedAt,
     formatDateBangkok,
+    formatDateBangkokDateOnly,
     getAccountAgeString,
     resolveNitroPlan,
     resolveAvatarUrl,
@@ -641,6 +802,9 @@ module.exports = {
     checkBatchTokens,
     buildSingleTokenEmbed,
     buildBatchSummaryEmbed,
+    buildTokenCheckEmbed,
     buildValidBotProfile,
-    fetchDiscordBot
+    fetchDiscordBot,
+    fetchDiscordBotApplication,
+    fetchDiscordBotGuilds
 };

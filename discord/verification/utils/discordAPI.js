@@ -1417,6 +1417,7 @@ function verificationDmCopy({ ok, blocked, alreadyVerified, reasonCode }) {
             title: `${config.emojis?.verifygreen_pmt || config.emojis?.check_alt || "✅"} คุณเคยทำการ Verification ไว้เเล้ว`,
             summary: "• คุณเคยทำการ Verification สำเร็จแล้ว ระบบจึงไม่สามารถเพิ่มยศให้คุณได้",
             tone: "info",
+            color: "#2ECC71",
             nextAction: null
         };
     }
@@ -1425,6 +1426,7 @@ function verificationDmCopy({ ok, blocked, alreadyVerified, reasonCode }) {
             title: `${config.emojis?.verifygreen_pmt || config.emojis?.check_alt || "✅"} คุณได้ทำการ Verification สำเร็จแล้ว`,
             summary: "• คุณผ่านการตรวจสอบเเล้วเเละได้รับยศเเล้ว",
             tone: "success",
+            color: "#2ECC71",
             nextAction: null
         };
     }
@@ -1433,6 +1435,7 @@ function verificationDmCopy({ ok, blocked, alreadyVerified, reasonCode }) {
             title: `${config.emojis?.CROSS_pmt || config.emojis?.error || "❌"} ไม่ผ่านการ Verification ของเซิร์ฟเวอร์`,
             summary: "• บัญชีของคุณไม่ผ่านเงื่อนไขความปลอดภัยของเซิร์ฟเวอร์",
             tone: "warning",
+            color: "#E74C3C",
             nextAction: "ติดต่อผู้ดูแลเซิร์ฟเวอร์หากต้องการสอบถามเงื่อนไขเพิ่มเติม"
         };
     }
@@ -1440,10 +1443,11 @@ function verificationDmCopy({ ok, blocked, alreadyVerified, reasonCode }) {
     return {
         title: `${config.emojis?.CROSS_pmt || config.emojis?.error || "❌"} คุณ Verification ไม่สำเร็จ`,
         summary: "• ระบบทำการตรวจสอบไม่สำเร็จ โปรดลองใหม่อีกครั้ง",
+        tone: "danger",
+        color: "#E74C3C",
         nextAction: stalePanel
             ? "กลับไป Discord แล้วกดปุ่มจากแผงยืนยันล่าสุด"
-            : "ลองใหม่อีกครั้ง หรือติดต่อผู้ดูแลเซิร์ฟเวอร์",
-        tone: "danger"
+            : "ลองใหม่อีกครั้ง หรือติดต่อผู้ดูแลเซิร์ฟเวอร์"
     };
 }
 
@@ -1460,7 +1464,7 @@ function buildVerificationDmEmbed(data = {}) {
     const copy = verificationDmCopy({ ok, blocked, alreadyVerified, reasonCode });
 
     const embed = new MessageEmbed()
-        .setColor(dmService.design.COLORS[copy.tone] || dmService.design.COLORS.info)
+        .setColor(copy.color || "#2ECC71")
         .setTitle(copy.title)
         .setDescription(copy.summary);
     if (isGuildIconUrl(data.guildIconUrl)) embed.setThumbnail(data.guildIconUrl);
