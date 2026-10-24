@@ -144,7 +144,7 @@ async function getRecoveryStatuses(userIds, {
         resultMap.set(userId, {
             status: uniqueReasons.length === 0 ? "healthy" : "recovery_required",
             reasons: uniqueReasons,
-            reasonLabels: uniqueReasons.map(recoveryReasonLabel)
+            reasonLabels: uniqueReasons.map((reason) => recoveryReasonLabel(reason))
         });
     }
 
