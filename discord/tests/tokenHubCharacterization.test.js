@@ -346,7 +346,7 @@ test('OAuthTokenManager: checkTokenCryptoReasons catches corrupt ciphertext exce
     });
 });
 
-test('OAuthTokenManager: Candidate query processCandidateDoc updates seenUsers Set on accepted candidates', async () => {
+test('OAuthTokenManager: Candidate query listAccessTokenCandidates respects seenUsers as read-only exclusion check and does not mutate it', async () => {
     const { listAccessTokenCandidates } = require('../tokens/oauth/candidateQuery');
 
     const seenUsers = new Set();
@@ -391,8 +391,19 @@ test('OAuthTokenManager: Candidate query processCandidateDoc updates seenUsers S
     });
 
     assert.equal(result.candidates.length, 2);
-    assert.equal(seenUsers.has('user-cand-1'), true, 'seenUsers Set must include accepted candidate 1');
-    assert.equal(seenUsers.has('user-cand-2'), true, 'seenUsers Set must include accepted candidate 2');
+    assert.equal(seenUsers.has('user-cand-1'), false, 'seenUsers Set must NOT be mutated by listAccessTokenCandidates (owned by consumer)');
+    assert.equal(seenUsers.has('user-cand-2'), false, 'seenUsers Set must NOT be mutated by listAccessTokenCandidates (owned by consumer)');
+
+    // Exclusion test: callers pass seenUsers to filter out already-enqueued users
+    const exclusionSet = new Set(['user-cand-1']);
+    const resultFiltered = await listAccessTokenCandidates({
+        model: mockModel,
+        allowAllGuilds: true,
+        seenUsers: exclusionSet,
+        limit: 10
+    });
+    assert.equal(resultFiltered.candidates.length, 1);
+    assert.equal(resultFiltered.candidates[0].userId, 'user-cand-2');
 });
 
 test('OAuthTokenManager: Token payload validation accepts valid data and rejects invalid inputs with proper error codes', () => {
