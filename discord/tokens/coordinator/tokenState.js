@@ -107,6 +107,22 @@ function formatAuthHeader(token, explicitType = null, inferredType = 'unknown') 
     return type === 'bot' ? `Bot ${trimmed}` : trimmed;
 }
 
+function _hasActiveActivities(state) {
+    if (state.quarantine || state.quest || state.voice) return true;
+    const hasVoiceSessions = Boolean(state.voiceSessions && state.voiceSessions.size > 0);
+    const hasActivities = Boolean(state.activities && state.activities.size > 0);
+    return hasVoiceSessions || hasActivities;
+}
+
+function _hasRateLimitWork(coordinator, state) {
+    if (state.backoffUntil && state.backoffUntil > Date.now()) return true;
+    const limiter = state.rateLimiter;
+    if (!limiter) return false;
+    if (limiter.pumpTimer || (limiter.queue && limiter.queue.length > 0)) return true;
+    const capacity = coordinator?.rateLimitConfig?.capacity ?? 4;
+    return typeof limiter.tokens === 'number' && limiter.tokens < capacity;
+}
+
 /**
  * Determine whether a token state record has any active usage and should be retained
  * @param {object} coordinator
@@ -115,21 +131,7 @@ function formatAuthHeader(token, explicitType = null, inferredType = 'unknown') 
  */
 function shouldRetainTokenState(coordinator, state) {
     if (!state) return false;
-    if (state.quarantine) return true;
-    if (state.quest) return true;
-    if (state.voice) return true;
-    if (state.voiceSessions && state.voiceSessions.size > 0) return true;
-    if (state.activities && state.activities.size > 0) return true;
-    if (state.backoffUntil && state.backoffUntil > Date.now()) return true;
-    if (state.rateLimiter) {
-        if (state.rateLimiter.queue && state.rateLimiter.queue.length > 0) return true;
-        if (state.rateLimiter.pumpTimer) return true;
-        const capacity = coordinator?.rateLimitConfig?.capacity ?? 4;
-        if (typeof state.rateLimiter.tokens === 'number' && state.rateLimiter.tokens < capacity) {
-            return true;
-        }
-    }
-    return false;
+    return _hasActiveActivities(state) || _hasRateLimitWork(coordinator, state);
 }
 
 /**
