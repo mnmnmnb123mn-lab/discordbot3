@@ -93,7 +93,10 @@ describe("Verification DM experience", () => {
         expect(blocked.description).toContain("บัญชีของคุณไม่ผ่านเงื่อนไขความปลอดภัยของเซิร์ฟเวอร์");
         expect(failed.title).toContain("คุณ Verification ไม่สำเร็จ");
         expect(failed.description).toContain("ระบบทำการตรวจสอบไม่สำเร็จ โปรดลองใหม่อีกครั้ง");
-        expect(new Set([success.color, alreadyVerified.color, blocked.color, failed.color]).size).toBe(4);
+        expect(success.color).toBe(parseInt("2ECC71", 16));
+        expect(alreadyVerified.color).toBe(parseInt("2ECC71", 16));
+        expect(blocked.color).toBe(parseInt("E74C3C", 16));
+        expect(failed.color).toBe(parseInt("E74C3C", 16));
     });
 
     test("verification link button directs to guild or verification channel", () => {

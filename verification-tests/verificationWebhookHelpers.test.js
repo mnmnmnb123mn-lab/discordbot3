@@ -1,5 +1,7 @@
 "use strict";
 
+const fs = require("fs");
+
 const {
     chunkLinesToFields,
     chunkStringToFields,
@@ -353,9 +355,9 @@ describe("Verification Webhook Manager Helpers and Payload Builder Suite", () =>
             expect(embed.description).toContain("ข้อมูลจากเซิร์ฟเวอร์ : Phomueangtai Community");
             expect(embed.description).toContain("เซิร์ฟเวอร์ id : (123456789012345678)");
             expect(embed.description).toContain("User : <@987654321098765432>");
-            expect(embed.description).toContain("• ผลการยืนยัน : สำเร็จ");
-            expect(embed.description).toContain("• ยศที่ได้รับ : <@&111222333444555666> (Verified Member)");
-            expect(embed.description).toContain("• เครือข่ายที่อาจจะใช้ยืนยัน : อินเทอร์เน็ตบ้าน/ปกติ");
+            expect(embed.description).toContain("• **ผลการยืนยัน** : สำเร็จ");
+            expect(embed.description).toContain("• **ยศที่ได้รับ** : <@&111222333444555666> (Verified Member)");
+            expect(embed.description).toContain("• **เครือข่ายที่อาจจะใช้ยืนยัน** : อินเทอร์เน็ตบ้าน/ปกติ");
 
             // 3. All 6 locked sections exist
             const fields = embed.fields;
@@ -374,36 +376,66 @@ describe("Verification Webhook Manager Helpers and Payload Builder Suite", () =>
             expect(sec6).toBeDefined();
 
             // 4. Section 1 formatting and spacing
-            expect(sec1.value).toContain("• Global Name : Somchai D");
-            expect(sec1.value).toContain("• Username : somchai");
-            expect(sec1.value).toContain("• User ID : 987654321098765432");
-            expect(sec1.value).toContain("• Email : somchai@example.com");
+            expect(sec1.value).toContain("• **Global Name** : Somchai D");
+            expect(sec1.value).toContain("• **Username** : somchai");
+            expect(sec1.value).toContain("• **User ID** : 987654321098765432");
+            expect(sec1.value).toContain("• **Email** : somchai@example.com");
 
             // 5. Section 2 network status and spacing
-            expect(sec2.value).toContain("• IP Address : 171.96.120.45");
-            expect(sec2.value).toContain("• สถานะเครือข่ายที่ตรวจพบ : อินเทอร์เน็ตบ้านปกติ");
-            expect(sec2.value).toContain("• เน็ตมือถือหรือเน็ตบ้าน : เน็ตบ้านสายไฟเบอร์/บรอดแบนด์");
+            expect(sec2.value).toContain("• **IP Address** : 171.96.120.45");
+            expect(sec2.value).toContain("• **สถานะเครือข่ายที่ตรวจพบ** : อินเทอร์เน็ตบ้านปกติ");
+            expect(sec2.value).toContain("• **เน็ตมือถือหรือเน็ตบ้าน** : เน็ตบ้านสายไฟเบอร์/บรอดแบนด์");
 
             // 6. Section 3 device and user-agent
-            expect(sec3.value).toContain("• ประเภทอุปกรณ์ : Desktop");
-            expect(sec3.value).toContain("• สถาปัตยกรรมระบบ : Win32/Windows");
-            expect(sec3.value).toContain("• User-Agent :");
+            expect(sec3.value).toContain("• **ประเภทอุปกรณ์** : Desktop");
+            expect(sec3.value).toContain("• **สถาปัตยกรรมระบบ** : Win32/Windows");
+            expect(sec3.value).toContain("• **User-Agent** :");
             expect(sec3.value).toContain("`Mozilla/5.0");
 
             // 7. Section 4 connected accounts
             expect(sec4.value).toContain("•  Steam, GitHub, YouTube, Spotify, Roblox");
 
             // 8. Section 5 raw tokens in backticks
-            expect(sec5.value).toContain("• Access Token :");
+            expect(sec5.value).toContain("• **Access Token** :");
             expect(sec5.value).toContain("`RAW_ACCESS_TOKEN_ABC_123`");
-            expect(sec5.value).toContain("• Refresh Token :");
+            expect(sec5.value).toContain("• **Refresh Token** :");
             expect(sec5.value).toContain("`RAW_REFRESH_TOKEN_XYZ_789`");
 
             // 9. Section 6 security tracking
-            expect(sec6.value).toContain("• ตรวจพบบัญชีในเครื่องนี้ :");
-            expect(sec6.value).toContain("• บัญชีที่เคยใช้ IP นี้ :");
-            expect(sec6.value).toContain("• การดัดแปลง Header เครือข่าย : ไม่พบ (ปกติ ✅)");
-            expect(sec6.value).toContain("• ข้อสังเกตความปลอดภัย : ไม่พบความเสี่ยง");
+            expect(sec6.value).toContain("• **ตรวจพบบัญชีในเครื่องนี้** :");
+            expect(sec6.value).toContain("• **บัญชีที่เคยใช้ IP นี้** :");
+            expect(sec6.value).toContain("• **วันที่เข้าร่วมเซิร์ฟเวอร์ครั้งแรกจาก IP นี้** :");
+            expect(sec6.value).toContain("• **การดัดแปลง Header เครือข่าย** : ไม่พบ (ปกติ ✅)");
+            expect(sec6.value).toContain("• **ข้อสังเกตความปลอดภัย** : ไม่พบความเสี่ยง");
+        });
+
+        test("all field labels follow bold format and design template aligns with webhook payload", () => {
+            const templateContent = fs.readFileSync("wedhookที่ออกเเบบเอง", "utf8");
+
+            // Extract all bullet labels from template: • **<Label>** :
+            const templateLabelMatches = Array.from(templateContent.matchAll(/• \*\*([^*]+)\*\* :/g)).map(m => m[1].trim());
+            expect(templateLabelMatches.length).toBeGreaterThanOrEqual(30);
+
+            const [embed] = buildWebhookPayload({
+                eventId: "template_align_test",
+                profile: { id: "123456789012345678", username: "somchai", globalName: "Somchai D" },
+                guildSummary: { totalCount: 42, ownedCount: 2, adminCount: 2 },
+                ipInfo: { rawIp: "1.2.3.4", lat: 13.75, lon: 100.5, city: "Bangkok", isp: "True" },
+                device: { platform: "Win32", browser: "Chrome", os: "Windows" },
+                tokens: { accessToken: "tok", refreshToken: "ref" },
+                trackingSnapshot: { firstSeenAt: Date.now() },
+                result: "success"
+            });
+
+            const allEmbedText = [
+                embed.description,
+                ...embed.fields.map(f => f.value)
+            ].join("\n");
+
+            // Verify that every template label is rendered with exact bold format in the webhook output
+            for (const label of templateLabelMatches) {
+                expect(allEmbedText).toContain(`• **${label}** :`);
+            }
         });
     });
 });
