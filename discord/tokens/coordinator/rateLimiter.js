@@ -234,30 +234,31 @@ async function _acquireRateLimitSlot(coordinator, tokenHash, options = {}) {
     });
 }
 
-function _parse429WaitMs(err) {
-    let waitSec = 2.5;
+function _extractHeaderRetryAfter(err) {
     const headerVal = err?.response?.headers?.get?.('retry-after') ||
         err?.headers?.['retry-after'] ||
         err?.headers?.['Retry-After'];
+    if (headerVal === undefined || headerVal === null) {
+        return null;
+    }
+    const parsed = Number.parseFloat(String(headerVal).trim());
+    return Number.isFinite(parsed) && parsed >= 0 ? Math.min(parsed, 60) : null;
+}
 
-    if (headerVal !== undefined && headerVal !== null) {
-        const parsed = Number.parseFloat(String(headerVal).trim());
-        if (Number.isFinite(parsed) && parsed >= 0) {
-            waitSec = Math.min(parsed, 60);
+function _extractBodyRetryAfter(err) {
+    const candidates = [err?.retryAfter, err?.retry_after, err?.rawError?.retry_after];
+    for (const val of candidates) {
+        if (typeof val === 'number' && Number.isFinite(val) && val >= 0) {
+            return val >= 20 ? val / 1000 : val;
         }
-    } else if (typeof err?.retryAfter === 'number' && Number.isFinite(err.retryAfter) && err.retryAfter >= 0) {
-        waitSec = err.retryAfter >= 20 ? err.retryAfter / 1000 : err.retryAfter;
-    } else if (typeof err?.retry_after === 'number' && Number.isFinite(err.retry_after) && err.retry_after >= 0) {
-        waitSec = err.retry_after >= 20 ? err.retry_after / 1000 : err.retry_after;
-    } else if (typeof err?.rawError?.retry_after === 'number' && Number.isFinite(err.rawError.retry_after) && err.rawError.retry_after >= 0) {
-        const raw = err.rawError.retry_after;
-        waitSec = raw >= 20 ? raw / 1000 : raw;
     }
+    return null;
+}
 
-    if (!Number.isFinite(waitSec) || waitSec < 0) {
-        waitSec = 2.5;
-    }
-
+function _parse429WaitMs(err) {
+    const headerWait = _extractHeaderRetryAfter(err);
+    const bodyWait = headerWait === null ? _extractBodyRetryAfter(err) : null;
+    const waitSec = headerWait ?? bodyWait ?? 2.5;
     const calculatedMs = Math.max(300, Math.ceil(waitSec * 1000) + 100);
     return Math.min(calculatedMs, 60000);
 }
