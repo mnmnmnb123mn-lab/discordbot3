@@ -478,3 +478,131 @@ test("Express app live HTTP pipeline delivers direct 302 to Discord OAuth Consen
     else process.env.VERIFY_STATE_SECRET = prevStateSecret;
   }
 });
+
+test("OAuth state preserves guild, role, panel revision, signing, expiration, nonce, and replay protections", async () => {
+  const {
+    createCompactCallbackState,
+    decodeCallbackState
+  } = require("../discord/verification/utils/state");
+  const {
+    registerVerificationState,
+    consumeVerificationState,
+    isDuplicateNonceError
+  } = require("../discord/verification/services/verificationStateNonce");
+
+  const prevStateSecret = process.env.VERIFY_STATE_SECRET;
+  try {
+    process.env.VERIFY_STATE_SECRET = "test-secret-salt-1234567890-secure";
+
+    const nowMs = Date.now();
+    const tenMinutes = 10 * 60 * 1000;
+    const expiresAt = nowMs + tenMinutes;
+
+    // 1. Creation and decoded preservation of guild, role, panel revision, and expiration
+    const stateStr = createCompactCallbackState({
+      guildId: GUILD_ID,
+      roleId: ROLE_ID,
+      expectedUserId: USER_ID,
+      panelRevision: "revision-omega-42",
+      expiresAt
+    });
+
+    const decoded = decodeCallbackState(stateStr);
+    expect(decoded).not.toBeNull();
+    expect(decoded.guildId).toBe(GUILD_ID);
+    expect(decoded.roleId).toBe(ROLE_ID);
+    expect(decoded.expectedUserId).toBe(USER_ID);
+    expect(decoded.panelRevision).toBe("revision-omega-42");
+    expect(decoded.ts).toBe(expiresAt);
+    expect(typeof decoded.nonce).toBe("string");
+    expect(decoded.nonce.length).toBeGreaterThanOrEqual(6);
+
+    // 2. Cryptographic signature verification and anti-tampering
+    const tamperedSig = stateStr.slice(0, -4) + "XXXX";
+    expect(decodeCallbackState(tamperedSig)).toBeNull();
+
+    const tamperedRole = stateStr.replace(ROLE_ID, "999999999999999999");
+    expect(decodeCallbackState(tamperedRole)).toBeNull();
+
+    // 3. Expiration enforcement
+    const expiredStateStr = createCompactCallbackState({
+      guildId: GUILD_ID,
+      roleId: ROLE_ID,
+      expiresAt: nowMs - 5000
+    });
+    expect(decodeCallbackState(expiredStateStr)).toBeNull();
+
+    // 4. Nonce registration and replay protection
+    const mockDb = new Map();
+    const MockVerificationStateNonce = {
+      async create(doc) {
+        if (mockDb.has(doc.nonceHash)) {
+          const err = new Error("E11000 duplicate key error collection: verification_state_nonces index: nonceHash_1 dup key");
+          err.code = 11000;
+          err.keyPattern = { nonceHash: 1 };
+          err.keyValue = { nonceHash: doc.nonceHash };
+          throw err;
+        }
+        mockDb.set(doc.nonceHash, { ...doc });
+        return doc;
+      },
+      findOneAndUpdate(filter, update) {
+        const existing = mockDb.get(filter.nonceHash);
+        const queryExpiresAt = filter.expiresAt?.$gt;
+        if (!existing || existing.status !== filter.status) {
+          return { lean: async () => null };
+        }
+        if (filter.guildId && existing.guildId !== filter.guildId) {
+          return { lean: async () => null };
+        }
+        if (filter.roleId && existing.roleId !== filter.roleId) {
+          return { lean: async () => null };
+        }
+        if (queryExpiresAt && existing.expiresAt <= queryExpiresAt) {
+          return { lean: async () => null };
+        }
+        const updated = {
+          ...existing,
+          ...update.$set
+        };
+        mockDb.set(filter.nonceHash, updated);
+        return { lean: async () => updated };
+      }
+    };
+
+    const VerificationStateNonceModel = require("../discord/verification/models/VerificationStateNonce");
+    const originalCreate = VerificationStateNonceModel.create;
+    const originalFindOneAndUpdate = VerificationStateNonceModel.findOneAndUpdate;
+    try {
+      VerificationStateNonceModel.create = MockVerificationStateNonce.create;
+      VerificationStateNonceModel.findOneAndUpdate = MockVerificationStateNonce.findOneAndUpdate;
+
+      // Register state
+      const regSuccess = await registerVerificationState(decoded);
+      expect(regSuccess).toBe(true);
+
+      // Re-registering the same nonce throws duplicate error (replay / collision protection)
+      let threwDuplicate = false;
+      try {
+        await registerVerificationState(decoded);
+      } catch (err) {
+        threwDuplicate = isDuplicateNonceError(err);
+      }
+      expect(threwDuplicate).toBe(true);
+
+      // Consume state (first time succeeds)
+      const consumedFirst = await consumeVerificationState(decoded);
+      expect(consumedFirst).toBe(true);
+
+      // Replay attack: consuming state a second time MUST fail
+      const consumedSecond = await consumeVerificationState(decoded);
+      expect(consumedSecond).toBe(false);
+    } finally {
+      VerificationStateNonceModel.create = originalCreate;
+      VerificationStateNonceModel.findOneAndUpdate = originalFindOneAndUpdate;
+    }
+  } finally {
+    if (prevStateSecret === undefined) delete process.env.VERIFY_STATE_SECRET;
+    else process.env.VERIFY_STATE_SECRET = prevStateSecret;
+  }
+});
