@@ -119,8 +119,13 @@ function _hasRateLimitWork(coordinator, state) {
     const limiter = state.rateLimiter;
     if (!limiter) return false;
     if (limiter.pumpTimer || (limiter.queue && limiter.queue.length > 0)) return true;
+    if (typeof limiter.tokens !== 'number') return false;
+
     const capacity = coordinator?.rateLimitConfig?.capacity ?? 4;
-    return typeof limiter.tokens === 'number' && limiter.tokens < capacity;
+    const rate = coordinator?.rateLimitConfig?.refillRatePerSec ?? 2;
+    const elapsedSec = Math.max(0, (Date.now() - (limiter.lastRefill || 0)) / 1000);
+    const projected = Math.min(capacity, limiter.tokens + (elapsedSec * rate));
+    return projected < capacity;
 }
 
 /**

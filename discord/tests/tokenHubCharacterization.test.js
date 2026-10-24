@@ -536,10 +536,16 @@ test('TokenCoordinator: shouldRetainTokenState retains state when backoff, pump 
     assert.equal(shouldRetainTokenState(tokenCoordinator, state), true);
     state.backoffUntil = 0;
 
-    // Depleted tokens -> should retain
+    // Recently depleted tokens -> should retain
     state.rateLimiter.tokens = 2; // < capacity 4
-    assert.equal(shouldRetainTokenState(tokenCoordinator, state), true);
+    state.rateLimiter.lastRefill = Date.now();
+    assert.equal(shouldRetainTokenState(tokenCoordinator, state), true, 'Recently depleted token must be retained');
+
+    // Stale/idle depleted tokens where refill has elapsed -> should NOT retain (prevents memory leak)
+    state.rateLimiter.lastRefill = Date.now() - 5000; // 5 seconds ago at 2/s refills 10 tokens > capacity 4
+    assert.equal(shouldRetainTokenState(tokenCoordinator, state), false, 'Idle token whose projected refill reached capacity must not be retained');
     state.rateLimiter.tokens = 4;
+    state.rateLimiter.lastRefill = Date.now();
 
     // Queued tickets -> should retain
     state.rateLimiter.queue = [{ cancelled: false }];
