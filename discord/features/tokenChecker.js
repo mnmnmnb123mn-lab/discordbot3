@@ -158,11 +158,11 @@ async function fetchDiscordBotGuilds(token) {
             },
             signal: controller.signal
         });
-        if (!res.ok) return [];
-        const guilds = await res.json().catch(() => []);
-        return Array.isArray(guilds) ? guilds : [];
+        if (!res.ok) return null;
+        const guilds = await res.json().catch(() => null);
+        return Array.isArray(guilds) ? guilds : null;
     } catch {
-        return [];
+        return null;
     } finally {
         clearTimeout(timer);
     }
@@ -288,7 +288,7 @@ function buildValidTokenProfile(user, cleanToken, nitroData) {
 
 function buildValidBotProfile(user, cleanToken, extra = {}) {
     const appData = extra?.appData || null;
-    const guilds = extra?.guilds || [];
+    const guilds = extra?.guilds !== undefined ? extra.guilds : null;
 
     let ownerUsername = 'ไม่ระบุ';
     let ownerId = '-';
@@ -309,7 +309,7 @@ function buildValidBotProfile(user, cleanToken, extra = {}) {
         }
     }
 
-    const guildCount = Array.isArray(guilds) ? guilds.length : 0;
+    const guildCount = Array.isArray(guilds) ? guilds.length : null;
     const inviteUrl = `https://discord.com/oauth2/authorize?client_id=${user.id}&scope=bot+applications.commands&permissions=8`;
 
     return {
@@ -392,8 +392,9 @@ async function checkSingleToken(token, options = {}) {
             const user = await userRes.json();
             if (user.bot || isBot) {
                 tokenCoordinator.releaseQuarantine(cleanToken);
+                tokenCoordinator.setTokenType(cleanToken, 'bot');
                 let appData = null;
-                let guilds = [];
+                let guilds = null;
                 try {
                     const [appRes, guildsRes] = await Promise.all([
                         fetchDiscordBotApplication(cleanToken),
@@ -405,7 +406,9 @@ async function checkSingleToken(token, options = {}) {
                     // Fallback to basic profile if extra probes fail
                 }
                 const botProfile = buildValidBotProfile(user, cleanToken, { appData, guilds });
-                tokenCoordinator.cacheTokenProfile(cleanToken, botProfile);
+                if (guilds !== null) {
+                    tokenCoordinator.cacheTokenProfile(cleanToken, botProfile);
+                }
                 return botProfile;
             }
 
@@ -761,7 +764,8 @@ function _formatSingleBotLine(item, emojis) {
     const ownerName = item.ownerUsername || 'ไม่ระบุ';
     const ownerId = item.ownerId || '-';
     const ownerDisplay = _formatBotOwnerDisplay(ownerName, ownerId);
-    const guildCount = Number.isFinite(item.guildCount) ? item.guildCount : 0;
+    const guildCount = Number.isFinite(item.guildCount) ? item.guildCount : null;
+    const serverDisplay = guildCount === null ? 'ไม่ทราบ' : `อยู่ใน ${guildCount} เซิร์ฟเวอร์`;
     const createdDate = item.createdAt ? formatDateBangkokDateOnly(item.createdAt) : '-';
     const ageString = item.createdAt ? getAccountAgeString(item.createdAt) : '-';
     const inviteUrl = item.inviteUrl || `https://discord.com/oauth2/authorize?client_id=${botId}&scope=bot+applications.commands&permissions=8`;
@@ -771,7 +775,7 @@ function _formatSingleBotLine(item, emojis) {
         `• ชื่อบอท: ${botName}\n` +
         `• ไอดีบอท: ${botId}\n` +
         `• เจ้าของ: ${ownerDisplay}\n` +
-        `• เซิร์ฟเวอร์: อยู่ใน ${guildCount} เซิร์ฟเวอร์\n` +
+        `• เซิร์ฟเวอร์: ${serverDisplay}\n` +
         `• สร้างเมื่อ: ${createdDate} (${ageString})\n` +
         `• ลิงก์เชิญ: [คลิกเพื่อดึงบอทเข้าเซิร์ฟเวอร์](${inviteUrl})`
     );

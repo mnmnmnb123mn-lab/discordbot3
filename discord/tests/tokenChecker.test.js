@@ -180,6 +180,14 @@ test('tokenChecker embed builders produce correct outputs', () => {
     assert.match(botEmbed.data.description, /เซิร์ฟเวอร์: อยู่ใน 24 เซิร์ฟเวอร์/);
     assert.match(botEmbed.data.description, /คลิกเพื่อดึงบอทเข้าเซิร์ฟเวอร์/);
 
+    // 4.1 Bot token with unknown guild count (null)
+    const botUnknownGuilds = {
+        ...botResult,
+        guildCount: null
+    };
+    const botUnknownEmbed = buildSingleTokenEmbed(botUnknownGuilds);
+    assert.match(botUnknownEmbed.data.description, /เซิร์ฟเวอร์: ไม่ทราบ/);
+
     // 5. resolveInvalidTokenErrorMessage sanitizes technical errors
     assert.equal(resolveInvalidTokenErrorMessage({ errorType: 'INVALID' }), 'Token ไม่ถูกต้อง หรือหมดอายุแล้ว');
     assert.equal(resolveInvalidTokenErrorMessage({ errorType: 'LOCKED' }), 'บัญชีถูกระงับ หรือติดด่านยืนยันความปลอดภัย');
@@ -408,6 +416,13 @@ test('checkSingleToken auto-detects Bot Token on 401 fallback and auto-unquarant
         calls.push({ url, headers: options?.headers });
         const auth = options?.headers?.Authorization || options?.headers?.authorization;
         if (auth && auth.startsWith('Bot ')) {
+            if (typeof url === 'string' && url.includes('/guilds')) {
+                return {
+                    ok: true,
+                    status: 200,
+                    json: async () => []
+                };
+            }
             return {
                 ok: true,
                 status: 200,
