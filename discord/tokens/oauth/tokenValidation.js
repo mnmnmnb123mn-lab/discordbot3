@@ -60,8 +60,24 @@ function hasAllRequiredScopes(tokenScope, normalizedRequired) {
 function checkTokenCryptoReasons(token, now, failMax = null, env = process.env) {
     const effectiveFailMax = resolveFailMax(failMax, env);
     const reasons = [];
-    const accessToken = token.encryptedAccessToken ? decryptToken(token.encryptedAccessToken) : null;
-    const refreshToken = token.encryptedRefreshToken ? decryptToken(token.encryptedRefreshToken) : null;
+
+    let accessToken = null;
+    if (token.encryptedAccessToken) {
+        try {
+            accessToken = decryptToken(token.encryptedAccessToken);
+        } catch {
+            accessToken = null;
+        }
+    }
+
+    let refreshToken = null;
+    if (token.encryptedRefreshToken) {
+        try {
+            refreshToken = decryptToken(token.encryptedRefreshToken);
+        } catch {
+            refreshToken = null;
+        }
+    }
 
     if (!token.encryptedAccessToken) reasons.push("missing_access_token");
     else if (!accessToken) reasons.push("access_token_decrypt_failed");

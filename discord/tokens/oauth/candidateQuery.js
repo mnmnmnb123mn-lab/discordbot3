@@ -177,6 +177,9 @@ function processCandidateDoc(doc, {
                 result: doc.lastVerify?.result || null
             }
         });
+        if (seenUsers instanceof Set) {
+            seenUsers.add(userId);
+        }
     } else if (docHasMissingScope) {
         stats.missingScope++;
     } else if (docIsRevoked) {

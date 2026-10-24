@@ -93,7 +93,10 @@ async function executeWithToken(coordinator, token, subsystem, operation, option
         return await _executeTokenAttempt(coordinator, hash, operation, options);
     } catch (firstErr) {
         if (canRetry && coordinator._is429Error(firstErr)) {
-            const waitMs = coordinator._parse429WaitMs(firstErr);
+            const rawWaitMs = coordinator._parse429WaitMs(firstErr);
+            const waitMs = Number.isFinite(rawWaitMs) && rawWaitMs >= 0
+                ? Math.max(300, Math.min(Math.floor(rawWaitMs), 60000))
+                : 2500;
             coordinator.applyTokenBackoff(hash, waitMs, { subsystem, reason: '429_rate_limit', source: 'rest_api' });
             await new Promise((r) => setTimeout(r, waitMs));
             try {

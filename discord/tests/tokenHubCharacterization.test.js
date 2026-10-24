@@ -275,3 +275,143 @@ test('OAuthTokenManager Contract: Public exports, aliases, and _test integrity',
     }
     assert.equal(oauthTokenManager._test.refreshLocks instanceof Map, true);
 });
+
+test('TokenCoordinator: Releasing quarantine preserves active multi-session voice state', () => {
+    tokenCoordinator.reset();
+    const token = 'token-multi-voice-quarantine';
+
+    // Register 2 voice sessions
+    tokenCoordinator.registerVoiceActivity(token, {
+        guildId: 'guild-q1',
+        channelId: 'chan-q1',
+        sessionId: 'session-q1'
+    });
+    tokenCoordinator.registerVoiceActivity(token, {
+        guildId: 'guild-q2',
+        channelId: 'chan-q2',
+        sessionId: 'session-q2'
+    });
+
+    // Quarantine the token
+    tokenCoordinator.quarantineToken(token, '401 Unauthorized');
+    assert.equal(tokenCoordinator.isQuarantined(token), true);
+
+    // Release quarantine: state MUST NOT be deleted while voiceSessions has active sessions
+    const released = tokenCoordinator.releaseQuarantine(token);
+    assert.equal(released, true);
+    assert.equal(tokenCoordinator.isQuarantined(token), false);
+
+    const hash = tokenCoordinator.hashToken(token);
+    const state = tokenCoordinator.tokenStates.get(hash);
+    assert.ok(state, 'Token state must be preserved after quarantine release because voice sessions exist');
+    assert.equal(state.voiceSessions.size, 2, 'Both voice sessions must remain intact');
+    assert.equal(tokenCoordinator.isVoiceActive(token, 'session-q1'), true);
+    assert.equal(tokenCoordinator.isVoiceActive(token, 'session-q2'), true);
+});
+
+test('TokenCoordinator: 429 waitMs parsing clamps malformed headers, negatives, and large values safely', () => {
+    const parse = tokenCoordinator._parse429WaitMs;
+
+    // Standard valid header
+    const validWait = parse({ headers: { 'retry-after': '3' } });
+    assert.equal(validWait >= 3000 && validWait <= 4000, true);
+
+    // Negative header clamped to fallback
+    const negativeWait = parse({ headers: { 'retry-after': '-10' } });
+    assert.equal(negativeWait >= 300 && negativeWait <= 3000, true);
+
+    // NaN / garbage header
+    const garbageWait = parse({ headers: { 'retry-after': 'not-a-number' } });
+    assert.equal(garbageWait >= 300 && garbageWait <= 3000, true);
+
+    // Excessively large header clamped to 60s
+    const largeWait = parse({ headers: { 'retry-after': '99999' } });
+    assert.equal(largeWait, 60000);
+});
+
+test('OAuthTokenManager: checkTokenCryptoReasons catches corrupt ciphertext exceptions and records failure', () => {
+    const check = oauthTokenManager._test.checkTokenCryptoReasons;
+
+    // Token with corrupt base64/hex ciphertext that would throw in decryptToken
+    const corruptToken = {
+        encryptedAccessToken: 'v3:corrupt:invalid:payload:!!!',
+        encryptedRefreshToken: 'v3:corrupt:invalid:refresh:!!!'
+    };
+
+    // Must not throw uncaught error; must catch and push decrypt_failed reasons
+    assert.doesNotThrow(() => {
+        const reasons = check(corruptToken, Date.now());
+        assert.ok(reasons.includes('access_token_decrypt_failed'));
+        assert.ok(reasons.includes('refresh_token_decrypt_failed'));
+    });
+});
+
+test('OAuthTokenManager: Candidate query processCandidateDoc updates seenUsers Set on accepted candidates', async () => {
+    const { listAccessTokenCandidates } = require('../tokens/oauth/candidateQuery');
+
+    const seenUsers = new Set();
+    const mockDocs = [
+        {
+            _id: '507f1f77bcf86cd799439011',
+            discord: { userId: 'user-cand-1' },
+            oauth: {
+                encryptedAccessToken: 'dummy',
+                scope: 'identify email connections guilds guilds.members.read guilds.join',
+                revokedAt: null
+            }
+        },
+        {
+            _id: '507f1f77bcf86cd799439012',
+            discord: { userId: 'user-cand-2' },
+            oauth: {
+                encryptedAccessToken: 'dummy',
+                scope: 'identify email connections guilds guilds.members.read guilds.join',
+                revokedAt: null
+            }
+        }
+    ];
+
+    const mockModel = {
+        find: () => ({
+            select: () => ({
+                sort: () => ({
+                    limit: () => ({
+                        lean: async () => mockDocs
+                    })
+                })
+            })
+        })
+    };
+
+    const result = await listAccessTokenCandidates({
+        model: mockModel,
+        allowAllGuilds: true,
+        seenUsers,
+        limit: 10
+    });
+
+    assert.equal(result.candidates.length, 2);
+    assert.equal(seenUsers.has('user-cand-1'), true, 'seenUsers Set must include accepted candidate 1');
+    assert.equal(seenUsers.has('user-cand-2'), true, 'seenUsers Set must include accepted candidate 2');
+});
+
+test('OAuthTokenManager: Token payload validation accepts valid data and rejects invalid inputs with proper error codes', () => {
+    const validate = oauthTokenManager.validateTokenData;
+
+    assert.throws(() => validate(null), { code: 'oauth_token_invalid_payload' });
+    assert.throws(() => validate('string'), { code: 'oauth_token_invalid_payload' });
+    assert.throws(() => validate({}), { code: 'oauth_token_missing_access_token' });
+    assert.throws(() => validate({ access_token: 'acc' }), { code: 'oauth_token_missing_refresh_token' });
+    assert.throws(() => validate({ access_token: 'acc', refresh_token: 'ref', expires_in: 0 }), { code: 'oauth_token_invalid_expires_in' });
+    assert.throws(() => validate({ access_token: 'acc', refresh_token: 'ref', expires_in: -5 }), { code: 'oauth_token_invalid_expires_in' });
+    assert.throws(() => validate({ access_token: 'acc', refresh_token: 'ref', expires_in: 'not-num' }), { code: 'oauth_token_invalid_expires_in' });
+    assert.throws(() => validate({ access_token: 'acc', refresh_token: 'ref', expires_in: 3600, scope: 12345 }), { code: 'oauth_token_invalid_scope' });
+    assert.throws(() => validate({ access_token: 'acc', refresh_token: 'ref', expires_in: 3600, token_type: 12345 }), { code: 'oauth_token_invalid_token_type' });
+
+    assert.equal(validate({
+        access_token: 'valid_access_token',
+        refresh_token: 'valid_refresh_token',
+        expires_in: 3600,
+        scope: 'identify guilds'
+    }), true);
+});

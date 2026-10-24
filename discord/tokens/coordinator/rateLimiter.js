@@ -240,16 +240,24 @@ function _parse429WaitMs(err) {
         err?.headers?.['retry-after'] ||
         err?.headers?.['Retry-After'];
 
-    if (headerVal && !Number.isNaN(Number(headerVal))) {
-        waitSec = Number.parseFloat(headerVal);
-    } else if (typeof err?.retryAfter === 'number') {
+    if (headerVal !== undefined && headerVal !== null) {
+        const parsed = Number.parseFloat(String(headerVal).trim());
+        if (Number.isFinite(parsed) && parsed >= 0) {
+            waitSec = Math.min(parsed, 60);
+        }
+    } else if (typeof err?.retryAfter === 'number' && Number.isFinite(err.retryAfter) && err.retryAfter >= 0) {
         waitSec = err.retryAfter >= 20 ? err.retryAfter / 1000 : err.retryAfter;
-    } else if (typeof err?.retry_after === 'number') {
+    } else if (typeof err?.retry_after === 'number' && Number.isFinite(err.retry_after) && err.retry_after >= 0) {
         waitSec = err.retry_after >= 20 ? err.retry_after / 1000 : err.retry_after;
-    } else if (typeof err?.rawError?.retry_after === 'number') {
+    } else if (typeof err?.rawError?.retry_after === 'number' && Number.isFinite(err.rawError.retry_after) && err.rawError.retry_after >= 0) {
         const raw = err.rawError.retry_after;
         waitSec = raw >= 20 ? raw / 1000 : raw;
     }
+
+    if (!Number.isFinite(waitSec) || waitSec < 0) {
+        waitSec = 2.5;
+    }
+
     const calculatedMs = Math.max(300, Math.ceil(waitSec * 1000) + 100);
     return Math.min(calculatedMs, 60000);
 }

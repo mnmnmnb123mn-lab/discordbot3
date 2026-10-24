@@ -138,7 +138,8 @@ function releaseQuarantine(coordinator, token) {
             }
         } catch {}
 
-        if ((!state.activities || state.activities.size === 0) && !state.voice && !state.quest) {
+        const hasVoice = Boolean((state.voiceSessions && state.voiceSessions.size > 0) || state.voice);
+        if ((!state.activities || state.activities.size === 0) && !hasVoice && !state.quest) {
             coordinator.tokenStates.delete(hash);
         }
         return true;
