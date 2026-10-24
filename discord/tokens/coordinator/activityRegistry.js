@@ -1,5 +1,7 @@
 'use strict';
 
+const { cleanupInactiveTokenState } = require('./tokenState');
+
 /**
  * Dynamic Activity Registry: Acquire an activity slot for a token
  * @param {object} coordinator
@@ -78,7 +80,21 @@ function _releaseLegacyVoiceSession(state) {
 }
 
 function _handleVoiceRelease(coordinator, hash, state, options) {
-    const targetSessionId = typeof options === 'string' ? options : (options?.sessionId || null);
+    let targetSessionId = typeof options === 'string' ? options : (options?.sessionId || null);
+    if (!targetSessionId && typeof options === 'object' && options?.guildId) {
+        const targetGuildId = String(options.guildId);
+        if (state.voiceSessions?.has(targetGuildId)) {
+            targetSessionId = targetGuildId;
+        } else if (state.voiceSessions && state.voiceSessions.size > 0) {
+            for (const [sId, sess] of state.voiceSessions.entries()) {
+                if (String(sess.guildId) === targetGuildId) {
+                    targetSessionId = sId;
+                    break;
+                }
+            }
+        }
+    }
+
     if (targetSessionId) {
         return _releaseSpecificVoiceSession(coordinator, hash, state, targetSessionId, options);
     }
@@ -86,10 +102,7 @@ function _handleVoiceRelease(coordinator, hash, state, options) {
 }
 
 function _cleanupInactiveTokenState(coordinator, hash, state) {
-    const hasVoice = Boolean(state.voiceSessions && state.voiceSessions.size > 0);
-    if ((!state.activities || state.activities.size === 0) && !hasVoice && !state.voice && !state.quest && !state.quarantine) {
-        coordinator.tokenStates.delete(hash);
-    }
+    cleanupInactiveTokenState(coordinator, hash, state);
 }
 
 /**

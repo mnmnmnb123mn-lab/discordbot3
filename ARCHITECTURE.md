@@ -106,7 +106,7 @@ continuation payloads when one Discord message cannot hold the full event.
 │   ├── core/                     env, HTTP, feature flags, safe logging, webhooks
 │   ├── tokens/                   Token Hub: coordinator and OAuth subsystems
 │   │   ├── coordinator/          Token coordinator, rate limiter, quarantine, activity, profile cache
-│   │   ├── oauth/                OAuth token manager: refresh, storage, crypto, candidate query, recovery
+│   │   ├── oauth/                OAuth token manager: refresh, storage, candidate query, recovery, migration
 │   │   ├── tokenCoordinator.js   compatibility facade -> ./coordinator
 │   │   ├── oauthTokenManager.js  compatibility facade -> ./oauth
 │   │   └── index.js              central Token Hub public entry point

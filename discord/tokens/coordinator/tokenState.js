@@ -107,11 +107,53 @@ function formatAuthHeader(token, explicitType = null, inferredType = 'unknown') 
     return type === 'bot' ? `Bot ${trimmed}` : trimmed;
 }
 
+/**
+ * Determine whether a token state record has any active usage and should be retained
+ * @param {object} coordinator
+ * @param {object} state
+ * @returns {boolean}
+ */
+function shouldRetainTokenState(coordinator, state) {
+    if (!state) return false;
+    if (state.quarantine) return true;
+    if (state.quest) return true;
+    if (state.voice) return true;
+    if (state.voiceSessions && state.voiceSessions.size > 0) return true;
+    if (state.activities && state.activities.size > 0) return true;
+    if (state.backoffUntil && state.backoffUntil > Date.now()) return true;
+    if (state.rateLimiter) {
+        if (state.rateLimiter.queue && state.rateLimiter.queue.length > 0) return true;
+        if (state.rateLimiter.pumpTimer) return true;
+        const capacity = coordinator?.rateLimitConfig?.capacity ?? 4;
+        if (typeof state.rateLimiter.tokens === 'number' && state.rateLimiter.tokens < capacity) {
+            return true;
+        }
+    }
+    return false;
+}
+
+/**
+ * Remove token state if it has no active activities, voice, quest, quarantine, backoff, or rate-limit usage
+ * @param {object} coordinator
+ * @param {string} hash
+ * @param {object} [state]
+ */
+function cleanupInactiveTokenState(coordinator, hash, state) {
+    if (!hash || !coordinator?.tokenStates) return;
+    const resolvedState = state || coordinator.tokenStates.get(hash);
+    if (!resolvedState) return;
+    if (!shouldRetainTokenState(coordinator, resolvedState)) {
+        coordinator.tokenStates.delete(hash);
+    }
+}
+
 module.exports = {
     hashToken,
     createTokenState,
     getOrCreateTokenState,
     setTokenType,
     getTokenType,
-    formatAuthHeader
+    formatAuthHeader,
+    shouldRetainTokenState,
+    cleanupInactiveTokenState
 };

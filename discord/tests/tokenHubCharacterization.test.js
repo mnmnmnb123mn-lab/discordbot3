@@ -426,3 +426,131 @@ test('OAuthTokenManager: Token payload validation accepts valid data and rejects
         scope: 'identify guilds'
     }), true);
 });
+
+test('TokenCoordinator: reset() rejects queued rate-limit tickets with COORDINATOR_RESET and clears abort listeners', async () => {
+    tokenCoordinator.reset();
+    const token = 'token-reset-queue-test';
+    const hash = tokenCoordinator.hashToken(token);
+    const state = tokenCoordinator._getOrCreateState(hash);
+    state.rateLimiter.tokens = 0; // Deplete tokens to force queueing
+
+    const controller = new AbortController();
+    const waitPromise = tokenCoordinator._acquireRateLimitSlot(hash, {
+        maxWaitMs: 10000,
+        signal: controller.signal
+    });
+
+    assert.equal(state.rateLimiter.queue.length, 1);
+
+    // Call reset
+    tokenCoordinator.reset();
+
+    await assert.rejects(waitPromise, (err) => {
+        assert.equal(err.code, 'COORDINATOR_RESET');
+        return true;
+    });
+});
+
+test('TokenCoordinator: _handleVoiceRelease with guildId resolves to matching voice session when sessionId omitted', () => {
+    tokenCoordinator.reset();
+    const token = 'token-voice-guild-release';
+
+    // Register 2 sessions in different guilds
+    tokenCoordinator.registerVoiceActivity(token, { guildId: 'guild-aaa', channelId: 'chan-1' });
+    tokenCoordinator.registerVoiceActivity(token, { guildId: 'guild-bbb', channelId: 'chan-2' });
+
+    assert.equal(tokenCoordinator.isVoiceActive(token, 'guild-aaa'), true);
+    assert.equal(tokenCoordinator.isVoiceActive(token, 'guild-bbb'), true);
+
+    // Unregister by guildId only
+    const unreg = tokenCoordinator.unregisterVoiceActivity(token, { guildId: 'guild-aaa' });
+    assert.equal(unreg, true);
+    assert.equal(tokenCoordinator.isVoiceActive(token, 'guild-aaa'), false);
+    assert.equal(tokenCoordinator.isVoiceActive(token, 'guild-bbb'), true);
+});
+
+test('TokenCoordinator: _extractBodyRetryAfter accurately respects ms vs sec units across Discord error shapes', () => {
+    const parse = tokenCoordinator._parse429WaitMs;
+
+    // err.retryAfter is milliseconds (e.g. 500ms) -> waitMs should be ~600ms
+    const msErr = { retryAfter: 500 };
+    const msWait = parse(msErr);
+    assert.equal(msWait, 600); // 500ms + 100ms
+
+    // err.retry_after is seconds (e.g. 2.5s) -> waitMs should be ~2600ms
+    const secErr = { retry_after: 2.5 };
+    const secWait = parse(secErr);
+    assert.equal(secWait, 2600); // ceil(2.5 * 1000) + 100
+
+    // err.rawError.retry_after is seconds (e.g. 3.0s) -> waitMs should be ~3100ms
+    const rawErr = { rawError: { retry_after: 3.0 } };
+    const rawWait = parse(rawErr);
+    assert.equal(rawWait, 3100);
+});
+
+test('OAuthTokenManager: markRefreshFailure defers revokedCount and alert until CAS write succeeds', async () => {
+    const markFailure = oauthTokenManager._test.markRefreshFailure;
+    const { diagnosticStats } = require('../tokens/oauth/state');
+
+    const initialRevoked = diagnosticStats.revokedCount;
+
+    // Simulate CAS conflict: modifiedCount = 0
+    const mockModelConflict = {
+        updateOne: async () => ({ modifiedCount: 0 })
+    };
+
+    const doc = {
+        _id: '507f1f77bcf86cd799439011',
+        discord: { userId: 'user-conflict' },
+        oauth: {
+            encryptedRefreshToken: 'dummy-refresh',
+            version: 1,
+            refreshFailCount: 10 // >= effectiveFailMax, shouldRevoke would be true
+        }
+    };
+
+    const outcome = await markFailure(doc, new Error('invalid_grant'), {
+        model: mockModelConflict,
+        tokenField: 'oauth',
+        failMax: 5
+    });
+
+    assert.equal(outcome.ok, true);
+    assert.equal(outcome.skipped, true);
+    assert.equal(outcome.reason, 'failure_state_changed');
+    assert.equal(diagnosticStats.revokedCount, initialRevoked, 'revokedCount must NOT increment when CAS update fails');
+});
+
+test('TokenCoordinator: shouldRetainTokenState retains state when backoff, pump timer, or depleted tokens exist', () => {
+    const { shouldRetainTokenState } = require('../tokens/coordinator/tokenState');
+    tokenCoordinator.reset();
+    const token = 'token-retain-test';
+    const hash = tokenCoordinator.hashToken(token);
+    const state = tokenCoordinator._getOrCreateState(hash);
+
+    // Initial fresh state has no activity, voice, quest, quarantine, backoff, or depleted tokens
+    assert.equal(shouldRetainTokenState(tokenCoordinator, state), false);
+
+    // Backoff active -> should retain
+    state.backoffUntil = Date.now() + 5000;
+    assert.equal(shouldRetainTokenState(tokenCoordinator, state), true);
+    state.backoffUntil = 0;
+
+    // Depleted tokens -> should retain
+    state.rateLimiter.tokens = 2; // < capacity 4
+    assert.equal(shouldRetainTokenState(tokenCoordinator, state), true);
+    state.rateLimiter.tokens = 4;
+
+    // Queued tickets -> should retain
+    state.rateLimiter.queue = [{ cancelled: false }];
+    assert.equal(shouldRetainTokenState(tokenCoordinator, state), true);
+    state.rateLimiter.queue = [];
+
+    // Pump timer -> should retain
+    state.rateLimiter.pumpTimer = setTimeout(() => {}, 1000);
+    assert.equal(shouldRetainTokenState(tokenCoordinator, state), true);
+    clearTimeout(state.rateLimiter.pumpTimer);
+    state.rateLimiter.pumpTimer = null;
+
+    assert.equal(shouldRetainTokenState(tokenCoordinator, state), false);
+});

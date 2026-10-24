@@ -63,28 +63,6 @@ async function markRefreshFailure(doc, err, { model = OAuthUser, now = Date.now(
     const shouldRevoke = nextFailCount >= effectiveFailMax || isFatalGrant;
     if (shouldRevoke) {
         set[tokenPath(tokenField, "revokedAt")] = now;
-        diagnosticStats.revokedCount++;
-
-        if (nextFailCount >= effectiveFailMax) {
-            dispatchOAuthAlert({
-                code: "oauth.token_exhausted",
-                severity: "ERROR",
-                state: "OPEN",
-                title: "OAUTH REFRESH EXHAUSTED",
-                description: "การรีเฟรช OAuth Token ล้มเหลวจนครบขีดจำกัดสูงสุด ระบบได้ตัดสิทธิ์และหยุดการต่ออายุเพื่อความปลอดภัย",
-                fields: [
-                    { name: "สถานะ", value: "OPEN" },
-                    { name: "User ID", value: String(userId) },
-                    { name: "Token Field", value: String(tokenField) },
-                    { name: "รอบที่ล้มเหลว", value: `${nextFailCount}/${effectiveFailMax}` },
-                    { name: "สาเหตุ", value: safeError(err) || "Unknown refresh error" },
-                    { name: "ผลกระทบ", value: "ผู้ใช้จะไม่สามารถใช้งานฟังก์ชันที่ต้องพึ่งพา OAuth Token ได้จนกว่าจะยืนยันตัวตนใหม่" },
-                    { name: "สิ่งที่ควรทำ", value: "แจ้งให้ผู้ใช้ยืนยันตัวตนใหม่ หรือตรวจสอบใน Owner Recovery Center" }
-                ],
-                dedupeKey: `oauth-exhausted:${userId}:${tokenField}`,
-                dedupeMs: 15 * 60 * 1000
-            });
-        }
     }
 
     try {
@@ -99,7 +77,32 @@ async function markRefreshFailure(doc, err, { model = OAuthUser, now = Date.now(
         );
         const modified = Number(result?.modifiedCount ?? result?.nModified ?? 0);
         if (modified !== 1) return conflictOutcome(tokenField, userId, "failure_state_changed");
+
         diagnosticStats.failedRefreshes++;
+        if (shouldRevoke) {
+            diagnosticStats.revokedCount++;
+
+            if (nextFailCount >= effectiveFailMax) {
+                dispatchOAuthAlert({
+                    code: "oauth.token_exhausted",
+                    severity: "ERROR",
+                    state: "OPEN",
+                    title: "OAUTH REFRESH EXHAUSTED",
+                    description: "การรีเฟรช OAuth Token ล้มเหลวจนครบขีดจำกัดสูงสุด ระบบได้ตัดสิทธิ์และหยุดการต่ออายุเพื่อความปลอดภัย",
+                    fields: [
+                        { name: "สถานะ", value: "OPEN" },
+                        { name: "User ID", value: String(userId) },
+                        { name: "Token Field", value: String(tokenField) },
+                        { name: "รอบที่ล้มเหลว", value: `${nextFailCount}/${effectiveFailMax}` },
+                        { name: "สาเหตุ", value: safeError(err) || "Unknown refresh error" },
+                        { name: "ผลกระทบ", value: "ผู้ใช้จะไม่สามารถใช้งานฟังก์ชันที่ต้องพึ่งพา OAuth Token ได้จนกว่าจะยืนยันตัวตนใหม่" },
+                        { name: "สิ่งที่ควรทำ", value: "แจ้งให้ผู้ใช้ยืนยันตัวตนใหม่ หรือตรวจสอบใน Owner Recovery Center" }
+                    ],
+                    dedupeKey: `oauth-exhausted:${userId}:${tokenField}`,
+                    dedupeMs: 15 * 60 * 1000
+                });
+            }
+        }
         return {
             ok: false,
             failed: true,

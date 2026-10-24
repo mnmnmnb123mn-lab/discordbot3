@@ -472,8 +472,16 @@ class TokenCoordinator extends EventEmitter {
                 state.rateLimiter.pumpTimer = null;
             }
             if (state.rateLimiter?.queue) {
+                const resetErr = new Error('Token coordinator reset: rate limit ticket cancelled');
+                resetErr.code = 'COORDINATOR_RESET';
                 for (const ticket of state.rateLimiter.queue) {
+                    ticket.cancelled = true;
                     if (ticket.timer) clearTimeout(ticket.timer);
+                    if (typeof ticket.reject === 'function') {
+                        try {
+                            ticket.reject(resetErr);
+                        } catch {}
+                    }
                 }
                 state.rateLimiter.queue = [];
             }

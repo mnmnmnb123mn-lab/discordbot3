@@ -99,6 +99,10 @@ async function executeWithToken(coordinator, token, subsystem, operation, option
                 : 2500;
             coordinator.applyTokenBackoff(hash, waitMs, { subsystem, reason: '429_rate_limit', source: 'rest_api' });
             await new Promise((r) => setTimeout(r, waitMs));
+            if (options?.signal?.aborted) {
+                const abortErr = options.signal.reason || new Error('This operation was aborted');
+                throw abortErr;
+            }
             try {
                 return await _executeTokenAttempt(coordinator, hash, operation, options);
             } catch (retryErr) {
@@ -153,7 +157,10 @@ async function runTask(coordinator, token, options, taskFn) {
             return taskFn();
         };
 
-        const taskPromise = coordinator.executeWithToken(token, subsystem, wrappedFn, options);
+        const executionOptions = controller?.signal
+            ? { ...options, signal: controller.signal }
+            : options;
+        const taskPromise = coordinator.executeWithToken(token, subsystem, wrappedFn, executionOptions);
         if (timeoutMs > 0) {
             const timeoutPromise = new Promise((_, reject) => {
                 timeoutTimer = setTimeout(() => {

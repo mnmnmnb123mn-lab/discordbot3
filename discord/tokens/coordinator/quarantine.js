@@ -1,6 +1,7 @@
 'use strict';
 
 const { sanitizeLogText } = require('../../core/safeLogger');
+const { cleanupInactiveTokenState } = require('./tokenState');
 
 /**
  * Register a subsystem with the coordinator to receive lifecycle events
@@ -138,10 +139,7 @@ function releaseQuarantine(coordinator, token) {
             }
         } catch {}
 
-        const hasVoice = Boolean((state.voiceSessions && state.voiceSessions.size > 0) || state.voice);
-        if ((!state.activities || state.activities.size === 0) && !hasVoice && !state.quest) {
-            coordinator.tokenStates.delete(hash);
-        }
+        cleanupInactiveTokenState(coordinator, hash, state);
         return true;
     }
     return false;

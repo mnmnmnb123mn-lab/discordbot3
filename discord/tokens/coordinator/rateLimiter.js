@@ -246,11 +246,12 @@ function _extractHeaderRetryAfter(err) {
 }
 
 function _extractBodyRetryAfter(err) {
-    const candidates = [err?.retryAfter, err?.retry_after, err?.rawError?.retry_after];
-    for (const val of candidates) {
-        if (typeof val === 'number' && Number.isFinite(val) && val >= 0) {
-            return val >= 20 ? val / 1000 : val;
-        }
+    if (typeof err?.retryAfter === 'number' && Number.isFinite(err.retryAfter) && err.retryAfter >= 0) {
+        return err.retryAfter / 1000;
+    }
+    const rawSec = err?.retry_after ?? err?.rawError?.retry_after;
+    if (typeof rawSec === 'number' && Number.isFinite(rawSec) && rawSec >= 0) {
+        return rawSec >= 20 ? rawSec / 1000 : rawSec;
     }
     return null;
 }
