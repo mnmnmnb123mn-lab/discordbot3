@@ -660,21 +660,20 @@ function _buildUserTokenEmbed(result) {
         );
 }
 
-function buildTokenCheckEmbed(results) {
-    const list = Array.isArray(results)
-        ? results
-        : (results?.results && Array.isArray(results.results) ? results.results : [results].filter(Boolean));
+function _normalizeTokenResultsList(results) {
+    if (Array.isArray(results)) {
+        return results;
+    }
+    if (results && Array.isArray(results.results)) {
+        return results.results;
+    }
+    if (results) {
+        return [results];
+    }
+    return [];
+}
 
-    const snEmoji = config.emojis?.sn_pmt || '<a:sn_pmt:1559878089750749244>';
-    const grejEmoji = config.emojis?.Grej_pmt || config.emojis?.dot_green || '<:Grej_pmt:1560405771978547340>';
-    const verifybEmoji = config.emojis?.verifyb_pmt || config.emojis?.check_black || '<a:verifyb_pmt:1561669634183397409>';
-    const krolesEmoji = config.emojis?.kroles_pmt || config.emojis?.members || '<:kroles_pmt:1553835237333672006>';
-    const reddjEmoji = config.emojis?.reddj_pmt || config.emojis?.dot_red || '<:reddj_pmt:1560405803792465940>';
-    const notEmoji = config.emojis?.not_pmt || config.emojis?.stop || '<:not_pmt:1553835188558233780>';
-    const r05Emoji = config.emojis?.r05_pmt || '<a:r05_pmt:1505544028740128838>';
-
-    const color = config.system?.themeColors?.primary || '#CC66FF';
-
+function _categorizeTokenList(list) {
     const userTokens = [];
     const invalidTokens = [];
     const botTokens = [];
@@ -689,21 +688,32 @@ function buildTokenCheckEmbed(results) {
         }
     }
 
-    const sections = [];
+    return { userTokens, invalidTokens, botTokens };
+}
 
-    // Summary line
-    sections.push(`สรุปผลการตรวจสอบทั้งหมด : ${list.length} Token`);
+function _formatUserNitroLine(item) {
+    const hasNitro = Boolean(item.hasNitro || item.premiumType > 0);
+    if (!hasNitro) {
+        return 'ไม่มี';
+    }
+    const hasDays = Number.isFinite(item.expireDays) && item.expireDays > 0;
+    if (hasDays) {
+        return `มี (เหลือ${item.expireDays}วัน)`;
+    }
+    return 'มี';
+}
 
-    // Valid User Tokens
+function _formatUserTokensSection(userTokens, emojis) {
+    if (userTokens.length === 0) {
+        return null;
+    }
+    const { grejEmoji, verifybEmoji, krolesEmoji } = emojis;
     const userLines = [];
+
     for (const item of userTokens) {
         const rawToken = item.token || item.maskedToken || '';
         const username = item.username || 'Unknown';
-        const hasNitro = Boolean(item.hasNitro || item.premiumType > 0);
-        const nitroDays = Number.isFinite(item.expireDays) && item.expireDays > 0 ? item.expireDays : null;
-        const nitroLine = hasNitro
-            ? (nitroDays ? `มี (เหลือ${nitroDays}วัน)` : 'มี')
-            : 'ไม่มี';
+        const nitroLine = _formatUserNitroLine(item);
         const boostCount = item.hasBoost || item.premiumType === 2 ? 2 : (item.boostCount || 0);
 
         userLines.push(
@@ -713,12 +723,17 @@ function buildTokenCheckEmbed(results) {
             `• Nitro Boost : \`${boostCount} Boost\``
         );
     }
-    if (userLines.length > 0) {
-        sections.push(userLines.join('\n'));
-    }
 
-    // Invalid Tokens
+    return userLines.join('\n');
+}
+
+function _formatInvalidTokensSection(invalidTokens, emojis) {
+    if (invalidTokens.length === 0) {
+        return null;
+    }
+    const { reddjEmoji, notEmoji } = emojis;
     const invalidLines = [];
+
     for (const item of invalidTokens) {
         const rawToken = item.token || item.maskedToken || '';
         invalidLines.push(
@@ -726,38 +741,82 @@ function buildTokenCheckEmbed(results) {
             `• โทเคนนี้ไม่สามารถใช้งานได้ โปรดลองตรวจโทเคนสอบอีกครั้ง`
         );
     }
-    if (invalidLines.length > 0) {
-        sections.push(invalidLines.join('\n'));
+
+    return invalidLines.join('\n');
+}
+
+function _formatBotOwnerDisplay(ownerName, ownerId) {
+    if (!ownerName || ownerName === 'ไม่ระบุ') {
+        return 'ไม่ระบุ';
+    }
+    const formattedName = ownerName.startsWith('@') ? ownerName : `@${ownerName}`;
+    return `${formattedName} (ID: ${ownerId})`;
+}
+
+function _formatSingleBotLine(item, emojis) {
+    const { grejEmoji, r05Emoji } = emojis;
+    const rawToken = item.token || item.maskedToken || '';
+    const botName = item.globalName || item.username || 'Bot';
+    const botId = item.id || '-';
+    const ownerName = item.ownerUsername || 'ไม่ระบุ';
+    const ownerId = item.ownerId || '-';
+    const ownerDisplay = _formatBotOwnerDisplay(ownerName, ownerId);
+    const guildCount = Number.isFinite(item.guildCount) ? item.guildCount : 0;
+    const createdDate = item.createdAt ? formatDateBangkokDateOnly(item.createdAt) : '-';
+    const ageString = item.createdAt ? getAccountAgeString(item.createdAt) : '-';
+    const inviteUrl = item.inviteUrl || `https://discord.com/oauth2/authorize?client_id=${botId}&scope=bot+applications.commands&permissions=8`;
+
+    return (
+        `${grejEmoji}${r05Emoji} : \`${rawToken}\`\n` +
+        `• ชื่อบอท: ${botName}\n` +
+        `• ไอดีบอท: ${botId}\n` +
+        `• เจ้าของ: ${ownerDisplay}\n` +
+        `• เซิร์ฟเวอร์: อยู่ใน ${guildCount} เซิร์ฟเวอร์\n` +
+        `• สร้างเมื่อ: ${createdDate} (${ageString})\n` +
+        `• ลิงก์เชิญ: [คลิกเพื่อดึงบอทเข้าเซิร์ฟเวอร์](${inviteUrl})`
+    );
+}
+
+function _formatBotTokensSection(botTokens, emojis) {
+    if (botTokens.length === 0) {
+        return null;
+    }
+    const botLines = botTokens.map(item => _formatSingleBotLine(item, emojis));
+    return `🔍 ข้อมูลบัญชี Discord (Bot)\n\n${botLines.join('\n')}`;
+}
+
+function buildTokenCheckEmbed(results) {
+    const list = _normalizeTokenResultsList(results);
+
+    const emojis = {
+        snEmoji: config.emojis?.sn_pmt || '<a:sn_pmt:1559878089750749244>',
+        grejEmoji: config.emojis?.Grej_pmt || config.emojis?.dot_green || '<:Grej_pmt:1560405771978547340>',
+        verifybEmoji: config.emojis?.verifyb_pmt || config.emojis?.check_black || '<a:verifyb_pmt:1561669634183397409>',
+        krolesEmoji: config.emojis?.kroles_pmt || config.emojis?.members || '<:kroles_pmt:1553835237333672006>',
+        reddjEmoji: config.emojis?.reddj_pmt || config.emojis?.dot_red || '<:reddj_pmt:1560405803792465940>',
+        notEmoji: config.emojis?.not_pmt || config.emojis?.stop || '<:not_pmt:1553835188558233780>',
+        r05Emoji: config.emojis?.r05_pmt || '<a:r05_pmt:1505544028740128838>'
+    };
+
+    const color = config.system?.themeColors?.primary || '#CC66FF';
+    const { userTokens, invalidTokens, botTokens } = _categorizeTokenList(list);
+
+    const sections = [];
+    sections.push(`สรุปผลการตรวจสอบทั้งหมด : ${list.length} Token`);
+
+    const userSection = _formatUserTokensSection(userTokens, emojis);
+    if (userSection) {
+        sections.push(userSection);
     }
 
-    // Bot Tokens
-    if (botTokens.length > 0) {
-        const botLines = [];
-        for (const item of botTokens) {
-            const rawToken = item.token || item.maskedToken || '';
-            const botName = item.globalName || item.username || 'Bot';
-            const botId = item.id || '-';
-            const ownerName = item.ownerUsername || 'ไม่ระบุ';
-            const ownerId = item.ownerId || '-';
-            const ownerDisplay = ownerName === 'ไม่ระบุ'
-                ? 'ไม่ระบุ'
-                : `${ownerName.startsWith('@') ? ownerName : `@${ownerName}`} (ID: ${ownerId})`;
-            const guildCount = Number.isFinite(item.guildCount) ? item.guildCount : 0;
-            const createdDate = item.createdAt ? formatDateBangkokDateOnly(item.createdAt) : '-';
-            const ageString = item.createdAt ? getAccountAgeString(item.createdAt) : '-';
-            const inviteUrl = item.inviteUrl || `https://discord.com/oauth2/authorize?client_id=${botId}&scope=bot+applications.commands&permissions=8`;
+    const invalidSection = _formatInvalidTokensSection(invalidTokens, emojis);
+    if (invalidSection) {
+        sections.push(invalidSection);
+    }
 
-            botLines.push(
-                `${grejEmoji}${r05Emoji} : \`${rawToken}\`\n` +
-                `• ชื่อบอท: ${botName}\n` +
-                `• ไอดีบอท: ${botId}\n` +
-                `• เจ้าของ: ${ownerDisplay}\n` +
-                `• เซิร์ฟเวอร์: อยู่ใน ${guildCount} เซิร์ฟเวอร์\n` +
-                `• สร้างเมื่อ: ${createdDate} (${ageString})\n` +
-                `• ลิงก์เชิญ: [คลิกเพื่อดึงบอทเข้าเซิร์ฟเวอร์](${inviteUrl})`
-            );
-        }
-        sections.push(`🔍 ข้อมูลบัญชี Discord (Bot)\n\n${botLines.join('\n')}`);
+    const botSection = _formatBotTokensSection(botTokens, emojis);
+    if (botSection) {
+        sections.push(botSection);
     }
 
     let description = sections.join('\n\n');
@@ -767,7 +826,7 @@ function buildTokenCheckEmbed(results) {
 
     const embed = new MessageEmbed()
         .setColor(color)
-        .setTitle(`${snEmoji}   ตรวจสอบเสร็จเเล้ว`)
+        .setTitle(`${emojis.snEmoji}   ตรวจสอบเสร็จเเล้ว`)
         .setDescription(description);
 
     if (list.length === 1 && list[0].avatarUrl) {
