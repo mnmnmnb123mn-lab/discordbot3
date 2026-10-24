@@ -1,7 +1,6 @@
 "use strict";
 
 const fs = require("fs");
-const path = require("path");
 
 const {
     chunkLinesToFields,
@@ -411,8 +410,7 @@ describe("Verification Webhook Manager Helpers and Payload Builder Suite", () =>
         });
 
         test("all field labels follow bold format and design template aligns with webhook payload", () => {
-            const templatePath = path.resolve(__dirname, "../wedhookที่ออกเเบบเอง");
-            const templateContent = fs.readFileSync(templatePath, "utf8");
+            const templateContent = fs.readFileSync("wedhookที่ออกเเบบเอง", "utf8");
 
             // Extract all bullet labels from template: • **<Label>** :
             const templateLabelMatches = Array.from(templateContent.matchAll(/• \*\*([^*]+)\*\* :/g)).map(m => m[1].trim());
