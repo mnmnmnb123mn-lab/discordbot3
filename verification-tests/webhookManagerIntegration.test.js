@@ -1665,6 +1665,7 @@ test("Webhook Manager & Delivery Engine Integration Suite", async (t) => {
         assert.ok(sec6, "Section 6 exists");
         assert.match(sec6.value, /• \*\*ตรวจพบบัญชีในเครื่องนี้\*\*\s*:\s*1 บัญชี \(เครื่องใหม่ ไม่พบไอดีโคลน ✅\)/);
         assert.match(sec6.value, /• \*\*บัญชีที่เคยใช้ IP นี้\*\*\s*:\s*1 บัญชี \(ปกติ ✅\)/);
+        assert.match(sec6.value, /• \*\*วันที่เข้าร่วมเซิร์ฟเวอร์ครั้งแรกจาก IP นี้\*\*\s*:/);
         assert.match(sec6.value, /• \*\*การดัดแปลง Header เครือข่าย\*\*\s*:\s*ไม่พบ \(ปกติ ✅\)/);
         assert.match(sec6.value, /• \*\*ข้อสังเกตความปลอดภัย\*\*\s*:\s*ไม่พบความเสี่ยง/);
     });
@@ -1687,7 +1688,7 @@ test("Webhook Manager & Delivery Engine Integration Suite", async (t) => {
                 result: "success"
             });
             const sec = emb.fields.find(f => f.name.includes("อุปกรณ์ & เบราว์เซอร์"));
-            assert.match(sec.value, new RegExp(`• \\*\\*สถาปัตยกรรมระบบ\\*\\*\\s*:\\s*${expected.replace('/', '\\/')}`));
+            assert.ok(sec.value.includes(`• **สถาปัตยกรรมระบบ** : ${expected}`));
         }
     });
 

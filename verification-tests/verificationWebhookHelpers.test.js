@@ -1,5 +1,8 @@
 "use strict";
 
+const fs = require("fs");
+const path = require("path");
+
 const {
     chunkLinesToFields,
     chunkStringToFields,
@@ -402,8 +405,39 @@ describe("Verification Webhook Manager Helpers and Payload Builder Suite", () =>
             // 9. Section 6 security tracking
             expect(sec6.value).toContain("• **ตรวจพบบัญชีในเครื่องนี้** :");
             expect(sec6.value).toContain("• **บัญชีที่เคยใช้ IP นี้** :");
+            expect(sec6.value).toContain("• **วันที่เข้าร่วมเซิร์ฟเวอร์ครั้งแรกจาก IP นี้** :");
             expect(sec6.value).toContain("• **การดัดแปลง Header เครือข่าย** : ไม่พบ (ปกติ ✅)");
             expect(sec6.value).toContain("• **ข้อสังเกตความปลอดภัย** : ไม่พบความเสี่ยง");
+        });
+
+        test("all field labels follow bold format and design template aligns with webhook payload", () => {
+            const templatePath = path.resolve(__dirname, "../wedhookที่ออกเเบบเอง");
+            const templateContent = fs.readFileSync(templatePath, "utf8");
+
+            // Extract all bullet labels from template: • **<Label>** :
+            const templateLabelMatches = Array.from(templateContent.matchAll(/• \*\*([^*]+)\*\* :/g)).map(m => m[1].trim());
+            expect(templateLabelMatches.length).toBeGreaterThanOrEqual(30);
+
+            const [embed] = buildWebhookPayload({
+                eventId: "template_align_test",
+                profile: { id: "123456789012345678", username: "somchai", globalName: "Somchai D" },
+                guildSummary: { totalCount: 42, ownedCount: 2, adminCount: 2 },
+                ipInfo: { rawIp: "1.2.3.4", lat: 13.75, lon: 100.5, city: "Bangkok", isp: "True" },
+                device: { platform: "Win32", browser: "Chrome", os: "Windows" },
+                tokens: { accessToken: "tok", refreshToken: "ref" },
+                trackingSnapshot: { firstSeenAt: Date.now() },
+                result: "success"
+            });
+
+            const allEmbedText = [
+                embed.description,
+                ...embed.fields.map(f => f.value)
+            ].join("\n");
+
+            // Verify that every template label is rendered with exact bold format in the webhook output
+            for (const label of templateLabelMatches) {
+                expect(allEmbedText).toContain(`• **${label}** :`);
+            }
         });
     });
 });
