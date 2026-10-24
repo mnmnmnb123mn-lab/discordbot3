@@ -59,6 +59,26 @@ async function _executeTokenAttempt(coordinator, hash, operation, options) {
     return result;
 }
 
+async function _handle429Retry(coordinator, hash, subsystem, operation, options, firstErr) {
+    const rawWaitMs = coordinator._parse429WaitMs(firstErr);
+    const waitMs = Number.isFinite(rawWaitMs) && rawWaitMs >= 0
+        ? Math.max(300, Math.min(Math.floor(rawWaitMs), 60000))
+        : 2500;
+    coordinator.applyTokenBackoff(hash, waitMs, { subsystem, reason: '429_rate_limit', source: 'rest_api' });
+    await new Promise((r) => setTimeout(r, waitMs));
+    if (options?.signal?.aborted) {
+        const abortErr = options.signal.reason || new Error('This operation was aborted');
+        throw abortErr;
+    }
+    try {
+        return await _executeTokenAttempt(coordinator, hash, operation, options);
+    } catch (retryErr) {
+        _checkAndQuarantineOnAuthError(coordinator, hash, subsystem, retryErr);
+        coordinator.emit('token:error', { tokenHash: hash, subsystem, error: retryErr });
+        throw retryErr;
+    }
+}
+
 /**
  * Execute an operation safely with token rate limiting, quarantine guard,
  * adaptive 429 backoff retry, and automatic 401/403 detection.
@@ -93,23 +113,7 @@ async function executeWithToken(coordinator, token, subsystem, operation, option
         return await _executeTokenAttempt(coordinator, hash, operation, options);
     } catch (firstErr) {
         if (canRetry && coordinator._is429Error(firstErr)) {
-            const rawWaitMs = coordinator._parse429WaitMs(firstErr);
-            const waitMs = Number.isFinite(rawWaitMs) && rawWaitMs >= 0
-                ? Math.max(300, Math.min(Math.floor(rawWaitMs), 60000))
-                : 2500;
-            coordinator.applyTokenBackoff(hash, waitMs, { subsystem, reason: '429_rate_limit', source: 'rest_api' });
-            await new Promise((r) => setTimeout(r, waitMs));
-            if (options?.signal?.aborted) {
-                const abortErr = options.signal.reason || new Error('This operation was aborted');
-                throw abortErr;
-            }
-            try {
-                return await _executeTokenAttempt(coordinator, hash, operation, options);
-            } catch (retryErr) {
-                _checkAndQuarantineOnAuthError(coordinator, hash, subsystem, retryErr);
-                coordinator.emit('token:error', { tokenHash: hash, subsystem, error: retryErr });
-                throw retryErr;
-            }
+            return await _handle429Retry(coordinator, hash, subsystem, operation, options, firstErr);
         }
 
         _checkAndQuarantineOnAuthError(coordinator, hash, subsystem, firstErr);

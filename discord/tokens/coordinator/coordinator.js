@@ -10,6 +10,30 @@ const profileCache = require('./profileCache');
 const questHeartbeat = require('./questHeartbeat');
 const telemetry = require('./telemetry');
 
+function _clearRateLimitTicket(ticket, resetErr) {
+    ticket.cancelled = true;
+    if (ticket.timer) clearTimeout(ticket.timer);
+    if (typeof ticket.reject === 'function') {
+        try {
+            ticket.reject(resetErr);
+        } catch {}
+    }
+}
+
+function _clearStateRateLimiter(rateLimiter, resetErr) {
+    if (!rateLimiter) return;
+    if (rateLimiter.pumpTimer) {
+        clearTimeout(rateLimiter.pumpTimer);
+        rateLimiter.pumpTimer = null;
+    }
+    if (rateLimiter.queue) {
+        for (const ticket of rateLimiter.queue) {
+            _clearRateLimitTicket(ticket, resetErr);
+        }
+        rateLimiter.queue = [];
+    }
+}
+
 /**
  * TokenCoordinator (Universal Token Hub & Master Controller)
  *
@@ -466,25 +490,10 @@ class TokenCoordinator extends EventEmitter {
      * Reset all internal states (useful for testing or full cleanup)
      */
     reset() {
+        const resetErr = new Error('Token coordinator reset: rate limit ticket cancelled');
+        resetErr.code = 'COORDINATOR_RESET';
         for (const state of this.tokenStates.values()) {
-            if (state.rateLimiter?.pumpTimer) {
-                clearTimeout(state.rateLimiter.pumpTimer);
-                state.rateLimiter.pumpTimer = null;
-            }
-            if (state.rateLimiter?.queue) {
-                const resetErr = new Error('Token coordinator reset: rate limit ticket cancelled');
-                resetErr.code = 'COORDINATOR_RESET';
-                for (const ticket of state.rateLimiter.queue) {
-                    ticket.cancelled = true;
-                    if (ticket.timer) clearTimeout(ticket.timer);
-                    if (typeof ticket.reject === 'function') {
-                        try {
-                            ticket.reject(resetErr);
-                        } catch {}
-                    }
-                }
-                state.rateLimiter.queue = [];
-            }
+            _clearStateRateLimiter(state.rateLimiter, resetErr);
         }
         this.tokenStates.clear();
         this.tokenLocks.clear();
