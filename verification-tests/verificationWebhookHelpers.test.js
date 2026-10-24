@@ -323,7 +323,7 @@ describe("Verification Webhook Manager Helpers and Payload Builder Suite", () =>
                     userAgent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
                 },
                 trackingSnapshot: {
-                    firstSeenAt: 1700000000000,
+                    firstSeenAt: Date.parse("2023-11-14T22:13:20.000Z"),
                     deviceFingerprint: "1 บัญชี (เครื่องใหม่ ไม่พบไอดีโคลน ✅)",
                     knownAccountsOnDevice: 1,
                     knownAccountsOnIp: 1
@@ -338,7 +338,7 @@ describe("Verification Webhook Manager Helpers and Payload Builder Suite", () =>
                 },
                 findings: [],
                 result: "success",
-                verifiedAt: 1729700000000
+                verifiedAt: Date.parse("2024-10-23T16:53:20.000Z")
             });
 
             expect(Array.isArray(embeds)).toBe(true);
