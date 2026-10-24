@@ -49,6 +49,39 @@ function _buildTimestampConditions(filter, conditions, params) {
     }
 }
 
+function _resolveMaxAttemptTime(record, now) {
+    if (typeof record?.nextAttemptAt?.$lte === "number") {
+        return Math.min(record.nextAttemptAt.$lte, now);
+    }
+    if (typeof record?.nextAttemptAt === "number") {
+        return Math.min(record.nextAttemptAt, now);
+    }
+    return now;
+}
+
+function _resolveClaimStatuses(record) {
+    if (Array.isArray(record?.status?.$in) && record.status.$in.length > 0) {
+        return record.status.$in;
+    }
+    if (typeof record?.status === "string") {
+        return [record.status];
+    }
+    if (typeof record?.status?.$eq === "string") {
+        return [record.status.$eq];
+    }
+    return ["pending", "retrying"];
+}
+
+function _resolveEffectiveLeaseUntil(leaseUntil, record) {
+    if (typeof leaseUntil === "number") {
+        return leaseUntil;
+    }
+    if (typeof record?.leaseUntil === "number") {
+        return record.leaseUntil;
+    }
+    return null;
+}
+
 class DmNotificationRepository {
     constructor(db = null) {
         this._db = db;
@@ -126,20 +159,10 @@ class DmNotificationRepository {
         const id = record?.id || record?._id;
         if (!id) return null;
 
-        const maxAttemptTime = typeof record?.nextAttemptAt?.$lte === "number"
-            ? Math.min(record.nextAttemptAt.$lte, now)
-            : (typeof record?.nextAttemptAt === "number" ? Math.min(record.nextAttemptAt, now) : now);
-
-        const statuses = Array.isArray(record?.status?.$in) && record.status.$in.length > 0
-            ? record.status.$in
-            : (typeof record?.status === "string"
-                ? [record.status]
-                : (typeof record?.status?.$eq === "string" ? [record.status.$eq] : ["pending", "retrying"]));
+        const maxAttemptTime = _resolveMaxAttemptTime(record, now);
+        const statuses = _resolveClaimStatuses(record);
         const ph = statuses.map(() => "?").join(",");
-
-        const effectiveLeaseUntil = typeof leaseUntil === "number"
-            ? leaseUntil
-            : (typeof record?.leaseUntil === "number" ? record.leaseUntil : null);
+        const effectiveLeaseUntil = _resolveEffectiveLeaseUntil(leaseUntil, record);
 
         const stmt = this.db.prepare(`
             UPDATE dm_notifications

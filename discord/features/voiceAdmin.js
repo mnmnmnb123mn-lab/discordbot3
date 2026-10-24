@@ -813,13 +813,20 @@ function isStillInSource(member, source) {
     const channelId = member?.voice?.channelId || member?.voice?.channel?.id || null;
     return String(channelId || "") === String(source.id);
 }
-function buildPanel(channel, status = null, action = null) {
-    const members = Array.from(channel?.members?.values?.() || []); const inChannel = new Set(members.map(member => String(member.id)));
-    let mute = 0; let deaf = 0;
+function countLockedMembers(channel, inChannel) {
+    let mute = 0;
+    let deaf = 0;
     for (const [id, lock] of getGuildLocks(channel?.guild?.id)) {
         if (inChannel.has(id) && lock.muteLocked) mute++;
         if (inChannel.has(id) && lock.deafLocked) deaf++;
     }
+    return { mute, deaf };
+}
+
+function buildPanelEmbed(channel, status, action) {
+    const members = Array.from(channel?.members?.values?.() || []);
+    const inChannel = new Set(members.map(member => String(member.id)));
+    const { mute, deaf } = countLockedMembers(channel, inChannel);
     const descriptionLines = [
         `• ห้อง: <#${channel.id}>`,
         `• สมาชิกในห้อง: **${members.length}** คน (จัดการได้ **${sourceMembers(channel).length}** คน)\n`,
@@ -839,6 +846,10 @@ function buildPanel(channel, status = null, action = null) {
         .setDescription(descriptionLines.join("\n"));
     const iconUrl = channel?.guild?.iconURL?.({ forceStatic: false, size: 256 }) || channel?.guild?.iconURL?.();
     if (iconUrl) embed.setThumbnail(iconUrl);
+    return embed;
+}
+
+function buildPanelActionRows() {
     const actions = new ActionRowBuilder().addComponents(
         new ButtonBuilder().setCustomId(IDS.DISCONNECT).setLabel("ตัดสายทั้งหมด").setEmoji(config.emojis?.voice_leave || "🚪").setStyle(ButtonStyle.Danger),
         new ButtonBuilder().setCustomId(IDS.LOCK_MUTE).setLabel("ปิดไมค์").setEmoji(config.emojis?.voice_leave || "🔇").setStyle(ButtonStyle.Secondary),
@@ -846,9 +857,28 @@ function buildPanel(channel, status = null, action = null) {
         new ButtonBuilder().setCustomId(IDS.UNLOCK_MUTE).setLabel("เปิดไมค์").setEmoji("🎙️").setStyle(ButtonStyle.Success),
         new ButtonBuilder().setCustomId(IDS.UNLOCK_DEAF).setLabel("เปิดหู").setEmoji(config.emojis?.voice_ch || "🔊").setStyle(ButtonStyle.Success)
     );
-    const move = new ActionRowBuilder().addComponents(new ChannelSelectMenuBuilder().setCustomId(IDS.MOVE).setPlaceholder("เลือกห้องเสียงปลายทางเพื่อย้ายสมาชิก").setChannelTypes(ChannelType.GuildVoice).setMinValues(1).setMaxValues(1));
-    const refresh = new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId(IDS.REFRESH).setLabel("รีเฟรช").setEmoji(config.emojis?.loading_circle || config.emojis?.loading || "🔄").setStyle(ButtonStyle.Primary));
-    return { embeds: [embed], components: [actions, move, refresh] };
+    const move = new ActionRowBuilder().addComponents(
+        new ChannelSelectMenuBuilder()
+            .setCustomId(IDS.MOVE)
+            .setPlaceholder("เลือกห้องเสียงปลายทางเพื่อย้ายสมาชิก")
+            .setChannelTypes(ChannelType.GuildVoice)
+            .setMinValues(1)
+            .setMaxValues(1)
+    );
+    const refresh = new ActionRowBuilder().addComponents(
+        new ButtonBuilder()
+            .setCustomId(IDS.REFRESH)
+            .setLabel("รีเฟรช")
+            .setEmoji(config.emojis?.loading_circle || config.emojis?.loading || "🔄")
+            .setStyle(ButtonStyle.Primary)
+    );
+    return [actions, move, refresh];
+}
+
+function buildPanel(channel, status = null, action = null) {
+    const embed = buildPanelEmbed(channel, status, action);
+    const components = buildPanelActionRows();
+    return { embeds: [embed], components };
 }
 function verifyVoiceAdminAccess(actor, channel) {
     if (!isVoiceChannel(channel)) return "ต้องใช้คำสั่งในแชทของห้องเสียงปกติ";
@@ -1186,7 +1216,6 @@ function buildSecretResultEmbed(command, result, guild = null) {
 }
 
 function buildSecretErrorEmbed(detail, guild = null) {
-    const errorEmoji = config.emojis?.CROSS_pmt || config.emojis?.error || "<a:CROSS_pmt:1553833049135906816>";
     const warningEmoji = config.emojis?.warning || "⚠️";
     const deafEmoji = config.emojis?.DEAF_pmt || config.emojis?.deaf || ":DEAF_pmt:";
     const embed = new EmbedBuilder()
