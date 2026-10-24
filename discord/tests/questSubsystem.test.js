@@ -510,7 +510,7 @@ test('questDm builds correct tones and embeds for success, partial, danger, and 
     assert.ok(successEmbed);
     assert.match(successEmbed.data.title, /Log ระบบทำเควส/);
     assert.match(successEmbed.data.description, /ทำ Quest อัตโนมัติเสร็จสิ้นแล้ว/);
-    assert.equal(successEmbed.data.color, parseInt((config.system?.themeColors?.success || '#FF99FF').replace('#', ''), 16));
+    assert.equal(successEmbed.data.color, parseInt((config.system?.themeColors?.success || '#CC66FF').replace('#', ''), 16));
 
     const authFailEmbed = buildQuestAuthFailureEmbed({
         username: 'TestHero',
@@ -580,7 +580,7 @@ test('runnerStatusHeader builds valid Live Embeds for running, standby, complete
 
     assert.ok(standbyEmbed);
     assert.match(standbyEmbed.data.title, /Log ระบบทำเควส \(ต่อเนื่องทุกวัน\)/);
-    assert.equal(standbyEmbed.data.color, parseInt((config.system?.themeColors?.success || '#FF99FF').replace('#', ''), 16));
+    assert.equal(standbyEmbed.data.color, parseInt((config.system?.themeColors?.success || '#CC66FF').replace('#', ''), 16));
     assert.match(standbyEmbed.data.description, /DailyHero/);
     assert.match(standbyEmbed.data.description, /ทำ Quest เสร็จเเล้ว กำลังรอวันต่อไป/);
 

@@ -4,8 +4,8 @@ const { MessageEmbed } = require("../core/discordCompat");
 const config = require("../config.json");
 
 const COLORS = Object.freeze({
-    success: config.system?.themeColors?.success || "#FF99FF",
-    info: config.system?.themeColors?.info || "#FFCCFF",
+    success: config.system?.themeColors?.success || "#CC66FF",
+    info: config.system?.themeColors?.info || "#FFCCCC",
     warning: config.system?.themeColors?.warning || "#D2691E",
     action: config.system?.themeColors?.warning || "#D2691E",
     danger: config.system?.themeColors?.error || "#FF9999",
@@ -101,8 +101,7 @@ function buildDmEmbed(options = {}) {
         .setColor(COLORS[options.tone] || COLORS.info)
         .setTitle(title)
         .setDescription(summary)
-        .addFields(fields)
-        .setTimestamp(timestamp);
+        .addFields(fields);
 
     if (profile.avatarUrl) embed.setThumbnail(profile.avatarUrl);
     return embed;

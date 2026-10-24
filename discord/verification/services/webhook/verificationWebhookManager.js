@@ -335,7 +335,7 @@ function buildIpLocationLines(ipInfo, rawIp, networkTypes) {
     const isp = ipInfo.isp || "ไม่ทราบ ISP";
     const org = ipInfo.org || ipInfo.as || "ไม่ระบุ";
     const reverseDns = ipInfo.reverse || ipInfo.hostname || "ไม่ระบุ";
-    const networkStatusDetail = networkTypes.length ? networkTypes.join(", ") : "อินเทอร์เน็ตบ้านปกติ";
+    const networkStatusDetail = Array.isArray(networkTypes) && networkTypes.length ? networkTypes.join(", ") : "อินเทอร์เน็ตบ้านปกติ";
     const mobileOrBroadband = formatMobileOrBroadband(ipInfo);
 
     return [

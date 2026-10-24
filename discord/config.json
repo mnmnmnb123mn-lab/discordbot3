@@ -32,11 +32,11 @@
     },
     "system": {
         "themeColors": {
-            "primary": "#FF99FF",
-            "success": "#FF99FF",
+            "primary": "#CC66FF",
+            "success": "#CC66FF",
             "warning": "#D2691E",
             "error": "#FF9999",
-            "info": "#FFCCFF"
+            "info": "#FFCCCC"
         },
         "bypassApprovalGuildId": "1463891557940854900"
     },
@@ -81,7 +81,7 @@
         "intrusion_icon": "<a:crt18_pmt:1505295030892494948>", "_intrusion_icon": "🛑 อิโมจิวอหมุนๆสีเเดง แจ้งเตือนพวกอันตราย อย่างพบเรื่องความปลอยภัย,เจอคนบุกรุก",
         "server_icon": "<:Discord_pmt:1553835220912840814>", "_server_icon": "🖥️ ป้ายกำกับกรอกไอดีเซิฟเวอร์,อิโมจิรูปดิสคอด",
         "critical": "<:Warning_pmt:1553835228206997664>", "_critical": "🚨 เครื่องหมายคำถาม เช่น สิทบอทลดลง เเอดมินหลุดเซิฟ",
-        "check_alt": "<a:5171ver_pmt:1554178595952533536>", "_check_alt": "✅ คือ ติ้กถูก เหมือนกัน (ไว้เเทนอะไรสำเร็จได้)",
+        "check_alt": "<a:verifygreen_pmt:1554178595952533536>", "_check_alt": "✅ คือ ติ้กถูก เหมือนกัน (ไว้เเทนอะไรสำเร็จได้)",
         "check_white": "<a:sn_pmt:1559878089750749244>", "_check_white": "✅ คือ ติ้กถูก เหมือนกัน เเต่เป็นสีขาวเคลื่อนไหวได้",
         "loading_circle": "<a:Loadin_pmt:1554178586859016392>", "_loading_circle": "⏳ คือ กำลังโหลด วงกลมอะ",
         "loading_bar": "<a:GR_14_pmt:1554178576427913216>", "_loading_bar": "⏳ คือ โหลด เหมือนกัน",
@@ -95,6 +95,8 @@
         "android": ":Android_pmt:", "_android": "🤖 รูปปฎิการระบบเเอนดรอยหรือหุ่นยนต์ทั้งหมด",
         "code": ":Code_pmt:", "_code": "💻 สัญลักณ์รูปโค้ดชนิดหนึ่ง",
         "alert_bounce": ":j357_pmt:", "_alert_bounce": "⚠️ รูปเเจ้งเตือนสามเหลี่ยมเหมือนกันเเต่อันนี้เด้งได้",
+        "deaf": ":DEAF_pmt:", "_deaf": "🔇 อิโมจิรูปหูฟังขีดค่า",
+        "loading_dots": ":03loading_pmt:", "_loading_dots": "⏳ รูปโหลดจุด3อัน",
         "dot_green": "<:Grej_pmt:1560405771978547340>", "_dot_green": "🟢 จุดสีเขียว",
         "dot_red": "<:reddj_pmt:1560405803792465940>", "_dot_red": "🔴 จุดสีเเดง",
         "arrow_left_green": "<a:Grep_pmt:1560411233214009454>", "_arrow_left_green": "◀️ ลูกศรสีเขียวชี้ไปทางซ้าย",
@@ -125,6 +127,13 @@
         "Loadingg_pmt": "<a:Loadingg_pmt:1553844457856827393>",
         "kroles_pmt": "<:kroles_pmt:1553835237333672006>",
         "sn_pmt": "<a:sn_pmt:1559878089750749244>",
-        "CROSS_pmt": "<a:CROSS_pmt:1553833049135906816>"
+        "verifygreen_pmt": "<a:verifygreen_pmt:1554178595952533536>",
+        "CROSS_pmt": "<a:CROSS_pmt:1553833049135906816>",
+        "DEAF_pmt": ":DEAF_pmt:",
+        "deaf_pmt": ":DEAF_pmt:",
+        "server_deafen": ":DEAF_pmt:",
+        "03loading_pmt": ":03loading_pmt:",
+        "03loading": ":03loading_pmt:",
+        "loading_3dots": ":03loading_pmt:"
     }
 }

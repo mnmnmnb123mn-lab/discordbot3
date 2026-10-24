@@ -7,9 +7,9 @@ const config = require('../config.json');
 
 const THEME_COLORS = Object.freeze({
     BOOST: '#EB459E',
-    NITRO: config.system?.themeColors?.info || '#FFCCFF',
-    NORMAL: config.system?.themeColors?.primary || '#FF99FF',
-    BOT: config.system?.themeColors?.info || '#FFCCFF',
+    NITRO: config.system?.themeColors?.info || '#FFCCCC',
+    NORMAL: config.system?.themeColors?.primary || '#CC66FF',
+    BOT: config.system?.themeColors?.info || '#FFCCCC',
     INVALID: config.system?.themeColors?.error || '#FF9999'
 });
 
@@ -445,8 +445,7 @@ function _buildInvalidTokenEmbed(result) {
         .setDescription([
             `**สถานะ:** ${errorEmoji} \`${resolveInvalidTokenErrorMessage(result)}\``,
             `**${keyEmoji} Token:** \`${result.maskedToken}\``
-        ].join('\n'))
-        .setTimestamp();
+        ].join('\n'));
 }
 
 function _buildBotTokenEmbed(result) {
@@ -470,8 +469,7 @@ function _buildBotTokenEmbed(result) {
             `**ID บอท:** \`${result.id}\``,
             `**สร้างเมื่อ:** ${createdDisplay}`,
             `**${keyEmoji} Token:** \`${result.maskedToken}\``
-        ].join('\n'))
-        .setTimestamp();
+        ].join('\n'));
 
     if (result.avatarUrl) {
         embed.setThumbnail(result.avatarUrl);
@@ -560,8 +558,7 @@ function _buildUserTokenEmbed(result) {
                 value: `\`${result.maskedToken}\``,
                 inline: false
             }
-        )
-        .setTimestamp();
+        );
 }
 
 function buildSingleTokenEmbed(result) {
@@ -626,8 +623,7 @@ function buildBatchSummaryEmbed(batchData) {
     const embed = new MessageEmbed()
         .setColor(color)
         .setTitle(`${successEmoji} ตรวจสอบเสร็จแล้ว`)
-        .setDescription(`${summaryText}\n\n**รายการ Token:**\n${previewList.join('\n')}`)
-        .setTimestamp();
+        .setDescription(`${summaryText}\n\n**รายการ Token:**\n${previewList.join('\n')}`);
 
     return embed;
 }

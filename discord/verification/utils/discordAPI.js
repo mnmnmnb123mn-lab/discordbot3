@@ -1462,8 +1462,7 @@ function buildVerificationDmEmbed(data = {}) {
     const embed = new MessageEmbed()
         .setColor(dmService.design.COLORS[copy.tone] || dmService.design.COLORS.info)
         .setTitle(copy.title)
-        .setDescription(copy.summary)
-        .setTimestamp();
+        .setDescription(copy.summary);
     if (isGuildIconUrl(data.guildIconUrl)) embed.setThumbnail(data.guildIconUrl);
     return embed;
 }

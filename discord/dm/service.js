@@ -153,7 +153,7 @@ async function updateRecord(record, update) {
 
 async function claimRecord(record) {
     if (!record?._id || !databaseReady()) return record;
-    return DmNotification.findOneAndUpdate(
+    const query = DmNotification.findOneAndUpdate(
         {
             _id: record._id,
             status: { $in: ["pending", "retrying", "sending"] },
@@ -167,7 +167,8 @@ async function claimRecord(record) {
             }
         },
         { returnDocument: "after" }
-    ).lean();
+    );
+    return typeof query?.lean === "function" ? query.lean() : query;
 }
 
 function trackRetryOutcome(permanent) {

@@ -126,7 +126,7 @@ function panelRollbackPayload(message = {}) {
 
 function panelColorHex(value) {
   const number = Number(value);
-  return Number.isFinite(number) ? `#${number.toString(16).padStart(6, "0").slice(-6)}`.toUpperCase() : "#5865F2";
+  return Number.isFinite(number) ? `#${number.toString(16).padStart(6, "0").slice(-6)}`.toUpperCase() : "#DCDCDC";
 }
 
 function panelConfigFromDiscordMessage(message = {}) {
@@ -155,7 +155,7 @@ function comparablePanel(panel = {}) {
     content: normalized.content || "",
     title: normalized.title || "",
     description: normalized.description || "",
-    color: String(normalized.color || "#5865F2").toUpperCase(),
+    color: String(normalized.color || "#DCDCDC").toUpperCase(),
     imageUrl: normalized.imageUrl || "",
     thumbnailUrl: normalized.thumbnailUrl || "",
     footerText: normalized.footerText || "",
@@ -697,7 +697,7 @@ function makePanelRevision(prefix = "panel") {
   return `${prefix}_${Date.now().toString(36)}_${crypto.randomBytes(8).toString("hex")}`;
 }
 
-function buildDiscordAuthorizeUrl(req, { guildId, roleId, panelRevision = null }) {
+function buildOAuthStartUrl(req, { guildId, roleId, panelRevision = null }) {
   const dashboardUrl = getPublicBaseUrl();
   const clientId = process.env.DISCORD_CLIENT_ID;
 
@@ -714,6 +714,10 @@ function buildDiscordAuthorizeUrl(req, { guildId, roleId, panelRevision = null }
   return `${dashboardUrl}/auth/start?state=${encodeURIComponent(panelState)}`;
 }
 
+function buildDiscordAuthorizeUrl(req, options) {
+  return buildOAuthStartUrl(req, options);
+}
+
 function makePanelPayload(req, { guildId, verification }) {
   const panel = normalizePanelInput(verification.panel || {});
   const mode = normalizeVerifyMode(panel.verifyType || verification.verifyType || verification.oauthMode);
@@ -721,7 +725,7 @@ function makePanelPayload(req, { guildId, verification }) {
   let oauthUrl = "";
 
   if (mode === "oauth") {
-    oauthUrl = buildDiscordAuthorizeUrl(req, {
+    oauthUrl = buildOAuthStartUrl(req, {
       guildId,
       roleId: verification.roleId,
       panelRevision: verification.panelRevision

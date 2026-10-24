@@ -221,8 +221,7 @@ function buildServerLoadingEmbed(interaction) {
         .addField(
             "ขอบเขตที่กำลังตรวจสอบ",
             "`MEMBERS` คนและบอท\n`CHANNELS` ช่องและหมวดหมู่\n`SECURITY` การยืนยัน 2FA และตัวกรองสื่อ"
-        )
-        .setTimestamp();
+        );
     const icon = interaction.guild?.iconURL?.({ forceStatic: false, size: 256 });
     if (icon) embed.setThumbnail(icon);
     return embed;
@@ -239,8 +238,7 @@ function buildUserLoadingEmbed(interaction) {
         .addField(
             "กำลังจัดเรียงข้อมูล",
             `${config.emojis?.loading || "⏳"} โปรไฟล์และอายุบัญชี • ยศและสิทธิ์ • Timeout และสถานะสมาชิก`
-        )
-        .setTimestamp();
+        );
     const avatar = user?.displayAvatarURL?.({ forceStatic: false, size: 256 });
     if (avatar) embed.setThumbnail(avatar);
     return embed;
@@ -256,8 +254,7 @@ function buildPingLoadingEmbed() {
             "CPU/RAM   กำลังเก็บตัวอย่าง\n" +
             "VOICE     กำลังอ่านสถานะ\n" +
             "```"
-        )
-        .setTimestamp();
+        );
 }
 
 function buildLoadingEmbed(kind, interaction) {
@@ -454,8 +451,7 @@ function buildServerInfoEmbed(guild, owner, memberCounts, extra = {}) {
             buildServerChannelsAndResourcesField(guild, channels),
             buildServerSecurityAndBoostField(guild, extra),
             buildServerSystemAndFeaturesField(guild)
-        )
-        .setTimestamp();
+        );
 
     const iconUrl = guild.iconURL?.({ forceStatic: false, size: 1024 });
     if (iconUrl) embed.setThumbnail(iconUrl);
@@ -808,8 +804,7 @@ function buildUserInfoEmbed(interaction, user, member) {
             buildUserServerProfileField(member, displayColor),
             buildUserRolesAndPermsField(member),
             buildUserStatusAndActivityField(member)
-        )
-        .setTimestamp();
+        );
 
     const avatar = member?.displayAvatarURL?.({ forceStatic: false, size: 1024 }) ||
         user.displayAvatarURL?.({ forceStatic: false, size: 1024 });
@@ -1051,8 +1046,7 @@ function buildPingEmbed(stats) {
                     `• สถิติการทำงาน: คำขอ **${formatCount(stats.requests)}** • ข้อผิดพลาด **${formatCount(stats.errors)}** • เชื่อมต่อใหม่ **${formatCount(stats.reconnects)}**`,
                 inline: false
             }
-        )
-        .setTimestamp();
+        );
 
     if (stats.botAvatarUrl) {
         embed.setThumbnail(stats.botAvatarUrl);

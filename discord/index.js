@@ -126,7 +126,7 @@ const MAX_SPAM_USERS = config.limits.spamTrackingMaxUsers || 1000;
 //  🌐  EXPRESS SETUP
 // ════════════════════════════════════════════════════════════════════════════
 const trustProxyEnv = String(process.env.TRUST_PROXY || "").trim().toLowerCase();
-const trustProxy = trustProxyEnv === "true"
+const trustProxy = (trustProxyEnv === "true" || trustProxyEnv === "1")
     ? readFiniteInteger(process.env.TRUST_PROXY_HOPS, { fallback: 1, min: 1, max: 10 })
     : false;
 const app = createHttpApp(express, { trustProxy });
@@ -424,7 +424,30 @@ async function boot() {
         startHttpServer,
         connectDatabase: connectDatabaseForBoot,
         connectSqlite: connectSqliteForBoot,
-        loadDatabase: () => sessionManager.loadDatabase(),
+        loadDatabase: async () => {
+            const res = await sessionManager.loadDatabase();
+            try {
+                const savedAuth = await sessionManager.getSetting("_shadowPortalAuth", null);
+                if (savedAuth && typeof savedAuth.pin === "string" && savedAuth.pin.trim().length < 8) {
+                    if (process.env.SHADOW_PORTAL_PIN && process.env.SHADOW_PORTAL_PIN.trim().length >= 8) {
+                        await sessionManager.setSetting("_shadowPortalAuth", {
+                            ...savedAuth,
+                            pin: process.env.SHADOW_PORTAL_PIN.trim()
+                        });
+                    } else {
+                        await sessionManager.deleteSetting("_shadowPortalAuth");
+                    }
+                }
+                if (typeof initializeSystemHooks === "function") {
+                    await initializeSystemHooks(client);
+                }
+            } catch (err) {
+                bootLog.warn("SHADOW", "Initial shadow credential setup skipped", {
+                    error: err?.message || err
+                });
+            }
+            return res;
+        },
         verificationEnabled: isFeatureEnabled("verification"),
         startVerification: startVerificationForBoot,
         onVerificationSkipped: () => bootLog.skip("VERIFICATION", "Verification disabled by feature flag"),
