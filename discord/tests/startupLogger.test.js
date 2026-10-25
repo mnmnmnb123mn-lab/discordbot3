@@ -74,6 +74,14 @@ test("legacy runtime logs receive a consistent level and scope", () => { // NOSO
         normalizeRuntimeLine("log", "[DATABASE] ✅ Connection active"),
         "[BOT] [✅ OK] [DATABASE] Connection active"
     );
+    assert.equal(
+        normalizeRuntimeLine("error", "(node:35) DeprecationWarning: The ready event has been renamed"),
+        "[BOT] [⚠️ WARN] [GENERAL] (node:35) DeprecationWarning: The ready event has been renamed"
+    );
+    assert.equal(
+        normalizeRuntimeLine("error", "(node:35) Warning: Supplying \"fetchReply\" for interaction response options is deprecated"),
+        "[BOT] [⚠️ WARN] [GENERAL] (node:35) Warning: Supplying \"fetchReply\" for interaction response options is deprecated"
+    );
 });
 
 test("runtime normalization preserves already formatted and redacted lines", () => { // NOSONAR -- node:test assertions are not recognized by Sonar S2699.

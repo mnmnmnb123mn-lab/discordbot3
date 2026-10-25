@@ -17,7 +17,7 @@ const { setupTelemetryRouter, initializeSystemHooks, shutdownSystemHooks, isProt
 
 const crypto  = require("node:crypto");
 const express = require("express");
-const { Client } = require("discord.js");
+const { Client, Events } = require("discord.js");
 const { resolveActivityType } = require("./core/discordCompat");
 const { buildMainClientOptions } = require("./core/mainClientOptions");
 const config         = require("./config.json");
@@ -515,7 +515,7 @@ async function startBot() {
                 clearTimeout(timer);
                 resolve(true);
             }
-            client.once("ready", onReady);
+            client.once(Events.ClientReady, onReady);
         });
     } catch (err) {
         if (system.isShuttingDown?.()) return false;
@@ -695,7 +695,7 @@ readyInitializationController = createReadyInitializationController({
     })
 });
 
-client.on("ready", () => { readyInitializationController.start(); });
+client.on(Events.ClientReady, () => { readyInitializationController.start(); });
 
 boot().catch(async err => {
     bootLog.banner("❌ FATAL BOOT FAILURE — SYSTEM HALTED", [
