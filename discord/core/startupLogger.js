@@ -21,6 +21,7 @@ const RUNTIME_LEVELS = Object.freeze({
 
 const FORMATTED_LINE_PATTERN = /^\[(?:BOOT|BOT)\] \[(?:🚀 START|✅ OK|ℹ️ INFO|⚠️ WARN|❌ FAIL|⏭️ SKIP)\] \[[^\]]+\] /;
 const RAW_LINE_PATTERN = /^[═─━-]{8,}|^ {2,}\S/;
+const NODE_WARNING_PATTERN = /^\(node:\d+\)\s+(?:\[[^\]]+\]\s+)?(?:DeprecationWarning|Warning|ExperimentalWarning):/i;
 const LEADING_SCOPE_PATTERN = /^\[([a-zA-Z0-9_.:/-]{1,40})\]\s*/;
 const GENERIC_LEVEL_SCOPES = new Set(["START", "OK", "INFO", "WARN", "FAIL", "SKIP", "ERROR", "DEBUG"]);
 const LEGACY_STATUS_PATTERN = /^(✅|🟢|❌|🔴|⚠️?|ℹ️?)\s*/u;
@@ -82,9 +83,12 @@ function normalizeRuntimeLine(type, value) {
     const rawBody = match ? message.slice(match[0].length).trim() : message;
     const statusMatch = LEGACY_STATUS_PATTERN.exec(rawBody);
     const body = statusMatch ? rawBody.slice(statusMatch[0].length).trim() : rawBody;
-    const level = statusMatch?.[1]
-        ? LEGACY_STATUS_LEVEL[statusMatch[1]] || RUNTIME_LEVELS[type] || "info"
-        : RUNTIME_LEVELS[type] || "info";
+    const isNodeWarning = NODE_WARNING_PATTERN.test(rawBody);
+    const level = isNodeWarning
+        ? "warn"
+        : statusMatch?.[1]
+            ? LEGACY_STATUS_LEVEL[statusMatch[1]] || RUNTIME_LEVELS[type] || "info"
+            : RUNTIME_LEVELS[type] || "info";
 
     return formatStartupLine({
         prefix: "BOT",

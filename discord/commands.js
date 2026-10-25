@@ -261,10 +261,17 @@ async function handleVoiceOnlineCommand(interaction) {
             editPayload.files = [new AttachmentBuilder(bannerPath, { name: VOICE_PANEL_BANNER_ATTACHMENT_NAME })];
         }
 
-        const message = await interaction.reply({
-            content: `${config.emojis.loading || "⏳"} กำลังโหลด...`,
-            fetchReply: true
-        });
+        let message;
+        if (typeof interaction.fetchReply === "function") {
+            await interaction.reply({
+                content: `${config.emojis.loading || "⏳"} กำลังโหลด...`
+            });
+            message = await interaction.fetchReply();
+        } else {
+            message = await interaction.reply({
+                content: `${config.emojis.loading || "⏳"} กำลังโหลด...`
+            });
+        }
         panelMessages.set(guildId, message);
         await message.edit(editPayload);
         if (!await updatePanel(guildId)) {

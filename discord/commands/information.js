@@ -264,11 +264,14 @@ function buildLoadingEmbed(kind, interaction) {
 }
 
 function sendLoadingState(interaction, kind) {
-    return interaction.reply({
+    const payload = {
         embeds: [buildLoadingEmbed(kind, interaction)],
-        fetchReply: true,
         allowedMentions: { parse: [] }
-    });
+    };
+    if (typeof interaction.fetchReply === "function") {
+        return interaction.reply(payload).then(() => interaction.fetchReply());
+    }
+    return interaction.reply(payload);
 }
 
 function channelCounts(guild) {
@@ -894,8 +897,7 @@ async function handleUserAvatar(interaction) {
     try {
         if (typeof interaction.editReply === "function") {
             await interaction.reply({
-                content: `${config.emojis?.loading || "⏳"} กำลังโหลด...`,
-                fetchReply: true
+                content: `${config.emojis?.loading || "⏳"} กำลังโหลด...`
             });
             const user = await resolveAvatarTarget(interaction);
             if (!user || typeof user.displayAvatarURL !== "function") {
